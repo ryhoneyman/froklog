@@ -1,0 +1,8 @@
+# Rust build artifacts
+/target/
+
+# EQ log files (contain personal character/server names)
+/logs/
+
+# IDE local settings
+.vscode/
