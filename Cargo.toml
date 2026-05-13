@@ -1,0 +1,109 @@
+[package]
+name = "froklog"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "froklog"
+path = "src/lib.rs"
+
+[[bin]]
+name = "froklog"
+path = "src/main.rs"
+
+[[bin]]
+name = "froklog-server"
+path = "src/bin/froklog_server/main.rs"
+
+[[bin]]
+name = "froklog-replay"
+path = "src/bin/froklog_replay/main.rs"
+
+[[bin]]
+name = "froklog-debug"
+path = "src/bin/froklog_debug/main.rs"
+
+[features]
+default = []
+# Windows systray client (no visible window; requires Windows cross-compile)
+tray = ["dep:tray-icon", "dep:winit", "dep:image"]
+# Legacy egui desktop GUI (kept for reference, not built by default)
+gui = ["dep:eframe", "dep:egui"]
+
+[dependencies]
+# Legacy GUI — only built when feature = "gui" is active
+eframe = { version = "0.31", optional = true, default-features = false, features = [
+    "default_fonts",
+    "glow",
+] }
+egui = { version = "0.31", optional = true }
+
+# Systray — only makes sense on Windows; use `--features tray` when cross-compiling
+tray-icon = { version = "0.19", optional = true }
+winit     = { version = "0.30", optional = true, default-features = false }
+image     = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+# Config file serialisation (always needed)
+toml = "0.8"
+
+# Async runtime — Tokio for the web server and file watcher
+tokio = { version = "1", features = ["full"] }
+
+# Web server
+axum = { version = "0.8", features = ["ws"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+
+# Log tailing
+tokio-util = { version = "0.7", features = ["io"] }
+
+# Parsing
+regex = "1"
+once_cell = "1"
+
+# Lock-free shared state for hot-path reads
+arc-swap = "1"
+
+# Serialization for /stats JSON API
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# MPSC channel from tailer thread → parser
+crossbeam-channel = "0.5"
+
+# Timestamp formatting for fight start display
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Token generation for auth
+uuid = { version = "1", features = ["v4"] }
+
+# CLI argument parsing (froklog-replay)
+clap = { version = "4", features = ["derive"] }
+
+# WebSocket client (used by froklog binary in push mode)
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+# HTTP client (used by froklog-replay for stream auto-registration)
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
+[target.'cfg(windows)'.dependencies]
+# Native Windows dialogs (file picker, message box)
+windows = { version = "0.58", features = [
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Win32_Foundation",
+]}
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1

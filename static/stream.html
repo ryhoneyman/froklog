@@ -1,0 +1,1642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>froklog — stream viewer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #141414; color: #ddd; overflow: hidden; }
+
+  /* ── Header ── */
+  #header {
+    background: #1e1e1e; padding: 4px 10px; height: 42px;
+    display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid #333;
+  }
+  #fight-label {
+    flex: 1; display: flex; flex-direction: column; justify-content: center;
+    padding-left: 8px; border-left: 3px solid #444; gap: 1px;
+  }
+  .fl-main { font-size: 13px; font-weight: bold; display: flex; align-items: baseline; gap: 6px; }
+  .fl-name  { color: #f0a030; }
+  .fl-secs  { font-size: 11px; color: #bbb; font-weight: normal; }
+  .fl-ts    { font-size: 10px; color: #666; font-weight: normal; }
+  #stream-badge {
+    font-size: 11px; color: #888; background: #2a2a2a;
+    padding: 2px 6px; border-radius: 3px; border: 1px solid #3a3a3a;
+  }
+  #status { font-size: 11px; }
+  #status.live  { color: #4f4; }
+  #status.poll  { color: #fa0; }
+  #status.error { color: #f44; }
+  #status.done  { color: #7ab8f5; }
+  #player-name  { color: #a4f; }
+
+  #time-display {
+    display: flex; flex-direction: column; align-items: flex-end;
+    font-size: 10px; color: #888; line-height: 1.3;
+    margin-right: 4px;
+  }
+  #time-display .td-now  { color: #bbb; }
+  #time-display .td-log  { color: #666; }
+
+  /* ── Timeline / seek bar ── */
+  #timeline-bar {
+    background: #181818; padding: 4px 10px;
+    display: none; align-items: center; gap: 8px;
+    border-bottom: 1px solid #2a2a2a; height: 28px;
+    flex-shrink: 0;
+  }
+  #timeline-bar.visible { display: flex; }
+  #tl-label-start { font-size: 10px; color: #666; white-space: nowrap; flex-shrink: 0; }
+  #tl-label-end   { font-size: 10px; color: #666; white-space: nowrap; flex-shrink: 0; }
+  #tl-scrubber {
+    flex: 1; -webkit-appearance: none; appearance: none;
+    height: 4px; background: #333; border-radius: 2px; outline: none; cursor: pointer;
+  }
+  #tl-scrubber::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 12px; height: 12px;
+    border-radius: 50%; background: #5a9aff; cursor: pointer;
+  }
+  #tl-scrubber::-moz-range-thumb {
+    width: 12px; height: 12px; border: none;
+    border-radius: 50%; background: #5a9aff; cursor: pointer;
+  }
+  #tl-scrubber::-moz-range-progress {
+    background: #5a9aff; height: 4px; border-radius: 2px 0 0 2px;
+  }
+  #tl-scrubber::-moz-range-track {
+    background: #333; height: 4px; border-radius: 2px;
+  }
+  #tl-speed {
+    font-size: 11px; color: #aaa; background: #252525; border: 1px solid #3a3a3a;
+    border-radius: 3px; padding: 1px 4px; cursor: pointer; font-family: monospace;
+  }
+  #tl-live-btn {
+    font-size: 11px; color: #888; background: #202020; border: 1px solid #3a3a3a;
+    border-radius: 3px; padding: 2px 7px; cursor: pointer; font-family: monospace;
+    white-space: nowrap;
+  }
+  #tl-live-btn.live { color: #4f4; border-color: #3c6c3c; background: #1a2a1a; }
+  #tl-pos-label { font-size: 10px; color: #e0c060; min-width: 90px; text-align: right; flex-shrink: 0; font-weight: bold; }
+  .tl-transport {
+    font-size: 13px; color: #aaa; background: #202020; border: 1px solid #3a3a3a;
+    border-radius: 3px; padding: 0 7px; cursor: pointer; font-family: monospace;
+    white-space: nowrap; flex-shrink: 0; line-height: 22px;
+  }
+  .tl-transport:hover { color: #fff; border-color: #555; }
+  .tl-transport.is-paused  { color: #5aff5a; border-color: #3c6c3c; }
+  .tl-transport.is-playing  { color: #ffb347; border-color: #6c5020; }
+
+  /* ── Main layout ── */
+  #layout { display: flex; height: calc(100vh - 34px - var(--tl-height, 0px)); overflow: hidden; }
+
+  /* ── Mob panel ── */
+  #mobs {
+    width: 175px; min-width: 175px; background: #161616;
+    border-right: 1px solid #333; display: flex; flex-direction: column;
+  }
+  .panel-hdr {
+    height: 18px; display: flex; align-items: center;
+    padding: 0 6px; font-size: 11px; font-weight: bold; color: #999;
+    border-bottom: 1px solid #2a2a2a; flex-shrink: 0;
+  }
+  #mob-scroll { overflow-y: auto; flex: 1; }
+  .mob-row {
+    display: flex; align-items: center; padding: 0 4px;
+    height: 16px; cursor: pointer; user-select: none;
+  }
+  .mob-row:hover { background: #1e1e1e; }
+  .mob-row.selected { background: #252535; }
+  .mob-dot { font-size: 9px; margin-right: 3px; flex-shrink: 0; line-height: 1; }
+  .mob-name { flex: 1; font-size: 11px; overflow: hidden; white-space: nowrap; }
+  .mob-time { font-size: 10px; color: #666; margin-left: 4px; flex-shrink: 0; }
+
+  /* ── Summary panel ── */
+  #summary {
+    width: 260px; min-width: 260px; background: #191919;
+    border-right: 1px solid #333; display: flex; flex-direction: column;
+  }
+  #sum-header-area { flex-shrink: 0; }
+  #sum-scroll { overflow-y: auto; flex: 1; }
+
+  /* Mode tabs */
+  #mode-tabs { display: flex; height: 18px; border-bottom: 1px solid #2a2a2a; }
+  .mode-tab {
+    flex: 1; font-size: 10px; color: #999; background: none;
+    border: none; border-right: 1px solid #2a2a2a;
+    cursor: pointer; font-family: monospace; padding: 0;
+  }
+  .mode-tab:last-child { border-right: none; }
+  .mode-tab:hover { color: #ccc; background: #222; }
+  .mode-tab.active { color: #fff; background: #2a2a3a; }
+
+  .sum-hdr {
+    display: flex; align-items: center; padding: 0 6px;
+    height: 18px; font-size: 11px; font-weight: bold; color: #999;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  .sum-hdr .sh-name { flex: 1; }
+  .sum-row {
+    display: flex; align-items: center; padding: 0 6px;
+    height: 18px; font-size: 11px;
+  }
+  .sum-row:hover { background: #222; }
+  .sum-name { flex: 1; color: #eee; overflow: hidden; white-space: nowrap; }
+  .sum-class { font-size: 10px; margin-left: 4px; flex-shrink: 0; }
+  .sum-val  { min-width: 44px; text-align: right; color: #ccc; flex-shrink: 0; }
+  .sum-rate { min-width: 52px; text-align: right; color: #888; font-size: 10px; flex-shrink: 0; }
+
+  /* ── Card grid ── */
+  #cards { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+
+  /* ── Individual card ── */
+  .card {
+    width: 220px; border: 1px solid #373737; border-radius: 2px;
+    background: #1c1c1c; overflow: hidden;
+  }
+  .card-hdr {
+    padding: 3px 6px; font-size: 12px; font-weight: bold; color: #fff;
+    display: flex; gap: 5px; align-items: baseline;
+  }
+  .card-hdr .cls { font-size: 11px; }
+  .card-hdr .cls span { color: #fff !important; }
+  .card-col-hdr {
+    display: flex; align-items: center; padding: 1px 4px;
+    font-size: 10px; font-weight: bold; color: #999;
+    border-bottom: 1px solid #2a2a2a; margin-top: 2px; height: 15px;
+  }
+  .c-type { flex: 1; position: relative; overflow: hidden; white-space: nowrap; }
+  .c-val  { width: 54px; text-align: right; flex-shrink: 0; }
+  .c-rate { width: 48px; text-align: right; flex-shrink: 0; }
+
+  .type-row {
+    display: flex; align-items: center; height: 16px;
+    padding: 0 4px; font-size: 11px;
+  }
+  .type-bar {
+    position: absolute; left: 0; top: 0; height: 100%;
+    opacity: 0.35; pointer-events: none;
+  }
+  .type-label { position: relative; z-index: 1; }
+  .type-row .c-val  { color: #d2d2d2; }
+  .type-row .c-rate { color: #888; font-size: 10px; }
+
+  .spell-sep {
+    border: none; border-top: 1px solid #2a2a2a;
+    margin: 3px 4px 1px;
+  }
+  .card-pad { height: 3px; }
+
+  .empty-state {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: #444; font-size: 20px; padding: 40px;
+  }
+  .waiting-state {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: #555; font-size: 36px; padding: 40px;
+  }
+
+  /* ── Cast bar ── */
+  .cast-bar {
+    position: relative; overflow: hidden;
+    height: 15px; background: #4a1a7a;
+    display: flex; align-items: center; padding: 0 5px;
+    border-top: 1px solid #6a3a9a;
+  }
+  .cast-bar-shimmer {
+    position: absolute; top: 0; left: -60%; width: 60%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(200,160,255,0.18), transparent);
+    animation: cast-shimmer 1.4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  .cast-bar-text {
+    position: relative; z-index: 1;
+    font-size: 10px; color: #d0a8ff; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; width: 100%;
+  }
+  @keyframes cast-shimmer {
+    0%   { left: -60%; }
+    100% { left: 120%; }
+  }
+  /* ── Graph strip ── */
+  #cards-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  #graph-header {
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 6px; height: 20px; flex-shrink: 0;
+    border-bottom: 1px solid #222; background: #181818;
+  }
+  #graph-toggle {
+    font-size: 10px; color: #555; background: none;
+    border: 1px solid #2a2a2a; border-radius: 2px;
+    padding: 0 6px; cursor: pointer; font-family: monospace; height: 16px;
+  }
+  #graph-toggle:hover { color: #aaa; border-color: #555; }
+  #graph-toggle.active { color: #aaa; border-color: #4a4a6a; background: #1e1e2e; }
+  #graph-strip {
+    height: 160px; flex-shrink: 0;
+    background: #161616; border-bottom: 1px solid #2a2a2a;
+    padding: 6px; display: flex; gap: 6px;
+  }
+  .graph-pane { flex: 1; position: relative; min-width: 0; }
+  #cards-scroll { flex: 1; overflow: auto; padding: 6px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div id="header">
+  <div id="fight-label">No mob selected</div>
+  <div id="stream-badge"><span id="player-name">__PLAYER_NAME__</span> · __STREAM_ID__</div>
+  <div id="time-display">
+    <span class="td-now" id="wall-clock"></span>
+    <span class="td-log"  id="log-clock"></span>
+  </div>
+  <div id="status" class="error">● disconnected</div>
+</div>
+
+<div id="timeline-bar">
+  <span id="tl-label-start"></span>
+  <input id="tl-scrubber" type="range" min="0" max="1000" value="1000" step="1">
+  <span id="tl-label-end"></span>
+  <button id="tl-rewind"    class="tl-transport" onclick="rewind()"          title="Skip back 2 min">&#171;</button>
+  <button id="tl-playpause" class="tl-transport" onclick="togglePlayPause()"  title="Pause">||</button>
+  <button id="tl-ff"        class="tl-transport" onclick="fastForward()"      title="Skip forward 2 min">&#187;</button>
+  <span id="tl-pos-label"></span>
+  <select id="tl-speed" title="Playback speed">
+    <option value="0.25">0.25×</option>
+    <option value="0.5">0.5×</option>
+    <option value="1" selected>1×</option>
+    <option value="2">2×</option>
+    <option value="4">4×</option>
+    <option value="8">8×</option>
+    <option value="16">16×</option>
+    <option value="32">32×</option>
+  </select>
+  <button id="tl-live-btn" onclick="goLive()">Go Live</button>
+</div>
+
+<div id="layout" onclick="deselectMob()">
+  <div id="mobs">
+    <div class="panel-hdr">Mobs</div>
+    <div id="mob-scroll"><div id="mob-rows"></div></div>
+  </div>
+
+  <div id="summary">
+    <div id="sum-header-area"></div>
+    <div id="sum-scroll"><div id="sum-rows"></div></div>
+  </div>
+
+  <div id="cards-wrap">
+    <div id="graph-header">
+      <button id="graph-toggle" onclick="event.stopPropagation();toggleGraph()">&#9660; Graph</button>
+    </div>
+    <div id="graph-strip" style="display:none">
+      <div class="graph-pane"><canvas id="graph-canvas"></canvas></div>
+      <div class="graph-pane"><canvas id="graph-canvas-rate"></canvas></div>
+    </div>
+    <div id="cards-scroll">
+      <div id="cards"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Stream credentials injected server-side ───────────────────────────────────
+const STREAM_ID  = '__STREAM_ID__';
+const VIEW_TOKEN = '__VIEW_TOKEN__';
+
+// ── In-memory batch cache ─────────────────────────────────────────────────────
+// Stores every EventBatch received from the server in order.
+// Used for client-side seeking so seeks don't require the server to re-stream
+// the full history over the WebSocket.
+// Each entry: { logTs: number, batch: EventBatch }
+const cachedBatches = [];
+let cacheComplete = false;  // true once the initial catch-up is done
+
+/// Replay all cached batches with logTs <= targetLogTs and return the count applied.
+/// Does NOT reset state — caller must call resetState() first if needed.
+function applyBatchesUpTo(targetLogTs) {
+  let count = 0;
+  for (const cb of cachedBatches) {
+    if (cb.logTs > targetLogTs) break;
+    applyBatch(cb.batch);
+    count++;
+  }
+  return count;
+}
+
+/// Seek entirely within the cache.  Resets state, applies batches up to
+/// targetLogTs, schedules a render, then sends the direct SeekLog/SeekPausedLog
+/// message so the server resumes streaming from that position forward.
+/// Returns true if the cache was usable (covered targetLogTs or the cache is
+/// complete), false if the caller should fall back to a full seek_full_log.
+function seekWithCache(targetLogTs, paused, speed) {
+  if (!cacheComplete && (cachedBatches.length === 0 ||
+      cachedBatches[cachedBatches.length - 1].logTs < targetLogTs)) {
+    return false;  // cache doesn't cover the target yet
+  }
+  pendingMobRestore = selectedMob;
+  resetState();
+  applyBatchesUpTo(targetLogTs);
+  scheduleRender();
+  if (paused) {
+    sendWS({ t: 'seek_paused_log', to_log_ts: targetLogTs });
+  } else {
+    sendWS({ t: 'seek_log', to_log_ts: targetLogTs, speed: speed || 1.0 });
+  }
+  return true;
+}
+
+// ── Class colours ─────────────────────────────────────────────────────────────
+const CLASS_COLOR = {
+  WAR:'#af803c', CLR:'#733273', PAL:'#7387fa', RNG:'#507334', SHD:'#4b4b41',
+  DRU:'#649150', MNK:'#d2b48c', BRD:'#b4a032', ROG:'#505c55', SHM:'#a2a2b0',
+  NEC:'#0164fa', WIZ:'#af0a32', MAG:'#960a0a', ENC:'#0a32c8', BST:'#826432',
+  BER:'#be6414', '':'#464650',
+};
+function classColor(cls) { return CLASS_COLOR[cls] || CLASS_COLOR['']; }
+
+// Renders each class code as a separately-colored <span>, joined by grey slashes.
+function classCodesHtml(classes) {
+  if (!classes || classes.length === 0) return '';
+  return classes.map(c => `<span style="color:${classColor(c)}">${c}</span>`).join('<span style="color:#666">/</span>');
+}
+
+function hexToRgba(hex, a) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// Returns a CSS background value: solid for 1 class, gradient for 2–3.
+// Colors are rendered at reduced alpha so the dark card bg mutes the intensity.
+function classHeaderStyle(classes) {
+  if (!classes || classes.length === 0) return `background:${CLASS_COLOR['']}`;
+  const c = classes.map(cls => hexToRgba(classColor(cls), 0.55));
+  if (classes.length === 1) return `background:${c[0]}`;
+  if (classes.length === 2)
+    return `background:linear-gradient(90deg,${c[0]} 0%,${c[0]} 35%,${c[1]} 65%,${c[1]} 100%)`;
+  // 3 classes — each owns roughly a third, with a short blend between zones.
+  return `background:linear-gradient(90deg,${c[0]} 0%,${c[0]} 25%,${c[1]} 40%,${c[1]} 60%,${c[2]} 75%,${c[2]} 100%)`;
+}
+
+function fmtK(n) {
+  if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
+  if (n >= 1e3) return Math.round(n/1e3)+'K';
+  return String(n);
+}
+function fmtTime(secs) {
+  if (secs < 60) return Math.round(secs) + 's';
+  return Math.floor(secs/60) + 'm' + Math.floor(secs%60) + 's';
+}
+function truncate(s, n) { return s.length > n ? s.slice(0, n-1)+'…' : s; }
+
+// ── Accumulated combat state ──────────────────────────────────────────────────
+// All state is rebuilt from incoming EventBatch messages.  The server sends the
+// full journal on connect (catch-up) followed by live batches.
+const S = {
+  players:  {},  // name -> PlayerStats
+  mobs:     {},  // mob_id (number) -> { name, lastTs, dead }
+  mobDmg:   {},  // mob_id -> { player_name -> { dmg, dmgByType, dmgBySpell } }
+  mobTank:  {},  // mob_id -> { player_name -> { dmg, dmgByType } }
+  mobHeal:  {},  // mob_id -> { healer_name -> { heals, healsBySpell } }
+  mobHealee:{},  // mob_id -> { healee_name -> { healed, healedBySpell } }
+  avoidance:{},  // player_name -> { total, byType }
+  mobAvoid: {},  // mob_id -> { player_name -> { total, byType } }
+  mobDmgTL:    {},  // mob_id -> { player_name -> [{ts,v}] }
+  mobTankTL:   {},  // mob_id -> { player_name -> [{ts,v}] }
+  mobHealTL:   {},  // mob_id -> { healer_name -> [{ts,v}] }
+  mobHealedTL: {},  // mob_id -> { healee_name -> [{ts,v}] }
+  mobAvoidTL:  {},  // mob_id -> { player_name -> [{ts,v}] }
+  fightStartTs: null,  // unix seconds of first combat event
+  lastTs: 0,           // unix seconds of most recent event
+  casts: {},           // player_name -> { spell, logTs }
+};
+
+function player(name) {
+  if (!S.players[name]) S.players[name] = {
+    dmg:0, dmgByType:{}, dmgBySpell:{},
+    heals:0, healsBySpell:{},
+    healed:0, healedBySpell:{},
+    cls:'', classes:[],
+  };
+  return S.players[name];
+}
+function mobDmgPlayer(mob, name) {
+  if (!S.mobDmg[mob])       S.mobDmg[mob] = {};
+  if (!S.mobDmg[mob][name]) S.mobDmg[mob][name] = { dmg:0, dmgByType:{}, dmgBySpell:{} };
+  return S.mobDmg[mob][name];
+}
+function mobTankPlayer(mob, name) {
+  if (!S.mobTank[mob])       S.mobTank[mob] = {};
+  if (!S.mobTank[mob][name]) S.mobTank[mob][name] = { dmg:0, dmgByType:{} };
+  return S.mobTank[mob][name];
+}
+function mobHealPlayer(mob, name) {
+  if (!S.mobHeal[mob])       S.mobHeal[mob] = {};
+  if (!S.mobHeal[mob][name]) S.mobHeal[mob][name] = { heals:0, healsBySpell:{} };
+  return S.mobHeal[mob][name];
+}
+function mobHealeePlayer(mob, name) {
+  if (!S.mobHealee[mob])       S.mobHealee[mob] = {};
+  if (!S.mobHealee[mob][name]) S.mobHealee[mob][name] = { healed:0, healedBySpell:{} };
+  return S.mobHealee[mob][name];
+}
+function mobAvoidPlayer(mob, name) {
+  if (!S.mobAvoid[mob])       S.mobAvoid[mob] = {};
+  if (!S.mobAvoid[mob][name]) S.mobAvoid[mob][name] = { total:0, byType:{} };
+  return S.mobAvoid[mob][name];
+}
+function tlEntry(tl, mob, name) {
+  if (!tl[mob]) tl[mob] = {};
+  if (!tl[mob][name]) tl[mob][name] = [];
+  return tl[mob][name];
+}
+function trackMob(mob, name, ts) {
+  if (!S.mobs[mob]) S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
+  else { S.mobs[mob].lastTs = ts; S.mobs[mob].name = name; }
+}
+function bumpTs(ts) {
+  if (ts > S.lastTs) S.lastTs = ts;
+  if (!S.fightStartTs) S.fightStartTs = ts;
+  if (!logFirstTs || ts < logFirstTs) logFirstTs = ts;
+  if (!logLastTs  || ts > logLastTs)  logLastTs  = ts;
+}
+
+function resetState() {
+  // /who class data outlives seeks — preserve it just as the server preserves
+  // player_classes across combat resets in CombatState.
+  const savedClasses = {};
+  for (const [name, p] of Object.entries(S.players)) {
+    if (p.classes && p.classes.length) savedClasses[name] = { cls: p.cls, classes: p.classes };
+  }
+  S.players   = {};
+  S.mobs      = {};
+  S.mobDmg    = {};
+  S.mobTank   = {};
+  S.mobHeal   = {};
+  S.mobHealee = {};
+  S.avoidance  = {};
+  S.mobAvoid   = {};
+  S.mobDmgTL    = {};
+  S.mobTankTL   = {};
+  S.mobHealTL   = {};
+  S.mobHealedTL = {};
+  S.mobAvoidTL  = {};
+  S.fightStartTs = null;
+  S.lastTs    = 0;
+  S.casts     = {};
+  selectedMob = null;
+  lastData    = null;
+  for (const [name, info] of Object.entries(savedClasses)) {
+    const p = player(name);
+    p.cls = info.cls;
+    p.classes = info.classes;
+  }
+}
+
+function applyEvent(ev) {
+  switch (ev.k) {
+    case 'melee': {
+      bumpTs(ev.ts);
+      trackMob(ev.mob, ev.tank ? ev.src : ev.tgt, ev.ts);
+      if (!ev.tank) {
+        const p = player(ev.src);
+        p.dmg += ev.dmg;
+        p.dmgByType[ev.typ] = (p.dmgByType[ev.typ]||0) + ev.dmg;
+        const mp = mobDmgPlayer(ev.mob, ev.src);
+        mp.dmg += ev.dmg;
+        mp.dmgByType[ev.typ] = (mp.dmgByType[ev.typ]||0) + ev.dmg;
+        tlEntry(S.mobDmgTL, ev.mob, ev.src).push({ts: ev.ts, v: ev.dmg});
+      } else {
+        const mt = mobTankPlayer(ev.mob, ev.tgt);
+        mt.dmg += ev.dmg;
+        mt.dmgByType[ev.typ] = (mt.dmgByType[ev.typ]||0) + ev.dmg;
+        tlEntry(S.mobTankTL, ev.mob, ev.tgt).push({ts: ev.ts, v: ev.dmg});
+      }
+      break;
+    }
+    case 'spell': {
+      bumpTs(ev.ts);
+      trackMob(ev.mob, ev.tank ? ev.src : ev.tgt, ev.ts);
+      if (!ev.tank) {
+        const p = player(ev.src);
+        p.dmg += ev.dmg;
+        p.dmgBySpell[ev.sp] = (p.dmgBySpell[ev.sp]||0) + ev.dmg;
+        const mp = mobDmgPlayer(ev.mob, ev.src);
+        mp.dmg += ev.dmg;
+        mp.dmgBySpell[ev.sp] = (mp.dmgBySpell[ev.sp]||0) + ev.dmg;
+        tlEntry(S.mobDmgTL, ev.mob, ev.src).push({ts: ev.ts, v: ev.dmg});
+      } else {
+        const mt = mobTankPlayer(ev.mob, ev.tgt);
+        mt.dmg += ev.dmg;
+        mt.dmgByType['hit'] = (mt.dmgByType['hit']||0) + ev.dmg;
+        tlEntry(S.mobTankTL, ev.mob, ev.tgt).push({ts: ev.ts, v: ev.dmg});
+      }
+      break;
+    }
+    case 'dot': {
+      bumpTs(ev.ts);
+      trackMob(ev.mob, ev.tgt, ev.ts);
+      const p = player(ev.src);
+      p.dmg += ev.dmg;
+      p.dmgByType['dot'] = (p.dmgByType['dot']||0) + ev.dmg;
+      p.dmgBySpell[ev.sp] = (p.dmgBySpell[ev.sp]||0) + ev.dmg;
+      const mp = mobDmgPlayer(ev.mob, ev.src);
+      mp.dmg += ev.dmg;
+      mp.dmgByType['dot'] = (mp.dmgByType['dot']||0) + ev.dmg;
+      mp.dmgBySpell[ev.sp] = (mp.dmgBySpell[ev.sp]||0) + ev.dmg;
+      tlEntry(S.mobDmgTL, ev.mob, ev.src).push({ts: ev.ts, v: ev.dmg});
+      break;
+    }
+    case 'rip': {
+      bumpTs(ev.ts);
+      trackMob(ev.mob, ev.tgt, ev.ts);
+      const p = player(ev.src);
+      p.dmg += ev.dmg;
+      p.dmgByType['riposte'] = (p.dmgByType['riposte']||0) + ev.dmg;
+      const mp = mobDmgPlayer(ev.mob, ev.src);
+      mp.dmg += ev.dmg;
+      mp.dmgByType['riposte'] = (mp.dmgByType['riposte']||0) + ev.dmg;
+      tlEntry(S.mobDmgTL, ev.mob, ev.src).push({ts: ev.ts, v: ev.dmg});
+      break;
+    }
+    case 'ds': {
+      bumpTs(ev.ts);
+      trackMob(ev.mob, ev.tgt, ev.ts);
+      const p = player(ev.src);
+      p.dmg += ev.dmg;
+      p.dmgByType['ds'] = (p.dmgByType['ds']||0) + ev.dmg;
+      const mp = mobDmgPlayer(ev.mob, ev.src);
+      mp.dmg += ev.dmg;
+      mp.dmgByType['ds'] = (mp.dmgByType['ds']||0) + ev.dmg;
+      tlEntry(S.mobDmgTL, ev.mob, ev.src).push({ts: ev.ts, v: ev.dmg});
+      break;
+    }
+    case 'heal': {
+      bumpTs(ev.ts);
+      const src = player(ev.src);
+      src.heals += ev.amt;
+      src.healsBySpell[ev.sp] = (src.healsBySpell[ev.sp]||0) + ev.amt;
+      const tgt = player(ev.tgt);
+      tgt.healed += ev.amt;
+      tgt.healedBySpell[ev.sp] = (tgt.healedBySpell[ev.sp]||0) + ev.amt;
+      if (ev.mob != null) {
+        const mh = mobHealPlayer(ev.mob, ev.src);
+        mh.heals += ev.amt;
+        mh.healsBySpell[ev.sp] = (mh.healsBySpell[ev.sp]||0) + ev.amt;
+        const mhe = mobHealeePlayer(ev.mob, ev.tgt);
+        mhe.healed += ev.amt;
+        mhe.healedBySpell[ev.sp] = (mhe.healedBySpell[ev.sp]||0) + ev.amt;
+        tlEntry(S.mobHealTL,   ev.mob, ev.src).push({ts: ev.ts, v: ev.amt});
+        tlEntry(S.mobHealedTL, ev.mob, ev.tgt).push({ts: ev.ts, v: ev.amt});
+      }
+      break;
+    }
+    case 'slay': {
+      bumpTs(ev.ts);
+      if (S.mobs[ev.mob]) S.mobs[ev.mob].dead = true;
+      break;
+    }
+    case 'miss': {
+      bumpTs(ev.ts);
+      // Only count player avoidance: src must be the mob (mob attacking player).
+      // When a player attacks a mob and the mob dodges, src=player, tgt=mob — skip those.
+      if (S.mobs[ev.mob]?.name !== ev.src) break;
+      if (!S.avoidance[ev.tgt]) S.avoidance[ev.tgt] = { total:0, byType:{} };
+      S.avoidance[ev.tgt].total++;
+      S.avoidance[ev.tgt].byType[ev.typ] = (S.avoidance[ev.tgt].byType[ev.typ]||0) + 1;
+      const ma = mobAvoidPlayer(ev.mob, ev.tgt);
+      ma.total++;
+      ma.byType[ev.typ] = (ma.byType[ev.typ]||0) + 1;
+      tlEntry(S.mobAvoidTL, ev.mob, ev.tgt).push({ts: ev.ts, v: 1});
+      break;
+    }
+    case 'absorb': {
+      bumpTs(ev.ts);
+      if (!S.avoidance[ev.tgt]) S.avoidance[ev.tgt] = { total:0, byType:{} };
+      S.avoidance[ev.tgt].total++;
+      S.avoidance[ev.tgt].byType['absorb'] = (S.avoidance[ev.tgt].byType['absorb']||0) + 1;
+      const ab = mobAvoidPlayer(ev.mob, ev.tgt);
+      ab.total++;
+      ab.byType['absorb'] = (ab.byType['absorb']||0) + 1;
+      tlEntry(S.mobAvoidTL, ev.mob, ev.tgt).push({ts: ev.ts, v: 1});
+      break;
+    }
+    case 'cast': {
+      S.casts[ev.src] = { spell: ev.sp, logTs: ev.ts };
+      break;
+    }
+    case 'who': {
+      const p = player(ev.name);
+      p.classes = ev.classes || [];
+      p.cls = p.classes[0] || '';
+      break;
+    }
+  }
+}
+
+function applyBatch(batch) {
+  for (const ev of batch.events) applyEvent(ev);
+}
+
+// ── Build the render-ready state snapshot from S ──────────────────────────────
+function buildRenderState() {
+  const nowSecs = Date.now() / 1000;
+
+  // Use log-based timestamps for all duration calculations so that replayed
+  // historical logs and live logs both produce correct elapsed times.
+  // (S.lastTs - S.fightStartTs) is the span of recorded activity, not wall-clock age.
+  const elapsed = (S.fightStartTs && S.lastTs > S.fightStartTs)
+    ? Math.max(S.lastTs - S.fightStartTs, 0.001)
+    : 0.001;
+
+  // Per-mob fight duration: from first combat event for that mob to last
+  // (or to the most recent log event if still active).
+  function getMobElapsed(mob) {
+    if (!mob || !mob.firstTs) return elapsed;
+    return Math.max(mob.lastTs - mob.firstTs, 0.001);
+  }
+
+  function dmgEntries(byPlayer, elapsedSecs) {
+    const el = elapsedSecs || elapsed;
+    return Object.entries(byPlayer)
+      .sort((a,b) => b[1].dmg - a[1].dmg)
+      .map(([name, p]) => {
+        const sp = S.players[name] || {};
+        return {
+          name,
+          class:   sp.cls     || p.cls     || '',
+          classes: sp.classes || p.classes || [],
+          total_damage: p.dmg,
+          dps: Math.round(p.dmg / el),
+          damage_by_type: Object.entries(p.dmgByType||{})
+            .sort((a,b)=>b[1]-a[1])
+            .map(([type,damage])=>({ type, damage, dps: Math.round(damage/el) })),
+          spells: Object.entries(p.dmgBySpell||{})
+            .sort((a,b)=>b[1]-a[1])
+            .map(([spell,damage])=>({ spell, damage, dps: Math.round(damage/el) })),
+        };
+      });
+  }
+  function tankEntries(byPlayer, elapsedSecs) {
+    const el = elapsedSecs || elapsed;
+    return Object.entries(byPlayer)
+      .sort((a,b) => b[1].dmg - a[1].dmg)
+      .map(([name, p]) => {
+        const sp = S.players[name] || {};
+        return {
+          name,
+          class:   sp.cls     || p.cls     || '',
+          classes: sp.classes || p.classes || [],
+          total_damage: p.dmg,
+          dps: Math.round(p.dmg / el),
+          damage_by_type: Object.entries(p.dmgByType||{})
+            .sort((a,b)=>b[1]-a[1])
+            .map(([type,damage])=>({ type, damage, dps: Math.round(damage/el) })),
+        };
+      });
+  }
+
+  // Global per-player entities (damage dealers) — pass full player objects so dmgEntries
+  // can pick up cls/classes directly without the S.players lookup fallback being needed.
+  const entities = dmgEntries(
+    Object.fromEntries(Object.entries(S.players).filter(([,p])=>p.dmg>0))
+  );
+
+  // Healers
+  const healers = Object.entries(S.players)
+    .filter(([,p])=>p.heals>0)
+    .sort((a,b)=>b[1].heals-a[1].heals)
+    .map(([name,p])=>({
+      name, class:p.cls||'', classes:p.classes||[],
+      total_heals: p.heals,
+      hps: Math.round(p.heals/elapsed),
+      heals_by_spell: Object.entries(p.healsBySpell||{})
+        .sort((a,b)=>b[1]-a[1])
+        .map(([spell,healed])=>({ spell, healed, hps: Math.round(healed/elapsed) })),
+    }));
+
+  // Healees
+  const healees = Object.entries(S.players)
+    .filter(([,p])=>p.healed>0)
+    .sort((a,b)=>b[1].healed-a[1].healed)
+    .map(([name,p])=>({
+      name, class:p.cls||'', classes:p.classes||[],
+      total_healed_received: p.healed,
+      hps: Math.round(p.healed/elapsed),
+      healed_received_by_spell: Object.entries(p.healedBySpell||{})
+        .sort((a,b)=>b[1]-a[1])
+        .map(([spell,healed])=>({ spell, healed, hps: Math.round(healed/elapsed) })),
+    }));
+
+  // Mob list — last_seen_secs shows the fight duration (log-time based), not
+  // wall-clock age, so it is correct for both live and replayed encounters.
+  const mob_list = Object.entries(S.mobs)
+    .sort((a,b)=>b[1].lastTs-a[1].lastTs)
+    .slice(0,40)
+    .map(([id,mob])=>{
+      const lastSeenAgo = Math.max(0, nowSecs - mob.lastTs);
+      const isDead  = mob.dead || lastSeenAgo >= 15;
+      const isActive = !isDead && lastSeenAgo < 5;
+      // Show fight duration (log-based) rather than wall-clock age.
+      const fightSecs = getMobElapsed(mob);
+      return { id:+id, name:mob.name, last_seen_secs: fightSecs, is_dead:isDead, is_active:isActive, first_ts: mob.firstTs, last_ts: mob.lastTs };
+    });
+
+  // Per-mob breakdowns — each mob uses its own fight duration for rates.
+  const mob_damage  = Object.fromEntries(Object.entries(S.mobDmg).map(([id,bp])=>{
+    const mobEl = getMobElapsed(S.mobs[+id]);
+    return [id, dmgEntries(bp, mobEl)];
+  }));
+  const mob_tanking = Object.fromEntries(Object.entries(S.mobTank).map(([id,bp])=>{
+    const mobEl = getMobElapsed(S.mobs[+id]);
+    return [id, tankEntries(bp, mobEl)];
+  }));
+  const mob_healing = Object.fromEntries(Object.entries(S.mobHeal).map(([id,bh])=>{
+    const mobEl = getMobElapsed(S.mobs[+id]);
+    return [id, Object.entries(bh).sort((a,b)=>b[1].heals-a[1].heals).map(([name,h])=>{
+      const sp = S.players[name] || {};
+      return { name, class:sp.cls||'', classes:sp.classes||[], total_heals:h.heals, hps:Math.round(h.heals/mobEl),
+        heals_by_spell: Object.entries(h.healsBySpell||{}).sort((a,b)=>b[1]-a[1])
+          .map(([spell,healed])=>({ spell, healed, hps:Math.round(healed/mobEl) })),
+      };
+    })];
+  }));
+  const mob_healed = Object.fromEntries(Object.entries(S.mobHealee).map(([id,bh])=>{
+    const mobEl = getMobElapsed(S.mobs[+id]);
+    return [id, Object.entries(bh).sort((a,b)=>b[1].healed-a[1].healed).map(([name,h])=>{
+      const sp = S.players[name] || {};
+      return { name, class:sp.cls||'', classes:sp.classes||[], total_healed_received:h.healed, hps:Math.round(h.healed/mobEl),
+        healed_received_by_spell: Object.entries(h.healedBySpell||{}).sort((a,b)=>b[1]-a[1])
+          .map(([spell,healed])=>({ spell, healed, hps:Math.round(healed/mobEl) })),
+      };
+    })];
+  }));
+
+  // Global tanked (aggregate across all mobs)
+  const tankedRaw = {};
+  for (const byPlayer of Object.values(S.mobTank)) {
+    for (const [name, p] of Object.entries(byPlayer)) {
+      if (!tankedRaw[name]) tankedRaw[name] = { dmg:0, dmgByType:{} };
+      tankedRaw[name].dmg += p.dmg;
+      for (const [t,d] of Object.entries(p.dmgByType||{}))
+        tankedRaw[name].dmgByType[t] = (tankedRaw[name].dmgByType[t]||0) + d;
+    }
+  }
+  const tanked = tankEntries(tankedRaw);
+
+  // Global avoidance (sorted by total count; class pulled from S.players if known)
+  const avoidance = Object.entries(S.avoidance)
+    .sort((a, b) => b[1].total - a[1].total)
+    .map(([name, av]) => {
+      const sp = S.players[name] || {};
+      return {
+        name, class: sp.cls||'', classes: sp.classes||[],
+        total: av.total,
+        by_type: Object.entries(av.byType).sort((a,b)=>b[1]-a[1]).map(([type,count])=>({type,count})),
+      };
+    });
+
+  // Per-mob avoidance
+  const mob_avoid = Object.fromEntries(Object.entries(S.mobAvoid).map(([id, byPlayer]) => [
+    id,
+    Object.entries(byPlayer).sort((a,b)=>b[1].total-a[1].total).map(([name,av])=>{
+      const sp = S.players[name] || {};
+      return {
+        name, class: sp.cls||'', classes: sp.classes||[],
+        total: av.total,
+        by_type: Object.entries(av.byType).sort((a,b)=>b[1]-a[1]).map(([type,count])=>({type,count})),
+      };
+    }),
+  ]));
+
+  // fight_elapsed_secs: use the selected mob's fight duration when a mob is
+  // selected so that the header label and card rates are mob-scoped.
+  const fight_elapsed_secs = (selectedMob !== null && S.mobs[selectedMob])
+    ? getMobElapsed(S.mobs[selectedMob])
+    : elapsed;
+
+  // Fight start display
+  const fightStartDisplay = S.fightStartTs
+    ? new Date(S.fightStartTs * 1000).toLocaleString('en-US', { timeZone: 'UTC' }) : '';
+
+  // Last log time
+  const lastLogTime = S.lastTs
+    ? new Date(S.lastTs*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'UTC'})
+    : '';
+
+  // Active casts — only show spells cast within the last 10 log-seconds of the
+  // current replay position (S.lastTs).  This suppresses historical casts that
+  // appear during initial load or after a seek to a later position.
+  const casting = {};
+  for (const [name, c] of Object.entries(S.casts))
+    if (S.lastTs - c.logTs <= 10) casting[name] = { spell: c.spell };
+
+  return {
+    entities, healers, healees,
+    mob_list, mob_damage, mob_tanking, mob_healing, mob_healed, tanked,
+    avoidance, mob_avoid,
+    fight_start_display: fightStartDisplay,
+    fight_elapsed_secs,
+    last_log_time: lastLogTime,
+    casting,
+  };
+}
+
+// ── UI state ──────────────────────────────────────────────────────────────────
+let selectedMob      = null;
+let pendingMobRestore = null;  // mob id to re-select after a seek reset, if still in window
+let detailMode   = 'damage';
+let lastData     = null;
+let graphVisible    = false;
+let chartInst       = null;
+let chartInstRate   = null;
+
+function selectMob(id) {
+  pendingMobRestore = null;
+  const wasSelected = selectedMob === id;
+
+  if (wasSelected) {
+    const mob = S.mobs[id];
+    if (mob && mob.firstTs) {
+      pendingMobRestore = id;
+      seekToLogTs(mob.firstTs);
+    }
+    return;
+  }
+
+  selectedMob = id;
+  if (selectedMob !== null) detailMode = 'damage';
+  if (lastData) rerender();
+
+  if (id !== null) {
+    const mob = S.mobs[id];
+    if (mob) {
+      const lastSeenAgo = Math.max(0, Date.now() / 1000 - mob.lastTs);
+      const isDead = mob.dead || lastSeenAgo >= 15;
+      const isActive = !isDead && lastSeenAgo < 5;
+      const targetTs = isActive ? mob.lastTs : mob.firstTs;
+      if (targetTs) {
+        pendingMobRestore = id;
+        seekToLogTs(targetTs);
+      }
+    }
+  }
+}
+function deselectMob() {
+  pendingMobRestore = null;
+  if (selectedMob !== null) { selectedMob = null; if (lastData) rerender(); }
+}
+function setMode(mode) { detailMode = mode; if (lastData) rerender(); }
+
+// ── Debounced render ──────────────────────────────────────────────────────────
+// During journal catch-up the browser receives many batches in rapid succession.
+// We defer rendering to the next animation frame so we only paint once after
+// the burst settles, rather than for every batch.
+let renderScheduled = false;
+function scheduleRender() {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    lastData = buildRenderState();
+    if (selectedMob === null && pendingMobRestore !== null) {
+      if ((lastData.mob_list || []).some(m => m.id === pendingMobRestore)) {
+        selectedMob = pendingMobRestore;
+        pendingMobRestore = null;
+      }
+    }
+    updateLogClock(lastData);
+    rerender();
+  });
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function buildFightLabel(d) {
+  const el = document.getElementById('fight-label');
+  if (selectedMob === null) {
+    el.innerHTML = '<span class="fl-main"><span class="fl-name" style="color:#666">No mob selected</span></span>';
+    el.style.borderLeftColor = '#444';
+    return;
+  }
+  const mobEntry = (d.mob_list || []).find(m => m.id === selectedMob);
+  const mob = (mobEntry ? mobEntry.name : null) || '—';
+
+  const accentColor = !mobEntry ? '#444'
+    : mobEntry.is_dead   ? '#464646'
+    : mobEntry.is_active ? '#3cdc3c'
+    :                      '#c8aa1e';
+  el.style.borderLeftColor = accentColor;
+
+  let mainHtml = `<span class="fl-main"><span class="fl-name">${mob}</span>`;
+  let tsHtml = '';
+
+  if (mobEntry) {
+    const enc = Math.round(mobEntry.last_seen_secs);
+    mainHtml += `<span class="fl-secs">${fmtTime(enc)}</span>`;
+    mainHtml += '</span>';
+
+    if (mobEntry.first_ts) {
+      const seen = fmtTsPos(mobEntry.first_ts);
+      if (mobEntry.is_dead && mobEntry.last_ts && mobEntry.last_ts !== mobEntry.first_ts) {
+        tsHtml = `<span class="fl-ts">${seen} → ${fmtTsPos(mobEntry.last_ts)}</span>`;
+      } else {
+        tsHtml = `<span class="fl-ts">seen ${seen}</span>`;
+      }
+    }
+  } else {
+    mainHtml += '</span>';
+  }
+
+  el.innerHTML = mainHtml + tsHtml;
+}
+
+function rerender() {
+  if (!lastData) return;
+  buildFightLabel(lastData);
+  renderMobList(lastData);
+  renderSummary(lastData);
+  renderCards(lastData);
+  if (graphVisible) renderGraph();
+}
+
+function renderMobList(d) {
+  document.getElementById('mob-rows').innerHTML = (d.mob_list || []).map(m => {
+    const dotColor  = m.is_dead ? '#464646' : m.is_active ? '#3cdc3c' : '#c8aa1e';
+    const nameColor = m.is_dead ? '#5a5a5a' : m.is_active ? '#ffffff' : '#a0a0a0';
+    const sel = selectedMob === m.id ? ' selected' : '';
+    return `<div class="mob-row${sel}" data-mob-id="${m.id}" onclick="event.stopPropagation();selectMob(+this.dataset.mobId)">
+      <span class="mob-dot" style="color:${dotColor}">●</span>
+      <span class="mob-name" style="color:${nameColor}">${truncate(m.name, 17)}</span>
+      <span class="mob-time">${fmtTime(m.last_seen_secs)}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderSummary(d) {
+  const elapsed = Math.max(d.fight_elapsed_secs, 0.001);
+  const hdrEl  = document.getElementById('sum-header-area');
+  const rowsEl = document.getElementById('sum-rows');
+
+  const TAB_LABELS = { damage:'Dmg', healing:'Healer', healed:'Healed', tanked:'Tank', avoid:'Avoid' };
+  const tabs = ['damage','healing','healed','tanked','avoid'].map(m => {
+    const active = detailMode === m ? ' active' : '';
+    return `<button class="mode-tab${active}" onclick="event.stopPropagation();setMode('${m}')">${TAB_LABELS[m]}</button>`;
+  }).join('');
+  hdrEl.innerHTML = `<div id="mode-tabs">${tabs}</div>`;
+
+  let rows = '';
+  if (selectedMob !== null) {
+    const key = String(selectedMob);
+    if      (detailMode === 'damage')  rows = ((d.mob_damage  || {})[key] || []).map(e => sumRow(e.name, e.classes, e.total_damage, e.dps, 'DPS')).join('');
+    else if (detailMode === 'tanked')  rows = ((d.mob_tanking || {})[key] || []).map(e => sumRow(e.name, e.classes, e.total_damage, e.dps, 'DPS')).join('');
+    else if (detailMode === 'healing') rows = ((d.mob_healing || {})[key] || []).map(e => sumRow(e.name, e.classes, e.total_heals,  e.hps, 'HPS')).join('');
+    else if (detailMode === 'healed')  rows = ((d.mob_healed  || {})[key] || []).map(e => sumRow(e.name, e.classes, e.total_healed_received, e.hps, 'HPS')).join('');
+    else                               rows = ((d.mob_avoid   || {})[key] || []).map(e => sumRow(e.name, e.classes, e.total, '', '')).join('');
+  } else {
+    if      (detailMode === 'damage')  rows = (d.entities  || []).map(e => sumRow(e.name, e.classes, e.total_damage, Math.round(e.total_damage/elapsed), 'DPS')).join('');
+    else if (detailMode === 'healing') rows = (d.healers   || []).map(e => sumRow(e.name, e.classes, e.total_heals,  e.hps, 'HPS')).join('');
+    else if (detailMode === 'healed')  rows = (d.healees   || []).map(e => sumRow(e.name, e.classes, e.total_healed_received, e.hps, 'HPS')).join('');
+    else if (detailMode === 'tanked')  rows = (d.tanked    || []).map(e => sumRow(e.name, e.classes, e.total_damage, e.dps, 'DPS')).join('');
+    else                               rows = (d.avoidance || []).map(e => sumRow(e.name, e.classes, e.total, '', '')).join('');
+  }
+  rowsEl.innerHTML = rows;
+}
+
+function sumRow(name, classes, val, rate, rateLabel) {
+  const clsArr = Array.isArray(classes) ? classes : (classes ? [classes] : []);
+  return `<div class="sum-row">
+    <span class="sum-name">${name}</span>
+    <span class="sum-class">${classCodesHtml(clsArr)}</span>
+    <span class="sum-val">${fmtK(val)}</span>
+    <span class="sum-rate">${rate} ${rateLabel}</span>
+  </div>`;
+}
+
+function renderCards(d) {
+  const elapsed = Math.max(d.fight_elapsed_secs, 0.001);
+  const cardsEl = document.getElementById('cards');
+
+  if (selectedMob !== null) {
+    const key = String(selectedMob);
+    if      (detailMode === 'damage')  { const p = (d.mob_damage  || {})[key] || []; cardsEl.innerHTML = p.length ? p.map(e => damageCard(e, elapsed)).join('') : '<div class="empty-state">No damage recorded for this mob yet</div>'; }
+    else if (detailMode === 'tanked')  { const p = (d.mob_tanking || {})[key] || []; cardsEl.innerHTML = p.length ? p.map(e => damageCard(e, elapsed, '#8a3030')).join('') : '<div class="empty-state">No tanking data recorded for this mob</div>'; }
+    else if (detailMode === 'healing') { const h = (d.mob_healing || {})[key] || []; cardsEl.innerHTML = h.length ? h.map(e => healerCard(e, elapsed)).join('') : '<div class="empty-state">No healing recorded for this mob</div>'; }
+    else if (detailMode === 'healed')  { const h = (d.mob_healed  || {})[key] || []; cardsEl.innerHTML = h.length ? h.map(e => healeeCard(e, elapsed)).join('') : '<div class="empty-state">No heals received recorded for this mob</div>'; }
+    else                               { const a = (d.mob_avoid   || {})[key] || []; cardsEl.innerHTML = a.length ? a.map(e => avoidCard(e)).join('') : '<div class="empty-state">No avoidance recorded for this mob</div>'; }
+  } else {
+    if      (detailMode === 'damage')  { const e = d.entities  || []; cardsEl.innerHTML = e.length ? e.map(x => damageCard(x, elapsed)).join('') : '<div class="waiting-state">Waiting for combat…</div>'; }
+    else if (detailMode === 'healing') { const h = d.healers   || []; cardsEl.innerHTML = h.length ? h.map(e => healerCard(e, elapsed)).join('') : '<div class="empty-state">No healing recorded</div>'; }
+    else if (detailMode === 'healed')  { const h = d.healees   || []; cardsEl.innerHTML = h.length ? h.map(e => healeeCard(e, elapsed)).join('') : '<div class="empty-state">No heals received recorded</div>'; }
+    else if (detailMode === 'tanked')  { const t = d.tanked    || []; cardsEl.innerHTML = t.length ? t.map(e => damageCard(e, elapsed, '#8a3030')).join('') : '<div class="empty-state">No tanking recorded</div>'; }
+    else                               { const a = d.avoidance || []; cardsEl.innerHTML = a.length ? a.map(e => avoidCard(e)).join('') : '<div class="empty-state">No avoidance recorded</div>'; }
+  }
+}
+
+function castBarHtml(playerName) {
+  const cast = S.casts[playerName];
+  if (!cast || S.lastTs - cast.logTs > 10) return '';
+  return `<div class="cast-bar"><div class="cast-bar-shimmer"></div><span class="cast-bar-text">✦ ${cast.spell}</span></div>`;
+}
+
+function damageCard(e, elapsed, barColor = null) {
+  const classes = e.classes || (e.class ? [e.class] : []);
+  const hdrStyle = barColor ? `background:${barColor}` : classHeaderStyle(classes);
+  const bc = barColor || classColor(classes[0] || '');
+  const byType = e.damage_by_type || [];
+  const spells = e.spells || [];
+  const total  = e.total_damage;
+  const typeRows  = byType.map(r => typeRow(r.type, r.damage, total, bc, elapsed)).join('');
+  const spellRows = spells.length ? `<hr class="spell-sep">` + spells.map(r => typeRow(truncate(r.spell, 17), r.damage, total, '#3c64a0', elapsed)).join('') : '';
+  const clsHtml = classCodesHtml(classes);
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Damage</span><span class="c-rate">DPS</span></div>${typeRows}${spellRows}<div class="card-pad"></div></div>`;
+}
+
+function healerCard(e, elapsed) {
+  const classes = e.classes || (e.class ? [e.class] : []);
+  const hdrStyle = classHeaderStyle(classes);
+  const healColor = '#28a064';
+  const total  = e.total_heals;
+  const spells = e.heals_by_spell || [];
+  const spellRows = (!spells.length && total > 0) ? typeRow('heal', total, total, healColor, elapsed, true) : spells.map(r => typeRow(truncate(r.spell, 17), r.healed, total, healColor, elapsed, true)).join('');
+  const clsHtml = classCodesHtml(classes);
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Spell</span><span class="c-val">Healed</span><span class="c-rate">HPS</span></div>${spellRows}<div class="card-pad"></div></div>`;
+}
+
+function healeeCard(e, elapsed) {
+  const classes = e.classes || (e.class ? [e.class] : []);
+  const hdrStyle = classHeaderStyle(classes);
+  const healColor = '#2080c0';
+  const total  = e.total_healed_received;
+  const spells = e.healed_received_by_spell || [];
+  const spellRows = (!spells.length && total > 0) ? typeRow('heal', total, total, healColor, elapsed, true) : spells.map(r => typeRow(truncate(r.spell, 17), r.healed, total, healColor, elapsed, true)).join('');
+  const clsHtml = classCodesHtml(classes);
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Spell</span><span class="c-val">Healed</span><span class="c-rate">HPS</span></div>${spellRows}<div class="card-pad"></div></div>`;
+}
+
+function avoidCard(e) {
+  const classes = e.classes || (e.class ? [e.class] : []);
+  const hdrStyle = classHeaderStyle(classes);
+  const total = e.total;
+  const rows = (e.by_type || []).map(r => {
+    const pct = total > 0 ? (r.count / total * 100).toFixed(1) : '0.0';
+    return `<div class="type-row"><span class="c-type"><span class="type-bar" style="width:${pct}%;background:#2a6a8a"></span><span class="type-label">${r.type}</span></span><span class="c-val">${r.count}</span><span class="c-rate">${pct}%</span></div>`;
+  }).join('');
+  const clsHtml = classCodesHtml(classes);
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}</div><div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Count</span><span class="c-rate">%</span></div>${rows}<div class="card-pad"></div></div>`;
+}
+
+function typeRow(label, dmg, total, barColor, elapsed, isHeal = false) {
+  const pct  = total > 0 ? (dmg / total * 100).toFixed(1) : 0;
+  const rate = Math.round(dmg / Math.max(elapsed, 0.001));
+  const rl   = isHeal ? `${rate} HPS` : `${rate} DPS`;
+  return `<div class="type-row"><span class="c-type"><span class="type-bar" style="width:${pct}%;background:${barColor}"></span><span class="type-label">${label}</span></span><span class="c-val">${fmtK(dmg)}</span><span class="c-rate">${rl}</span></div>`;
+}
+
+// ── Graph ─────────────────────────────────────────────────────────────────────
+const GRAPH_BUCKET = 5; // seconds per bin
+const GRAPH_MAX_PLAYERS = 8;
+const GRAPH_COLORS = [
+  '#5a9aff', '#ff6b6b', '#4dca80', '#ffa733',
+  '#c878e8', '#40c8c8', '#f0d040', '#ff7eb3',
+];
+
+function toggleGraph() {
+  graphVisible = !graphVisible;
+  const strip = document.getElementById('graph-strip');
+  const btn   = document.getElementById('graph-toggle');
+  strip.style.display = graphVisible ? 'flex' : 'none';
+  btn.textContent = graphVisible ? '▲ Graph' : '▼ Graph';
+  btn.classList.toggle('active', graphVisible);
+  if (graphVisible) {
+    destroyChart();
+    renderGraph();
+  } else {
+    destroyChart();
+  }
+}
+
+function destroyChart() {
+  if (chartInst)     { chartInst.destroy();     chartInst     = null; }
+  if (chartInstRate) { chartInstRate.destroy();  chartInstRate = null; }
+}
+
+function renderGraph() {
+  const canvas     = document.getElementById('graph-canvas');
+  const canvasRate = document.getElementById('graph-canvas-rate');
+  if (!canvas || !canvasRate) return;
+
+  if (selectedMob === null) { destroyChart(); return; }
+
+  const mob     = selectedMob;
+  const mobInfo = S.mobs[mob];
+  if (!mobInfo) { destroyChart(); return; }
+
+  let tl, yLabelTotal, yLabelRate;
+  if      (detailMode === 'damage')  { tl = S.mobDmgTL[mob];    yLabelTotal = 'Total Damage';   yLabelRate = 'DPS'; }
+  else if (detailMode === 'tanked')  { tl = S.mobTankTL[mob];   yLabelTotal = 'Total Incoming'; yLabelRate = 'Incoming DPS'; }
+  else if (detailMode === 'healing') { tl = S.mobHealTL[mob];   yLabelTotal = 'Total Healing';  yLabelRate = 'HPS'; }
+  else if (detailMode === 'healed')  { tl = S.mobHealedTL[mob]; yLabelTotal = 'Total Healed';   yLabelRate = 'HPS Received'; }
+  else                               { tl = S.mobAvoidTL[mob];  yLabelTotal = 'Total Avoids';   yLabelRate = 'Avoids / 5s'; }
+
+  if (!tl || Object.keys(tl).length === 0) { destroyChart(); return; }
+
+  const fightStart = mobInfo.firstTs;
+  const fightEnd   = mobInfo.lastTs;
+  const numBuckets = Math.max(1, Math.ceil((fightEnd - fightStart) / GRAPH_BUCKET));
+
+  const players = Object.entries(tl)
+    .map(([name, evs]) => ({ name, evs, total: evs.reduce((s, e) => s + e.v, 0) }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, GRAPH_MAX_PLAYERS);
+
+  const labels = Array.from({length: numBuckets}, (_, i) => `${i * GRAPH_BUCKET}s`);
+
+  // Build buckets once per player, derive both chart series from them
+  const playerBuckets = players.map(({ name, evs }, idx) => {
+    const buckets = new Array(numBuckets).fill(0);
+    for (const e of evs) {
+      const bi = Math.min(Math.floor((e.ts - fightStart) / GRAPH_BUCKET), numBuckets - 1);
+      if (bi >= 0) buckets[bi] += e.v;
+    }
+    return { name, buckets, color: GRAPH_COLORS[idx % GRAPH_COLORS.length] };
+  });
+
+  const datasetsTotal = playerBuckets.map(({ name, buckets, color }) => {
+    let running = 0;
+    const data = buckets.map(v => { running += v; return running; });
+    return { label: name, data, borderColor: color, backgroundColor: color + '30', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false };
+  });
+
+  const datasetsRate = playerBuckets.map(({ name, buckets, color }) => {
+    const data = buckets.map(v => Math.round(v / GRAPH_BUCKET));
+    return { label: name, data, borderColor: color, backgroundColor: color + '30', borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false };
+  });
+
+  function makeOpts(yLabel, showLegend) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: {
+          display: showLegend,
+          position: 'right',
+          labels: { color: '#999', font: { size: 10, family: 'monospace' }, boxWidth: 10, padding: 5 },
+        },
+        tooltip: { mode: 'index', intersect: false },
+      },
+      scales: {
+        x: {
+          grid: { color: '#252525' },
+          ticks: { color: '#555', font: { size: 9, family: 'monospace' }, maxTicksLimit: 12 },
+        },
+        y: {
+          grid: { color: '#252525' },
+          ticks: { color: '#777', font: { size: 9, family: 'monospace' }, callback: v => fmtK(v) },
+          title: { display: true, text: yLabel, color: '#555', font: { size: 9 } },
+          min: 0,
+        },
+      },
+    };
+  }
+
+  if (chartInst) {
+    chartInst.data.labels   = labels;
+    chartInst.data.datasets = datasetsTotal;
+    chartInst.options.scales.y.title.text = yLabelTotal;
+    chartInst.update('none');
+  } else {
+    chartInst = new Chart(canvas, { type: 'line', data: { labels, datasets: datasetsTotal }, options: makeOpts(yLabelTotal, false) });
+  }
+
+  if (chartInstRate) {
+    chartInstRate.data.labels   = labels;
+    chartInstRate.data.datasets = datasetsRate;
+    chartInstRate.options.scales.y.title.text = yLabelRate;
+    chartInstRate.update('none');
+  } else {
+    chartInstRate = new Chart(canvasRate, { type: 'line', data: { labels, datasets: datasetsRate }, options: makeOpts(yLabelRate, true) });
+  }
+}
+
+// ── WebSocket connection ───────────────────────────────────────────────────────
+let ws, wsTimer;
+
+// Timeline state
+let tlFirstTs  = null;  // wall-clock unix seconds (used for seek)
+let tlLastTs   = null;  // wall-clock unix seconds (used for seek)
+let tlIsLive   = true;  // currently following live
+let tlPaused   = false; // paused during replay
+let tlCanGoLive = true; // false for completed recordings with no live ingest
+let logFirstTs = null;  // EQ log-event unix seconds (used for labels)
+let logLastTs  = null;  // EQ log-event unix seconds (used for labels)
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url   = `${proto}://${location.host}/stream/${STREAM_ID}/ws?vtok=${encodeURIComponent(VIEW_TOKEN)}`;
+  ws = new WebSocket(url);
+  ws.onopen    = () => { setStatus('live', '● live'); tlIsLive = true; tlPaused = false; updateLiveBtn(); updatePlayPauseBtn(); };
+  ws.onmessage = e => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch(_) { return; }
+
+    if (msg.t === 'info') {
+      // Server tells us the full timeline bounds.
+      tlFirstTs  = msg.first_ts  || null;
+      tlLastTs   = msg.last_ts   || null;
+      // Use log-event timestamps for display and seeking when provided.
+      // These span the actual EQ session even if the wall-clock window is
+      // near-zero (e.g. a dump-mode replay that finished in under a second).
+      if (msg.log_first_ts) logFirstTs = msg.log_first_ts;
+      if (msg.log_last_ts)  logLastTs  = msg.log_last_ts;
+      // If no ingest client is connected this is a completed recording,
+      // not a live stream — update status accordingly.
+      if (!msg.is_live) {
+        tlIsLive = false;
+        tlCanGoLive = false;
+        setStatus('poll', '◉ recorded');
+        updateLiveBtn();
+        updatePlayPauseBtn();
+        updateWallClock();
+      }
+      updateTimelineBar();
+      return;
+    }
+    if (msg.t === 'seek_ok') {
+      tlFirstTs = msg.first_ts || tlFirstTs;
+      tlLastTs  = msg.last_ts  || tlLastTs;
+      updateTimelineBar();
+      return;
+    }
+    if (msg.t === 'stream_done') {
+      // Completed recording has finished playing — treat as paused at the end.
+      // Cache is now complete (we've received everything).
+      cacheComplete = true;
+      tlPaused = true;
+      tlIsLive = false;
+      S.casts = {};
+      updatePlayPauseBtn();
+      scheduleRender();
+      return;
+    }
+    if (msg.t === 'now_live') {
+      // Caught up to the live tail; cache covers history up to this point.
+      cacheComplete = true;
+      tlIsLive = true;
+      tlPaused = false;
+      document.getElementById('tl-speed').value = '1';
+      updateLiveBtn();
+      updatePlayPauseBtn();
+      setScrubberToEnd();
+      return;
+    }
+    if (msg.t === 'batch') {
+      // Unwrap the envelope — apply just the EventBatch payload.
+      try {
+        applyBatch(msg.batch);
+        // Cache this batch for client-side seeking.
+        const batchLogTs = msg.batch.events && msg.batch.events.length
+          ? Math.max(...msg.batch.events.map(e => e.ts))
+          : (S.lastTs || 0);
+        cachedBatches.push({ logTs: batchLogTs, batch: msg.batch });
+        // Update timeline bounds from each batch's EQ log timestamp.
+        // This is the primary signal for dump-mode streams where all
+        // wall-clock timestamps collapse to the same second.
+        if (S.lastTs) {
+          if (!tlFirstTs) tlFirstTs = S.lastTs;
+          // Only advance the upper wall-clock bound while live; during replay
+          // catch-up the server already provided the true end via the 'info'
+          // message and advancing here would make every batch appear to be at
+          // the end of the seek bar (frac always = 1.0).
+          if (!tlLastTs || (tlIsLive && S.lastTs > tlLastTs)) tlLastTs = S.lastTs;
+          // Track EQ log-event range; used for seek bar display & seeking.
+          // logFirstTs / logLastTs are seeded from the 'info' message when the
+          // server provides them.  During replay we must NOT advance logLastTs
+          // from batch data — doing so collapses the scrubber fraction to 1.0
+          // on every batch, pinning the bar to the right end.
+          if (!logFirstTs) logFirstTs = S.lastTs;
+          if (!logLastTs || (tlIsLive && S.lastTs > logLastTs)) logLastTs = S.lastTs;
+          if (tlIsLive) {
+            updateTimelineBar();
+            setScrubberToEnd();
+          } else {
+            // Always try to show the bar — it becomes visible once the range
+            // is known (idempotent once visible).
+            updateTimelineBar();
+            if (!scrubberDragging) {
+              // Update scrubber to reflect current replay position.
+              const dispFirst = logFirstTs || tlFirstTs;
+              const dispLast  = logLastTs  || tlLastTs;
+              if (dispFirst && dispLast && dispLast > dispFirst) {
+                const frac = Math.max(0, Math.min(1, (S.lastTs - dispFirst) / (dispLast - dispFirst)));
+                scrubber.value = Math.round(frac * 1000);
+                updateScrubberTrack();
+                tlPosLabel.textContent = fmtTsPos(S.lastTs);
+              }
+            }
+          }
+        }
+        scheduleRender();
+      } catch(_) {}
+    }
+  };
+  ws.onclose   = () => { ws = null; setStatus('error', '● reconnecting…'); cacheComplete = false; cachedBatches.length = 0; wsTimer = setTimeout(connectWS, 5000); };
+  ws.onerror   = () => {};
+}
+
+function sendWS(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// ── Timeline seek bar ────────────────────────────────────────────────────────
+const scrubber   = document.getElementById('tl-scrubber');
+const tlBar      = document.getElementById('timeline-bar');
+const tlStart    = document.getElementById('tl-label-start');
+const tlEnd      = document.getElementById('tl-label-end');
+const tlPosLabel = document.getElementById('tl-pos-label');
+const tlLiveBtn  = document.getElementById('tl-live-btn');
+
+function fmtTs(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', timeZone:'UTC' });
+}
+function fmtTsPos(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', timeZone:'UTC' });
+}
+
+function updateTimelineBar() {
+  // Require valid wall-clock bounds from the server for seek to work.
+  if (!tlFirstTs || !tlLastTs) return;
+  // Use log-event timestamps for the display range check when available;
+  // they span the full EQ session even if the wall-clock window is narrow
+  // (e.g. a dump-mode replay that finished in under a second).
+  const dispFirst = logFirstTs || tlFirstTs;
+  const dispLast  = logLastTs  || tlLastTs;
+  if (dispLast <= dispFirst) return;
+  tlBar.classList.add('visible');
+  document.documentElement.style.setProperty('--tl-height', '28px');
+  tlStart.textContent = fmtTs(dispFirst);
+  tlEnd.textContent   = fmtTs(dispLast);
+}
+
+function setScrubberToEnd() {
+  scrubber.value = 1000;
+  updateScrubberTrack();
+  tlPosLabel.textContent = '';
+}
+
+function updateLiveBtn() {
+  if (!tlCanGoLive) {
+    tlLiveBtn.style.display = 'none';
+    return;
+  }
+  tlLiveBtn.style.display = '';
+  if (tlIsLive) {
+    tlLiveBtn.textContent = '● Live';
+    tlLiveBtn.classList.add('live');
+  } else {
+    tlLiveBtn.textContent = 'Go Live';
+    tlLiveBtn.classList.remove('live');
+  }
+}
+
+function updatePlayPauseBtn() {
+  const btn = document.getElementById('tl-playpause');
+  if (!btn) return;
+  if (tlPaused) {
+    btn.innerHTML = '&#9654;';
+    btn.title = 'Resume';
+    btn.classList.add('is-paused');
+    btn.classList.remove('is-playing');
+  } else {
+    btn.innerHTML = '||';
+    btn.title = 'Pause';
+    btn.classList.remove('is-paused');
+    btn.classList.add('is-playing');
+  }
+}
+
+// ── Seek bar progress fill (Chromium/Safari) ─────────────────────────────────
+// Firefox uses ::-moz-range-progress in CSS; for other engines we paint a
+// gradient from the left edge to the thumb position on the track background.
+function updateScrubberTrack() {
+  const pct = (scrubber.value / 1000) * 100;
+  scrubber.style.background =
+    `linear-gradient(to right, #5a9aff 0%, #5a9aff ${pct}%, #333 ${pct}%, #333 100%)`;
+}
+
+// Update track when the live-replay scrubber is moved in the batch handler.
+// We track via explicit calls instead; see all scrubber.value assignments above.
+
+let scrubberDragging = false;
+document.getElementById('tl-speed').addEventListener('change', () => {
+  if (!tlIsLive && !tlPaused) {
+    const speed = parseFloat(document.getElementById('tl-speed').value) || 1.0;
+    sendWS({ t: 'resume', speed });
+  }
+});
+
+scrubber.addEventListener('mousedown', () => { scrubberDragging = true; });
+scrubber.addEventListener('touchstart', () => { scrubberDragging = true; });
+scrubber.addEventListener('mouseup',   () => { scrubberDragging = false; commitSeek(); });
+scrubber.addEventListener('touchend',  () => { scrubberDragging = false; commitSeek(); });
+scrubber.addEventListener('input', () => {
+  updateScrubberTrack();
+  const frac = scrubber.value / 1000;
+  const dispFirst = logFirstTs || tlFirstTs;
+  const dispLast  = logLastTs  || tlLastTs;
+  if (dispFirst && dispLast) {
+    const ts = Math.round(dispFirst + frac * (dispLast - dispFirst));
+    tlPosLabel.textContent = fmtTsPos(ts);
+  }
+});
+
+function commitSeek() {
+  const frac = scrubber.value / 1000;
+  if (!tlFirstTs || !tlLastTs) return;
+  const speed = parseFloat(document.getElementById('tl-speed').value) || 1.0;
+  // If scrubber is at or very near the end, go live instead.
+  if (frac >= 0.999) {
+    goLive();
+    return;
+  }
+  tlIsLive = false;
+  const seekPaused = !tlCanGoLive;
+  if (seekPaused) {
+    tlPaused = true;
+  } else {
+    tlPaused = false;
+  }
+  updateLiveBtn();
+  updatePlayPauseBtn();
+
+  // Prefer log-event timestamps for seeking.
+  if (logFirstTs && logLastTs && logLastTs > logFirstTs) {
+    const targetLogTs = Math.round(logFirstTs + frac * (logLastTs - logFirstTs));
+    // Try cache-first seek; fall back to full re-stream if cache not ready.
+    if (!seekWithCache(targetLogTs, seekPaused, speed)) {
+      pendingMobRestore = selectedMob;
+      if (seekPaused) {
+        sendWS({ t: 'seek_full_paused_log', to_log_ts: targetLogTs });
+      } else {
+        sendWS({ t: 'seek_full_log', to_log_ts: targetLogTs, speed });
+      }
+      resetState();
+    }
+  } else {
+    const targetTs = Math.round(tlFirstTs + frac * (tlLastTs - tlFirstTs));
+    pendingMobRestore = selectedMob;
+    resetState();
+    if (seekPaused) {
+      sendWS({ t: 'seek_full_paused', to_ts: targetTs });
+    } else {
+      sendWS({ t: 'seek_full', to_ts: targetTs, speed });
+    }
+  }
+}
+
+function goLive() {
+  tlIsLive = true;
+  tlPaused = false;
+  pendingMobRestore = null;
+  document.getElementById('tl-speed').value = '1';
+  updateLiveBtn();
+  updatePlayPauseBtn();
+  setScrubberToEnd();
+  resetState();
+  sendWS({ t: 'live' });
+}
+
+// ── Transport controls ─────────────────────────────────────────────────────
+
+function togglePlayPause() {
+  if (!tlFirstTs || !tlLastTs) return;
+  if (tlIsLive) {
+    // Pause from live: seek to the last known position and stay paused.
+    tlPaused = true;
+    tlIsLive = false;
+    updateLiveBtn();
+    updatePlayPauseBtn();
+    const targetLogTs = logLastTs || tlLastTs;
+    if (!seekWithCache(targetLogTs, true, 1.0)) {
+      // Cache not complete yet — fall back to full re-stream.
+      resetState();
+      if (logLastTs) {
+        sendWS({ t: 'seek_full_paused_log', to_log_ts: logLastTs });
+      } else {
+        sendWS({ t: 'seek_full_paused', to_ts: tlLastTs });
+      }
+    }
+    return;
+  }
+  if (tlPaused) {
+    // Resume replay.
+    tlPaused = false;
+    updatePlayPauseBtn();
+    const speed = parseFloat(document.getElementById('tl-speed').value) || 1.0;
+    sendWS({ t: 'resume', speed });
+  } else {
+    // Pause during replay.
+    tlPaused = true;
+    updatePlayPauseBtn();
+    sendWS({ t: 'pause' });
+  }
+}
+
+// Seek to a log-event timestamp, keeping the current play/pause state.
+function seekToLogTs(targetLogTs) {
+  const dispFirst = logFirstTs || tlFirstTs;
+  const dispLast  = logLastTs  || tlLastTs;
+  if (!dispFirst || !dispLast || dispLast <= dispFirst || !tlFirstTs || !tlLastTs) return;
+  const frac = Math.max(0, Math.min(1, (targetLogTs - dispFirst) / (dispLast - dispFirst)));
+  const speed = parseFloat(document.getElementById('tl-speed').value) || 1.0;
+  scrubber.value = Math.round(frac * 1000);
+  updateScrubberTrack();
+  tlPosLabel.textContent = fmtTsPos(targetLogTs);
+  tlIsLive = false;
+  updateLiveBtn();
+  // Try cache-first; fall back to full re-stream.
+  if (!seekWithCache(targetLogTs, tlPaused, speed)) {
+    if (pendingMobRestore === null) pendingMobRestore = selectedMob;
+    resetState();
+    if (logFirstTs && logLastTs && logLastTs > logFirstTs) {
+      const targetLogTs2 = Math.round(targetLogTs);
+      if (tlPaused) {
+        sendWS({ t: 'seek_full_paused_log', to_log_ts: targetLogTs2 });
+      } else {
+        sendWS({ t: 'seek_full_log', to_log_ts: targetLogTs2, speed });
+      }
+    } else {
+      const targetWallTs = Math.round(tlFirstTs + frac * (tlLastTs - tlFirstTs));
+      if (tlPaused) {
+        sendWS({ t: 'seek_full_paused', to_ts: targetWallTs });
+      } else {
+        sendWS({ t: 'seek_full', to_ts: targetWallTs, speed });
+      }
+    }
+  }
+}
+
+function rewind() {
+  const dispFirst = logFirstTs || tlFirstTs;
+  const dispLast  = logLastTs  || tlLastTs;
+  if (!dispFirst || !dispLast) return;
+  const currentLogTs = (S.lastTs && S.lastTs >= dispFirst) ? S.lastTs : dispFirst;
+  seekToLogTs(Math.max(dispFirst, currentLogTs - 120));
+}
+
+function fastForward() {
+  const dispFirst = logFirstTs || tlFirstTs;
+  const dispLast  = logLastTs  || tlLastTs;
+  if (!dispFirst || !dispLast) return;
+  const currentLogTs = (S.lastTs && S.lastTs >= dispFirst) ? S.lastTs : dispFirst;
+  const targetLogTs = currentLogTs + 120;
+  if (targetLogTs >= dispLast * 0.999) { goLive(); return; }
+  seekToLogTs(targetLogTs);
+}
+
+function setStatus(cls, txt) {
+  const el = document.getElementById('status');
+  el.className = cls; el.textContent = txt;
+}
+
+// ── Clocks ────────────────────────────────────────────────────────────────────
+function updateWallClock() {
+  // Hide the current wall-clock for completed recordings — it's irrelevant.
+  if (!tlCanGoLive) {
+    document.getElementById('wall-clock').textContent = '';
+    return;
+  }
+  const now = new Date();
+  const mo = now.toLocaleString('en-US', { month: 'short' });
+  const d  = now.getDate();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  document.getElementById('wall-clock').textContent = `${mo} ${d}  ${hh}:${mm}`;
+}
+updateWallClock();
+setInterval(updateWallClock, 10000);
+
+function updateLogClock(d) {
+  const el = document.getElementById('log-clock');
+  // Hide the log timestamp for completed recordings — the timeline bar already
+  // shows position and the timestamps appear in the mob label when selected.
+  if (!tlCanGoLive) { el.textContent = ''; return; }
+  el.textContent = d.last_log_time ? `log: ${d.last_log_time}` : '';
+}
+
+// Re-render periodically to keep mob activity timers and cast bars current.
+setInterval(() => { if (lastData) scheduleRender(); }, 1000);
+
+connectWS();
+</script>
+</body>
+</html>
