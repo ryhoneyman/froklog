@@ -17,11 +17,10 @@ use std::time::{Duration, Instant};
 use chrono::Timelike;
 use clap::Parser;
 use froklog::patterns::{
-    TS_LEN, norm, normalize_article_case, normalize_verb, normalize_miss,
-    RE_HIT_BY_SPELL, RE_MELEE, RE_SPELL_ATTR, RE_SPELL_HIT, RE_DOT,
-    RE_RIPOSTE, RE_DS, RE_DS_PROC, RE_CAST, RE_HEAL, RE_HAS_TAKEN, RE_EXTRA_DMG,
-    RE_MISS, RE_ABSORB_SKIN, RE_ABSORB_RUNE, RE_RESIST,
-    RE_SLAY_HAS, RE_SLAY_YOU, RE_SLAIN_BY, RE_DIED, RE_WHO, parse_who_classes,
+    norm, normalize_article_case, normalize_miss, normalize_verb, parse_who_classes,
+    RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_DIED, RE_DOT, RE_DS, RE_DS_PROC, RE_EXTRA_DMG,
+    RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE, RE_SLAIN_BY,
+    RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
 use froklog::tailer::parse_eq_timestamp;
 
@@ -145,17 +144,27 @@ fn update_mob_list(state: &mut DebugState, tgt: &str) -> (u64, bool) {
         } else {
             let id = state.next_mob_id;
             state.next_mob_id += 1;
-            state.mob_list.push(MobInstance { id, name: tgt.to_owned(), last_seen: now });
+            state.mob_list.push(MobInstance {
+                id,
+                name: tgt.to_owned(),
+                last_seen: now,
+            });
             (id, true)
         }
     } else {
         let id = state.next_mob_id;
         state.next_mob_id += 1;
-        state.mob_list.push(MobInstance { id, name: tgt.to_owned(), last_seen: now });
+        state.mob_list.push(MobInstance {
+            id,
+            name: tgt.to_owned(),
+            last_seen: now,
+        });
         (id, true)
     };
 
-    state.mob_list.sort_unstable_by(|a, b| b.last_seen.cmp(&a.last_seen));
+    state
+        .mob_list
+        .sort_unstable_by_key(|b| std::cmp::Reverse(b.last_seen));
     state.active_mob_id = Some(id);
     (id, is_new)
 }
@@ -276,7 +285,10 @@ fn main() {
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
             let spell = caps["spell"].to_owned();
 
-            t!("MATCH", format!("RE_HIT_BY_SPELL — src={src:?} tgt={tgt:?} dmg={dmg} spell={spell:?}"));
+            t!(
+                "MATCH",
+                format!("RE_HIT_BY_SPELL — src={src:?} tgt={tgt:?} dmg={dmg} spell={spell:?}")
+            );
 
             let src_is_mob = src.contains(' ')
                 || state.confirmed_mobs.contains(&src)
@@ -295,13 +307,19 @@ fn main() {
                         t!("NEW", format!("mob confirmed: {src:?}"));
                     }
                 } else {
-                    t!("INFO", format!("{src:?} is in known_players — skipping confirmed_mobs.insert"));
+                    t!(
+                        "INFO",
+                        format!("{src:?} is in known_players — skipping confirmed_mobs.insert")
+                    );
                 }
                 let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({src:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({src:?}) last_seen refreshed")
+                    );
                 }
                 let tank_stats = state
                     .mob_tanking
@@ -310,8 +328,14 @@ fn main() {
                     .entry(tgt.clone())
                     .or_default();
                 tank_stats.total_damage += dmg;
-                *tank_stats.damage_by_type.entry("hit".to_owned()).or_default() += dmg;
-                t!("STORE", format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} (hit)"));
+                *tank_stats
+                    .damage_by_type
+                    .entry("hit".to_owned())
+                    .or_default() += dmg;
+                t!(
+                    "STORE",
+                    format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} (hit)")
+                );
                 event_desc = format!("Spell(tank) mob={src:?} → player={tgt:?} dmg={dmg} spell={spell:?} mob_id=#{mob_id}");
             } else {
                 t!("REASON", format!("{src:?} identified as PLAYER"));
@@ -323,17 +347,26 @@ fn main() {
                 state.known_players.insert(src.clone());
                 stats.total_damage += dmg;
                 *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                t!("STORE", format!("entities[{src:?}].total_damage += {dmg} (spell={spell:?})"));
+                t!(
+                    "STORE",
+                    format!("entities[{src:?}].total_damage += {dmg} (spell={spell:?})")
+                );
 
                 let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &src);
                 if is_new_candidate {
-                    t!("TRACK", format!("{tgt:?} tracked as mob candidate (attacked by {src:?})"));
+                    t!(
+                        "TRACK",
+                        format!("{tgt:?} tracked as mob candidate (attacked by {src:?})")
+                    );
                 }
                 let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                    );
                 }
                 let mob_p = state
                     .mob_damage
@@ -343,7 +376,12 @@ fn main() {
                     .or_default();
                 mob_p.total_damage += dmg;
                 *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                t!("STORE", format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (spell={spell:?})"));
+                t!(
+                    "STORE",
+                    format!(
+                        "mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (spell={spell:?})"
+                    )
+                );
                 event_desc = format!("Spell(dmg) player={src:?} → mob={tgt:?} dmg={dmg} spell={spell:?} mob_id=#{mob_id}");
             }
             if !state.fight_started {
@@ -364,10 +402,14 @@ fn main() {
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
             let typ = normalize_verb(&verb).to_owned();
 
-            t!("MATCH", format!("RE_MELEE — src={src:?} verb={verb:?} tgt={tgt:?} dmg={dmg} type={typ:?}"));
+            t!(
+                "MATCH",
+                format!("RE_MELEE — src={src:?} verb={verb:?} tgt={tgt:?} dmg={dmg} type={typ:?}")
+            );
 
             let src_is_mob = !state.known_players.contains(&src)
-                && (verb == "hit" || verb == "hits"
+                && (verb == "hit"
+                    || verb == "hits"
                     || src.contains(' ')
                     || state.confirmed_mobs.contains(&src)
                     || state.mob_candidates.contains_key(src.as_str())
@@ -383,7 +425,10 @@ fn main() {
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({src:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({src:?}) last_seen refreshed")
+                    );
                 }
                 let tank_stats = state
                     .mob_tanking
@@ -393,18 +438,27 @@ fn main() {
                     .or_default();
                 tank_stats.total_damage += dmg;
                 *tank_stats.damage_by_type.entry(typ.clone()).or_default() += dmg;
-                t!("STORE", format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} ({typ})"));
+                t!(
+                    "STORE",
+                    format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} ({typ})")
+                );
                 if !state.known_players.contains(&src) {
                     let was_new_confirmed = state.confirmed_mobs.insert(src.clone());
                     if was_new_confirmed {
                         t!("CONFIRM", format!("mob confirmed: {src:?}"));
                     }
                 } else {
-                    t!("INFO", format!("{src:?} is in known_players — skipping confirmed_mobs.insert"));
+                    t!(
+                        "INFO",
+                        format!("{src:?} is in known_players — skipping confirmed_mobs.insert")
+                    );
                 }
                 event_desc = format!("Melee(tank) mob={src:?} → player={tgt:?} dmg={dmg} type={typ:?} mob_id=#{mob_id}");
             } else {
-                t!("REASON", format!("{src:?} identified as PLAYER (verb={verb:?})"));
+                t!(
+                    "REASON",
+                    format!("{src:?} identified as PLAYER (verb={verb:?})")
+                );
                 let is_new_player = !state.entities.contains_key(&src);
                 let stats = state.entities.entry(src.clone()).or_default();
                 if is_new_player {
@@ -413,17 +467,26 @@ fn main() {
                 state.known_players.insert(src.clone());
                 stats.total_damage += dmg;
                 *stats.damage_by_type.entry(typ.clone()).or_default() += dmg;
-                t!("STORE", format!("entities[{src:?}].total_damage += {dmg} ({typ})"));
+                t!(
+                    "STORE",
+                    format!("entities[{src:?}].total_damage += {dmg} ({typ})")
+                );
 
                 let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &src);
                 if is_new_candidate {
-                    t!("TRACK", format!("{tgt:?} tracked as mob candidate (attacked by {src:?})"));
+                    t!(
+                        "TRACK",
+                        format!("{tgt:?} tracked as mob candidate (attacked by {src:?})")
+                    );
                 }
                 let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                    );
                 }
                 let mob_p = state
                     .mob_damage
@@ -433,7 +496,10 @@ fn main() {
                     .or_default();
                 mob_p.total_damage += dmg;
                 *mob_p.damage_by_type.entry(typ.clone()).or_default() += dmg;
-                t!("STORE", format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} ({typ})"));
+                t!(
+                    "STORE",
+                    format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} ({typ})")
+                );
                 event_desc = format!("Melee(dmg) player={src:?} → mob={tgt:?} dmg={dmg} type={typ:?} mob_id=#{mob_id}");
             }
             if !state.fight_started {
@@ -464,10 +530,16 @@ fn main() {
 
             if is_attributed {
                 let (src, spell) = if let Some(real_caster) = real_caster_opt {
-                    t!("LOOKUP", format!("spell_caster[{combined:?}] = {real_caster:?} — using real caster"));
+                    t!(
+                        "LOOKUP",
+                        format!("spell_caster[{combined:?}] = {real_caster:?} — using real caster")
+                    );
                     (real_caster, combined)
                 } else {
-                    t!("REASON", format!("{raw_src:?} is a known player — direct attribution"));
+                    t!(
+                        "REASON",
+                        format!("{raw_src:?} is a known player — direct attribution")
+                    );
                     (raw_src, raw_spell)
                 };
 
@@ -479,17 +551,26 @@ fn main() {
                 state.known_players.insert(src.clone());
                 stats.total_damage += dmg;
                 *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                t!("STORE", format!("entities[{src:?}].total_damage += {dmg} (spell={spell:?})"));
+                t!(
+                    "STORE",
+                    format!("entities[{src:?}].total_damage += {dmg} (spell={spell:?})")
+                );
 
                 let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &src);
                 if is_new_candidate {
-                    t!("TRACK", format!("{tgt:?} tracked as mob candidate (proc from {src:?})"));
+                    t!(
+                        "TRACK",
+                        format!("{tgt:?} tracked as mob candidate (proc from {src:?})")
+                    );
                 }
                 let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                    );
                 }
                 let mob_p = state
                     .mob_damage
@@ -499,7 +580,12 @@ fn main() {
                     .or_default();
                 mob_p.total_damage += dmg;
                 *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                t!("STORE", format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (spell={spell:?})"));
+                t!(
+                    "STORE",
+                    format!(
+                        "mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (spell={spell:?})"
+                    )
+                );
                 event_desc = format!("Spell(attr/proc) player={src:?} → mob={tgt:?} dmg={dmg} spell={spell:?} mob_id=#{mob_id}");
             } else {
                 t!("SKIP", format!("not attributed — {raw_src:?} not a known player and {combined:?} not in spell_caster"));
@@ -522,27 +608,43 @@ fn main() {
             let tgt = norm(&caps["tgt"], &args.player);
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
 
-            t!("MATCH", format!("RE_SPELL_HIT — spell={spell:?} tgt={tgt:?} dmg={dmg}"));
+            t!(
+                "MATCH",
+                format!("RE_SPELL_HIT — spell={spell:?} tgt={tgt:?} dmg={dmg}")
+            );
 
             if let Some(caster) = state.spell_caster.get(&spell).cloned() {
                 t!("LOOKUP", format!("spell_caster[{spell:?}] = {caster:?}"));
 
-                let caster_is_mob = caster.contains(' ')
-                    || state.confirmed_mobs.contains(&caster);
+                let caster_is_mob = caster.contains(' ') || state.confirmed_mobs.contains(&caster);
 
                 if caster_is_mob {
-                    t!("REASON", format!("caster {caster:?} is a MOB — ignoring player target for mob tracking"));
+                    t!(
+                        "REASON",
+                        format!(
+                            "caster {caster:?} is a MOB — ignoring player target for mob tracking"
+                        )
+                    );
                     if !state.known_players.contains(&caster) {
                         let was_new = state.confirmed_mobs.insert(caster.clone());
                         if was_new {
                             t!("CONFIRM", format!("mob confirmed: {caster:?}"));
                         }
                     } else {
-                        t!("INFO", format!("{caster:?} is in known_players — skipping confirmed_mobs.insert"));
+                        t!(
+                            "INFO",
+                            format!(
+                                "{caster:?} is in known_players — skipping confirmed_mobs.insert"
+                            )
+                        );
                     }
-                    event_desc = format!("Spell(mob-cast/no-track) caster={caster:?} spell={spell:?}");
+                    event_desc =
+                        format!("Spell(mob-cast/no-track) caster={caster:?} spell={spell:?}");
                 } else {
-                    t!("REASON", format!("caster {caster:?} is a PLAYER — attributing damage"));
+                    t!(
+                        "REASON",
+                        format!("caster {caster:?} is a PLAYER — attributing damage")
+                    );
                     let is_new_player = !state.entities.contains_key(&caster);
                     let stats = state.entities.entry(caster.clone()).or_default();
                     if is_new_player {
@@ -551,17 +653,28 @@ fn main() {
                     state.known_players.insert(caster.clone());
                     stats.total_damage += dmg;
                     *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                    t!("STORE", format!("entities[{caster:?}].total_damage += {dmg} (spell={spell:?})"));
+                    t!(
+                        "STORE",
+                        format!("entities[{caster:?}].total_damage += {dmg} (spell={spell:?})")
+                    );
 
                     let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &caster);
                     if is_new_candidate {
-                        t!("TRACK", format!("{tgt:?} tracked as mob candidate (hit by {caster:?}'s {spell:?})"));
+                        t!(
+                            "TRACK",
+                            format!(
+                                "{tgt:?} tracked as mob candidate (hit by {caster:?}'s {spell:?})"
+                            )
+                        );
                     }
                     let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
                     if is_new_instance {
                         t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                     } else {
-                        t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                        t!(
+                            "UPDATE",
+                            format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                        );
                     }
                     let mob_p = state
                         .mob_damage
@@ -584,7 +697,10 @@ fn main() {
                 }
                 matched = true;
             } else {
-                t!("LOOKUP", format!("spell_caster[{spell:?}] = (unknown — cannot attribute, skipping)"));
+                t!(
+                    "LOOKUP",
+                    format!("spell_caster[{spell:?}] = (unknown — cannot attribute, skipping)")
+                );
                 // matched stays false
             }
 
@@ -595,7 +711,10 @@ fn main() {
             let tgt = norm(&caps["tgt"], &args.player);
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
 
-            t!("MATCH", format!("RE_DOT — src={src:?} spell={spell:?} tgt={tgt:?} dmg={dmg}"));
+            t!(
+                "MATCH",
+                format!("RE_DOT — src={src:?} spell={spell:?} tgt={tgt:?} dmg={dmg}")
+            );
 
             let is_new_player = !state.entities.contains_key(&src);
             let stats = state.entities.entry(src.clone()).or_default();
@@ -606,17 +725,26 @@ fn main() {
             stats.total_damage += dmg;
             *stats.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
             *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-            t!("STORE", format!("entities[{src:?}].total_damage += {dmg} (dot / spell={spell:?})"));
+            t!(
+                "STORE",
+                format!("entities[{src:?}].total_damage += {dmg} (dot / spell={spell:?})")
+            );
 
             let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &src);
             if is_new_candidate {
-                t!("TRACK", format!("{tgt:?} tracked as mob candidate (DoT'd by {src:?})"));
+                t!(
+                    "TRACK",
+                    format!("{tgt:?} tracked as mob candidate (DoT'd by {src:?})")
+                );
             }
             let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
             if is_new_instance {
                 t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
             } else {
-                t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                t!(
+                    "UPDATE",
+                    format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                );
             }
             let mob_p = state
                 .mob_damage
@@ -627,7 +755,12 @@ fn main() {
             mob_p.total_damage += dmg;
             *mob_p.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
             *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-            t!("STORE", format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (dot / spell={spell:?})"));
+            t!(
+                "STORE",
+                format!(
+                    "mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (dot / spell={spell:?})"
+                )
+            );
 
             if !state.fight_started {
                 state.fight_started = true;
@@ -637,7 +770,8 @@ fn main() {
             for m in &newly {
                 t!("CONFIRM", format!("mob confirmed from candidates: {m:?}"));
             }
-            event_desc = format!("Dot src={src:?} → mob={tgt:?} dmg={dmg} spell={spell:?} mob_id=#{mob_id}");
+            event_desc =
+                format!("Dot src={src:?} → mob={tgt:?} dmg={dmg} spell={spell:?} mob_id=#{mob_id}");
             matched = true;
 
         // ── RE_RIPOSTE ────────────────────────────────────────────────────────
@@ -646,7 +780,10 @@ fn main() {
             let tgt = norm(&caps["tgt"], &args.player);
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
 
-            t!("MATCH", format!("RE_RIPOSTE — src={src:?} tgt={tgt:?} dmg={dmg}"));
+            t!(
+                "MATCH",
+                format!("RE_RIPOSTE — src={src:?} tgt={tgt:?} dmg={dmg}")
+            );
 
             // A mob can riposte a player: "Player was injured by Mob's riposte for N"
             let src_is_mob = src.contains(' ')
@@ -655,45 +792,87 @@ fn main() {
                 || tgt == args.player;
 
             if src_is_mob {
-                t!("REASON", format!("{src:?} identified as MOB riposting player"));
+                t!(
+                    "REASON",
+                    format!("{src:?} identified as MOB riposting player")
+                );
                 if !state.known_players.contains(&src) {
                     let was_new = state.confirmed_mobs.insert(src.clone());
-                    if was_new { t!("CONFIRM", format!("mob confirmed: {src:?}")); }
+                    if was_new {
+                        t!("CONFIRM", format!("mob confirmed: {src:?}"));
+                    }
                 }
                 let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({src:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({src:?}) last_seen refreshed")
+                    );
                 }
-                let tank = state.mob_tanking.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let tank = state
+                    .mob_tanking
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 tank.total_damage += dmg;
                 *tank.damage_by_type.entry("riposte".to_owned()).or_default() += dmg;
-                t!("STORE", format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} (riposte)"));
-                event_desc = format!("Riposte(tank) mob={src:?} → player={tgt:?} dmg={dmg} mob_id=#{mob_id}");
+                t!(
+                    "STORE",
+                    format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} (riposte)")
+                );
+                event_desc = format!(
+                    "Riposte(tank) mob={src:?} → player={tgt:?} dmg={dmg} mob_id=#{mob_id}"
+                );
             } else {
-                t!("REASON", format!("{src:?} identified as PLAYER riposting mob"));
+                t!(
+                    "REASON",
+                    format!("{src:?} identified as PLAYER riposting mob")
+                );
                 let is_new_player = !state.entities.contains_key(&src);
                 let stats = state.entities.entry(src.clone()).or_default();
-                if is_new_player { t!("NEW", format!("player entity created: {src:?}")); }
+                if is_new_player {
+                    t!("NEW", format!("player entity created: {src:?}"));
+                }
                 state.known_players.insert(src.clone());
                 stats.total_damage += dmg;
-                *stats.damage_by_type.entry("riposte".to_owned()).or_default() += dmg;
-                t!("STORE", format!("entities[{src:?}].total_damage += {dmg} (riposte)"));
+                *stats
+                    .damage_by_type
+                    .entry("riposte".to_owned())
+                    .or_default() += dmg;
+                t!(
+                    "STORE",
+                    format!("entities[{src:?}].total_damage += {dmg} (riposte)")
+                );
 
                 let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                    );
                 }
-                let mob_p = state.mob_damage.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 mob_p.total_damage += dmg;
-                *mob_p.damage_by_type.entry("riposte".to_owned()).or_default() += dmg;
-                t!("STORE", format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (riposte)"));
-                event_desc = format!("Riposte(dmg) player={src:?} → mob={tgt:?} dmg={dmg} mob_id=#{mob_id}");
+                *mob_p
+                    .damage_by_type
+                    .entry("riposte".to_owned())
+                    .or_default() += dmg;
+                t!(
+                    "STORE",
+                    format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (riposte)")
+                );
+                event_desc =
+                    format!("Riposte(dmg) player={src:?} → mob={tgt:?} dmg={dmg} mob_id=#{mob_id}");
             }
 
             if !state.fight_started {
@@ -712,7 +891,10 @@ fn main() {
             let tgt = norm(&caps["tgt"], &args.player);
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
 
-            t!("MATCH", format!("RE_DS — src={src:?} tgt={tgt:?} dmg={dmg}"));
+            t!(
+                "MATCH",
+                format!("RE_DS — src={src:?} tgt={tgt:?} dmg={dmg}")
+            );
 
             // A mob can have a DS: "Player was struck by Mob's damage shield for N"
             let src_is_mob = src.contains(' ')
@@ -721,49 +903,87 @@ fn main() {
                 || tgt == args.player;
 
             if src_is_mob {
-                t!("REASON", format!("{src:?} identified as MOB with damage shield"));
+                t!(
+                    "REASON",
+                    format!("{src:?} identified as MOB with damage shield")
+                );
                 if !state.known_players.contains(&src) {
                     let was_new = state.confirmed_mobs.insert(src.clone());
-                    if was_new { t!("CONFIRM", format!("mob confirmed: {src:?}")); }
+                    if was_new {
+                        t!("CONFIRM", format!("mob confirmed: {src:?}"));
+                    }
                 }
                 let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({src:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({src:?}) last_seen refreshed")
+                    );
                 }
-                let tank = state.mob_tanking.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let tank = state
+                    .mob_tanking
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 tank.total_damage += dmg;
                 *tank.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
-                t!("STORE", format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} (ds)"));
-                event_desc = format!("DS(tank) mob={src:?} → player={tgt:?} dmg={dmg} mob_id=#{mob_id}");
+                t!(
+                    "STORE",
+                    format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} (ds)")
+                );
+                event_desc =
+                    format!("DS(tank) mob={src:?} → player={tgt:?} dmg={dmg} mob_id=#{mob_id}");
             } else {
-                t!("REASON", format!("{src:?} identified as PLAYER with damage shield"));
+                t!(
+                    "REASON",
+                    format!("{src:?} identified as PLAYER with damage shield")
+                );
                 let is_new_player = !state.entities.contains_key(&src);
                 let stats = state.entities.entry(src.clone()).or_default();
-                if is_new_player { t!("NEW", format!("player entity created: {src:?}")); }
+                if is_new_player {
+                    t!("NEW", format!("player entity created: {src:?}"));
+                }
                 state.known_players.insert(src.clone());
                 stats.total_damage += dmg;
                 *stats.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
-                t!("STORE", format!("entities[{src:?}].total_damage += {dmg} (damage shield)"));
+                t!(
+                    "STORE",
+                    format!("entities[{src:?}].total_damage += {dmg} (damage shield)")
+                );
 
                 let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &src);
                 if is_new_candidate {
-                    t!("TRACK", format!("{tgt:?} tracked as mob candidate (DS'd by {src:?})"));
+                    t!(
+                        "TRACK",
+                        format!("{tgt:?} tracked as mob candidate (DS'd by {src:?})")
+                    );
                 }
                 let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                    );
                 }
-                let mob_p = state.mob_damage.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 mob_p.total_damage += dmg;
                 *mob_p.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
-                t!("STORE", format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (ds)"));
-                event_desc = format!("DS(dmg) player={src:?} → mob={tgt:?} dmg={dmg} mob_id=#{mob_id}");
+                t!(
+                    "STORE",
+                    format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (ds)")
+                );
+                event_desc =
+                    format!("DS(dmg) player={src:?} → mob={tgt:?} dmg={dmg} mob_id=#{mob_id}");
             }
 
             if !state.fight_started {
@@ -786,32 +1006,56 @@ fn main() {
             };
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
 
-            t!("MATCH", format!("RE_DS_PROC — src={src:?} tgt={tgt:?} dmg={dmg}"));
-            t!("REASON", format!("{src:?} identified as PLAYER with outbound damage shield proc"));
+            t!(
+                "MATCH",
+                format!("RE_DS_PROC — src={src:?} tgt={tgt:?} dmg={dmg}")
+            );
+            t!(
+                "REASON",
+                format!("{src:?} identified as PLAYER with outbound damage shield proc")
+            );
 
             let is_new_player = !state.entities.contains_key(&src);
             let stats = state.entities.entry(src.clone()).or_default();
-            if is_new_player { t!("NEW", format!("player entity created: {src:?}")); }
+            if is_new_player {
+                t!("NEW", format!("player entity created: {src:?}"));
+            }
             state.known_players.insert(src.clone());
             stats.total_damage += dmg;
             *stats.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
-            t!("STORE", format!("entities[{src:?}].total_damage += {dmg} (ds proc)"));
+            t!(
+                "STORE",
+                format!("entities[{src:?}].total_damage += {dmg} (ds proc)")
+            );
 
             let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &src);
             if is_new_candidate {
-                t!("TRACK", format!("{tgt:?} tracked as mob candidate (DS proc from {src:?})"));
+                t!(
+                    "TRACK",
+                    format!("{tgt:?} tracked as mob candidate (DS proc from {src:?})")
+                );
             }
             let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
             if is_new_instance {
                 t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
             } else {
-                t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                t!(
+                    "UPDATE",
+                    format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                );
             }
-            let mob_p = state.mob_damage.entry(mob_id).or_default()
-                .entry(src.clone()).or_default();
+            let mob_p = state
+                .mob_damage
+                .entry(mob_id)
+                .or_default()
+                .entry(src.clone())
+                .or_default();
             mob_p.total_damage += dmg;
             *mob_p.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
-            t!("STORE", format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (ds)"));
+            t!(
+                "STORE",
+                format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (ds)")
+            );
 
             if !state.fight_started {
                 state.fight_started = true;
@@ -821,7 +1065,8 @@ fn main() {
             for m in &newly {
                 t!("CONFIRM", format!("mob confirmed from candidates: {m:?}"));
             }
-            event_desc = format!("DS(proc) player={src:?} → mob={tgt:?} dmg={dmg} mob_id=#{mob_id}");
+            event_desc =
+                format!("DS(proc) player={src:?} → mob={tgt:?} dmg={dmg} mob_id=#{mob_id}");
             matched = true;
 
         // ── RE_MISS ───────────────────────────────────────────────────────────
@@ -830,12 +1075,21 @@ fn main() {
             let tgt = norm(caps["tgt"].trim(), &args.player);
             let miss_type = normalize_miss(&caps["miss"]).to_owned();
 
-            t!("MATCH", format!("RE_MISS — src={src:?} tgt={tgt:?} type={miss_type:?}"));
+            t!(
+                "MATCH",
+                format!("RE_MISS — src={src:?} tgt={tgt:?} type={miss_type:?}")
+            );
 
             // Track avoidance on the defender.
             let def_stats = state.entities.entry(tgt.clone()).or_default();
-            *def_stats.avoidance_by_type.entry(miss_type.clone()).or_default() += 1;
-            t!("STORE", format!("entities[{tgt:?}].avoidance_by_type[{miss_type:?}] += 1"));
+            *def_stats
+                .avoidance_by_type
+                .entry(miss_type.clone())
+                .or_default() += 1;
+            t!(
+                "STORE",
+                format!("entities[{tgt:?}].avoidance_by_type[{miss_type:?}] += 1")
+            );
 
             // If src is a mob, update mob tracking and tanking avoidance.
             let src_is_mob = src.contains(' ')
@@ -854,15 +1108,32 @@ fn main() {
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
-                    t!("UPDATE", format!("mob instance #{mob_id} ({src:?}) last_seen refreshed"));
+                    t!(
+                        "UPDATE",
+                        format!("mob instance #{mob_id} ({src:?}) last_seen refreshed")
+                    );
                 }
-                let tank = state.mob_tanking.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let tank = state
+                    .mob_tanking
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 *tank.avoidance_by_type.entry(miss_type.clone()).or_default() += 1;
-                t!("STORE", format!("mob_tanking[#{mob_id}][{tgt:?}].avoidance_by_type[{miss_type:?}] += 1"));
-                event_desc = format!("Miss mob={src:?} → player={tgt:?} type={miss_type:?} mob_id=#{mob_id}");
+                t!(
+                    "STORE",
+                    format!(
+                        "mob_tanking[#{mob_id}][{tgt:?}].avoidance_by_type[{miss_type:?}] += 1"
+                    )
+                );
+                event_desc = format!(
+                    "Miss mob={src:?} → player={tgt:?} type={miss_type:?} mob_id=#{mob_id}"
+                );
             } else {
-                t!("REASON", format!("{src:?} identified as PLAYER — avoidance on target only"));
+                t!(
+                    "REASON",
+                    format!("{src:?} identified as PLAYER — avoidance on target only")
+                );
                 event_desc = format!("Miss src={src:?} → tgt={tgt:?} type={miss_type:?}");
             }
             matched = true;
@@ -898,11 +1169,17 @@ fn main() {
                 args.player.clone()
             };
 
-            t!("MATCH", format!("RE_RESIST — src={src:?} spell={spell:?} tgt={tgt:?}"));
+            t!(
+                "MATCH",
+                format!("RE_RESIST — src={src:?} spell={spell:?} tgt={tgt:?}")
+            );
 
             let stats = state.entities.entry(src.clone()).or_default();
             *stats.resists_by_spell.entry(spell.clone()).or_default() += 1;
-            t!("STORE", format!("entities[{src:?}].resists_by_spell[{spell:?}] += 1"));
+            t!(
+                "STORE",
+                format!("entities[{src:?}].resists_by_spell[{spell:?}] += 1")
+            );
 
             event_desc = format!("Resist src={src:?} spell={spell:?} tgt={tgt:?}");
             matched = true;
@@ -917,12 +1194,21 @@ fn main() {
             let prev = state.spell_caster.insert(spell.clone(), src.clone());
             if let Some(old) = &prev {
                 if old != &src {
-                    t!("UPDATE", format!("spell_caster[{spell:?}]: {old:?} → {src:?}"));
+                    t!(
+                        "UPDATE",
+                        format!("spell_caster[{spell:?}]: {old:?} → {src:?}")
+                    );
                 } else {
-                    t!("UPDATE", format!("spell_caster[{spell:?}] = {src:?} (unchanged)"));
+                    t!(
+                        "UPDATE",
+                        format!("spell_caster[{spell:?}] = {src:?} (unchanged)")
+                    );
                 }
             } else {
-                t!("STORE", format!("spell_caster[{spell:?}] = {src:?} (new attribution)"));
+                t!(
+                    "STORE",
+                    format!("spell_caster[{spell:?}] = {src:?} (new attribution)")
+                );
             }
             // No fight_start touch for cast-only lines.
             event_desc = format!("Cast src={src:?} spell={spell:?}");
@@ -930,7 +1216,6 @@ fn main() {
 
         // ── SLAY / DEATH ─────────────────────────────────────────────────────
         } else if let Some(tgt) = slay_tgt(line) {
-
             t!("MATCH", format!("SLAY — tgt={tgt:?}"));
 
             let was_new = state.dead_mobs.insert(tgt.clone());
@@ -939,23 +1224,24 @@ fn main() {
             }
 
             let all_dead = !state.mob_list.is_empty()
-                && state.mob_list.iter()
+                && state
+                    .mob_list
+                    .iter()
                     .filter(|m| state.confirmed_mobs.contains(&m.name))
                     .all(|m| state.dead_mobs.contains(&m.name));
             if all_dead {
                 t!("STATE", "all confirmed mobs dead → fight_end frozen");
             }
 
-            let mob_id = state
-                .mob_list
-                .iter()
-                .find(|m| m.name == tgt)
-                .map(|m| m.id);
+            let mob_id = state.mob_list.iter().find(|m| m.name == tgt).map(|m| m.id);
             if let Some(id) = mob_id {
                 t!("LOOKUP", format!("mob instance #{id} for {tgt:?}"));
                 event_desc = format!("Slay tgt={tgt:?} mob_id=#{id}");
             } else {
-                t!("LOOKUP", format!("{tgt:?} not in mob_list (killed without a prior hit?)"));
+                t!(
+                    "LOOKUP",
+                    format!("{tgt:?} not in mob_list (killed without a prior hit?)")
+                );
                 event_desc = format!("Slay tgt={tgt:?} mob_id=unknown");
             }
             matched = true;
@@ -972,7 +1258,11 @@ fn main() {
                 (Some(args.player.clone()), spell)
             } else if let Some(m) = caps.name("by_src") {
                 let s = m.as_str().trim().trim_end_matches('.');
-                let real_src = if s.is_empty() { None } else { Some(norm(s, &args.player)) };
+                let real_src = if s.is_empty() {
+                    None
+                } else {
+                    Some(norm(s, &args.player))
+                };
                 let full_spell = if let Some(pfx) = caps.name("src") {
                     format!("{}'s {}", pfx.as_str(), spell)
                 } else {
@@ -985,7 +1275,12 @@ fn main() {
                 (None, spell)
             };
 
-            t!("MATCH", format!("RE_HAS_TAKEN — tgt={tgt:?} dmg={dmg} spell={spell:?} attacker={attacker:?}"));
+            t!(
+                "MATCH",
+                format!(
+                    "RE_HAS_TAKEN — tgt={tgt:?} dmg={dmg} spell={spell:?} attacker={attacker:?}"
+                )
+            );
 
             if let Some(src) = attacker {
                 let src_is_mob = src.contains(' ')
@@ -994,33 +1289,56 @@ fn main() {
                     || tgt == args.player;
 
                 if src_is_mob && src != args.player {
-                    t!("REASON", format!("{src:?} identified as MOB — mob DoT/spell hitting player"));
+                    t!(
+                        "REASON",
+                        format!("{src:?} identified as MOB — mob DoT/spell hitting player")
+                    );
                     if !state.known_players.contains(&src) {
                         let was_new = state.confirmed_mobs.insert(src.clone());
-                        if was_new { t!("CONFIRM", format!("mob confirmed: {src:?}")); }
+                        if was_new {
+                            t!("CONFIRM", format!("mob confirmed: {src:?}"));
+                        }
                     }
                     let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
                     if is_new_instance {
                         t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                     } else {
-                        t!("UPDATE", format!("mob instance #{mob_id} ({src:?}) last_seen refreshed"));
+                        t!(
+                            "UPDATE",
+                            format!("mob instance #{mob_id} ({src:?}) last_seen refreshed")
+                        );
                     }
-                    let tank = state.mob_tanking.entry(mob_id).or_default()
-                        .entry(tgt.clone()).or_default();
+                    let tank = state
+                        .mob_tanking
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(tgt.clone())
+                        .or_default();
                     tank.total_damage += dmg;
                     *tank.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
-                    t!("STORE", format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} (dot)"));
+                    t!(
+                        "STORE",
+                        format!("mob_tanking[#{mob_id}][{tgt:?}].total_damage += {dmg} (dot)")
+                    );
                     event_desc = format!("HasTaken(tank) mob={src:?} → player={tgt:?} dmg={dmg} spell={spell:?} mob_id=#{mob_id}");
                 } else {
-                    t!("REASON", format!("{src:?} identified as PLAYER — player DoT hitting mob"));
+                    t!(
+                        "REASON",
+                        format!("{src:?} identified as PLAYER — player DoT hitting mob")
+                    );
                     let is_new = !state.entities.contains_key(&src);
                     let stats = state.entities.entry(src.clone()).or_default();
-                    if is_new { t!("NEW", format!("player entity created: {src:?}")); }
+                    if is_new {
+                        t!("NEW", format!("player entity created: {src:?}"));
+                    }
                     state.known_players.insert(src.clone());
                     stats.total_damage += dmg;
                     *stats.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
                     *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                    t!("STORE", format!("entities[{src:?}].total_damage += {dmg} (dot / spell={spell:?})"));
+                    t!(
+                        "STORE",
+                        format!("entities[{src:?}].total_damage += {dmg} (dot / spell={spell:?})")
+                    );
 
                     let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &src);
                     if is_new_candidate {
@@ -1030,10 +1348,17 @@ fn main() {
                     if is_new_instance {
                         t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                     } else {
-                        t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                        t!(
+                            "UPDATE",
+                            format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                        );
                     }
-                    let mob_p = state.mob_damage.entry(mob_id).or_default()
-                        .entry(src.clone()).or_default();
+                    let mob_p = state
+                        .mob_damage
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(src.clone())
+                        .or_default();
                     mob_p.total_damage += dmg;
                     *mob_p.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
                     *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
@@ -1066,31 +1391,54 @@ fn main() {
                 args.player.clone()
             };
 
-            t!("MATCH", format!("RE_EXTRA_DMG — src={src:?} spell={spell:?} tgt={tgt:?} dmg={dmg}"));
+            t!(
+                "MATCH",
+                format!("RE_EXTRA_DMG — src={src:?} spell={spell:?} tgt={tgt:?} dmg={dmg}")
+            );
 
             let is_new = !state.entities.contains_key(&src);
             let stats = state.entities.entry(src.clone()).or_default();
-            if is_new { t!("NEW", format!("player entity created: {src:?}")); }
+            if is_new {
+                t!("NEW", format!("player entity created: {src:?}"));
+            }
             state.known_players.insert(src.clone());
             stats.total_damage += dmg;
             *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-            t!("STORE", format!("entities[{src:?}].total_damage += {dmg} (extra/bane spell={spell:?})"));
+            t!(
+                "STORE",
+                format!("entities[{src:?}].total_damage += {dmg} (extra/bane spell={spell:?})")
+            );
 
             let is_new_candidate = track_mob_candidate(&mut state, tgt.clone(), &src);
             if is_new_candidate {
-                t!("TRACK", format!("{tgt:?} tracked as mob candidate (extra dmg from {src:?})"));
+                t!(
+                    "TRACK",
+                    format!("{tgt:?} tracked as mob candidate (extra dmg from {src:?})")
+                );
             }
             let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
             if is_new_instance {
                 t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
             } else {
-                t!("UPDATE", format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed"));
+                t!(
+                    "UPDATE",
+                    format!("mob instance #{mob_id} ({tgt:?}) last_seen refreshed")
+                );
             }
-            let mob_p = state.mob_damage.entry(mob_id).or_default()
-                .entry(src.clone()).or_default();
+            let mob_p = state
+                .mob_damage
+                .entry(mob_id)
+                .or_default()
+                .entry(src.clone())
+                .or_default();
             mob_p.total_damage += dmg;
             *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-            t!("STORE", format!("mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (extra spell={spell:?})"));
+            t!(
+                "STORE",
+                format!(
+                    "mob_damage[#{mob_id}][{src:?}].total_damage += {dmg} (extra spell={spell:?})"
+                )
+            );
 
             if !state.fight_started {
                 state.fight_started = true;
@@ -1100,21 +1448,29 @@ fn main() {
             for m in &newly {
                 t!("CONFIRM", format!("mob confirmed from candidates: {m:?}"));
             }
-            event_desc = format!("ExtraDmg player={src:?} → mob={tgt:?} dmg={dmg} spell={spell:?} mob_id=#{mob_id}");
+            event_desc = format!(
+                "ExtraDmg player={src:?} → mob={tgt:?} dmg={dmg} spell={spell:?} mob_id=#{mob_id}"
+            );
             matched = true;
 
         // ── RE_WHO ────────────────────────────────────────────────────────────
         } else if let Some(caps) = RE_WHO.captures(line) {
             let name = caps["name"].to_owned();
             let classes = parse_who_classes(&caps["classes"]);
-            t!("MATCH", format!("RE_WHO — name={name:?} classes={classes:?}"));
+            t!(
+                "MATCH",
+                format!("RE_WHO — name={name:?} classes={classes:?}")
+            );
             if !classes.is_empty() {
                 let prev = state.player_classes.insert(name.clone(), classes.clone());
                 if prev.as_deref() != Some(&classes) {
                     t!("STORE", format!("player_classes[{name:?}] = {classes:?}"));
                 }
             } else {
-                t!("SKIP", format!("no recognised class names in {:?}", &caps["classes"]));
+                t!(
+                    "SKIP",
+                    format!("no recognised class names in {:?}", &caps["classes"])
+                );
             }
             event_desc = format!("Who name={name:?} classes={classes:?}");
             matched = true;
@@ -1138,34 +1494,70 @@ fn main() {
                 })
                 .unwrap_or_else(|| "Unknown".to_owned());
 
-            t!("MATCH", format!("RE_HEAL — src={src:?} tgt={tgt:?} amt={amt} spell={spell:?}"));
+            t!(
+                "MATCH",
+                format!("RE_HEAL — src={src:?} tgt={tgt:?} amt={amt} spell={spell:?}")
+            );
 
             let is_new_src = !state.entities.contains_key(&src);
             let stats = state.entities.entry(src.clone()).or_default();
-            if is_new_src { t!("NEW", format!("entity created: {src:?}")); }
+            if is_new_src {
+                t!("NEW", format!("entity created: {src:?}"));
+            }
             stats.total_heals += amt;
             *stats.heals_by_spell.entry(spell.clone()).or_default() += amt;
-            t!("STORE", format!("entities[{src:?}].total_heals += {amt} (spell={spell:?})"));
+            t!(
+                "STORE",
+                format!("entities[{src:?}].total_heals += {amt} (spell={spell:?})")
+            );
 
             let tgt_stats = state.entities.entry(tgt.clone()).or_default();
             tgt_stats.total_healed_received += amt;
-            *tgt_stats.healed_received_by_spell.entry(spell.clone()).or_default() += amt;
-            t!("STORE", format!("entities[{tgt:?}].total_healed_received += {amt} (spell={spell:?})"));
+            *tgt_stats
+                .healed_received_by_spell
+                .entry(spell.clone())
+                .or_default() += amt;
+            t!(
+                "STORE",
+                format!("entities[{tgt:?}].total_healed_received += {amt} (spell={spell:?})")
+            );
 
             if let Some(mob_id) = state.active_mob_id {
-                let heal_stats = state.mob_healing.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let heal_stats = state
+                    .mob_healing
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 heal_stats.total_heals += amt;
                 *heal_stats.heals_by_spell.entry(spell.clone()).or_default() += amt;
-                t!("STORE", format!("mob_healing[#{mob_id}][{src:?}].total_heals += {amt} (spell={spell:?})"));
+                t!(
+                    "STORE",
+                    format!(
+                        "mob_healing[#{mob_id}][{src:?}].total_heals += {amt} (spell={spell:?})"
+                    )
+                );
 
-                let healed_stats = state.mob_healed.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let healed_stats = state
+                    .mob_healed
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 healed_stats.total_healed_received += amt;
-                *healed_stats.healed_received_by_spell.entry(spell.clone()).or_default() += amt;
-                t!("STORE", format!("mob_healed[#{mob_id}][{tgt:?}].total_healed_received += {amt}"));
+                *healed_stats
+                    .healed_received_by_spell
+                    .entry(spell.clone())
+                    .or_default() += amt;
+                t!(
+                    "STORE",
+                    format!("mob_healed[#{mob_id}][{tgt:?}].total_healed_received += {amt}")
+                );
             } else {
-                t!("INFO", "no active mob — heal stored globally only (not per-mob)");
+                t!(
+                    "INFO",
+                    "no active mob — heal stored globally only (not per-mob)"
+                );
             }
             event_desc = format!("Heal src={src:?} → tgt={tgt:?} amt={amt} spell={spell:?}");
             matched = true;
@@ -1185,7 +1577,10 @@ fn main() {
         };
 
         if should_print {
-            println!("\n╔══ Line {:>6} ══════════════════════════════════════════════════", line_no);
+            println!(
+                "\n╔══ Line {:>6} ══════════════════════════════════════════════════",
+                line_no
+            );
             println!("║  TS      : {ts_display}");
             println!("║  RAW     : {}", raw_line);
             for tl in &trace_lines {
@@ -1204,8 +1599,16 @@ fn main() {
                     .mob_list
                     .iter()
                     .map(|m| {
-                        let dead = if state.dead_mobs.contains(&m.name) { " [DEAD]" } else { "" };
-                        let conf = if state.confirmed_mobs.contains(&m.name) { "✓" } else { "?" };
+                        let dead = if state.dead_mobs.contains(&m.name) {
+                            " [DEAD]"
+                        } else {
+                            ""
+                        };
+                        let conf = if state.confirmed_mobs.contains(&m.name) {
+                            "✓"
+                        } else {
+                            "?"
+                        };
                         format!("#{} {}{}{}", m.id, m.name, conf, dead)
                     })
                     .collect();
@@ -1233,12 +1636,17 @@ fn main() {
         .iter()
         .filter(|(k, _)| state.known_players.contains(k.as_str()))
         .collect();
-    players.sort_by(|a, b| b.1.total_damage.cmp(&a.1.total_damage));
+    players.sort_by_key(|b| std::cmp::Reverse(b.1.total_damage));
     for (name, stats) in &players {
-        let cls = state.player_classes.get(*name)
+        let cls = state
+            .player_classes
+            .get(*name)
             .map(|v| v.join("/"))
             .unwrap_or_else(|| "?".to_owned());
-        println!("║    {name:<20} [{cls:<11}] dmg={:<8} heals={}", stats.total_damage, stats.total_heals);
+        println!(
+            "║    {name:<20} [{cls:<11}] dmg={:<8} heals={}",
+            stats.total_damage, stats.total_heals
+        );
         let mut types: Vec<_> = stats.damage_by_type.iter().collect();
         types.sort_by(|a, b| b.1.cmp(a.1));
         for (t, d) in &types {
@@ -1262,26 +1670,40 @@ fn main() {
     }
     println!("║  Mob instances  :");
     for mob in &state.mob_list {
-        let dead = if state.dead_mobs.contains(&mob.name) { " [DEAD]" } else { "" };
-        let conf = if state.confirmed_mobs.contains(&mob.name) { "confirmed" } else { "candidate" };
+        let dead = if state.dead_mobs.contains(&mob.name) {
+            " [DEAD]"
+        } else {
+            ""
+        };
+        let conf = if state.confirmed_mobs.contains(&mob.name) {
+            "confirmed"
+        } else {
+            "candidate"
+        };
         println!("║    #{:<4} {:<30} {conf}{dead}", mob.id, mob.name);
         if let Some(by_player) = state.mob_damage.get(&mob.id) {
             let mut entries: Vec<_> = by_player.iter().collect();
-            entries.sort_by(|a, b| b.1.total_damage.cmp(&a.1.total_damage));
+            entries.sort_by_key(|b| std::cmp::Reverse(b.1.total_damage));
             for (player, stats) in entries {
                 println!("║      damage from {player:<18} = {}", stats.total_damage);
             }
         }
         if let Some(by_player) = state.mob_tanking.get(&mob.id) {
             let mut entries: Vec<_> = by_player.iter().collect();
-            entries.sort_by(|a, b| b.1.total_damage.cmp(&a.1.total_damage));
+            entries.sort_by_key(|b| std::cmp::Reverse(b.1.total_damage));
             for (player, stats) in entries {
                 println!("║      tanking by  {player:<18} = {}", stats.total_damage);
             }
         }
     }
-    println!("║  Confirmed mobs : {:?}", state.confirmed_mobs.iter().collect::<Vec<_>>());
-    println!("║  Dead mobs      : {:?}", state.dead_mobs.iter().collect::<Vec<_>>());
+    println!(
+        "║  Confirmed mobs : {:?}",
+        state.confirmed_mobs.iter().collect::<Vec<_>>()
+    );
+    println!(
+        "║  Dead mobs      : {:?}",
+        state.dead_mobs.iter().collect::<Vec<_>>()
+    );
     println!("║  Spell attribs  : {} entries", state.spell_caster.len());
     println!("╚══════════════════════════════════════════════════════════════════");
 }

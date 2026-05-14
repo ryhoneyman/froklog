@@ -33,7 +33,10 @@ pub async fn push_to_server(
 
         info!("Pusher: connecting to {push_url}");
         let ws = match connect_async(req).await {
-            Ok((ws, _)) => { info!("Pusher: connected"); ws }
+            Ok((ws, _)) => {
+                info!("Pusher: connected");
+                ws
+            }
             Err(e) => {
                 error!("Pusher: connect failed: {e}");
                 // Drain accumulated events to avoid unbounded memory growth during
@@ -58,7 +61,7 @@ pub async fn push_to_server(
                         seq = seq.wrapping_add(1);
                         match serde_json::to_string(&batch) {
                             Ok(json) => {
-                                if sink.send(Message::Text(json.into())).await.is_err() {
+                                if sink.send(Message::Text(json)).await.is_err() {
                                     failed = true;
                                     break;
                                 }
@@ -78,7 +81,7 @@ pub async fn push_to_server(
                                 let batch = EventBatch { seq, events: batch_events };
                                 seq = seq.wrapping_add(1);
                                 if let Ok(json) = serde_json::to_string(&batch) {
-                                    let _ = sink.send(Message::Text(json.into())).await;
+                                    let _ = sink.send(Message::Text(json)).await;
                                 }
                             }
                             info!("Pusher: event channel closed, exiting");
@@ -122,6 +125,19 @@ fn split_by_game_second(mut events: Vec<CombatEvent>) -> Vec<Vec<CombatEvent>> {
     result
 }
 
+fn build_request(
+    url: &str,
+    token: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, Box<dyn std::error::Error>>
+{
+    let mut req = url.into_client_request()?;
+    req.headers_mut().insert(
+        tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+        tokio_tungstenite::tungstenite::http::HeaderValue::from_str(&format!("Bearer {token}"))?,
+    );
+    Ok(req)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,8 +145,14 @@ mod tests {
 
     fn melee(ts: u32) -> CombatEvent {
         CombatEvent::Melee {
-            ts, mob: 0, src: "A".into(), tgt: "B".into(),
-            dmg: 100, typ: "slash".into(), tank: false, mods: 0,
+            ts,
+            mob: 0,
+            src: "A".into(),
+            tgt: "B".into(),
+            dmg: 100,
+            typ: "slash".into(),
+            tank: false,
+            mods: 0,
         }
     }
 
@@ -172,18 +194,4 @@ mod tests {
         assert_eq!(batches[0].len(), 3);
         assert_eq!(batches[1].len(), 1);
     }
-}
-
-fn build_request(
-    url: &str,
-    token: &str,
-) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, Box<dyn std::error::Error>> {
-    let mut req = url.into_client_request()?;
-    req.headers_mut().insert(
-        tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
-        tokio_tungstenite::tungstenite::http::HeaderValue::from_str(
-            &format!("Bearer {token}"),
-        )?,
-    );
-    Ok(req)
 }

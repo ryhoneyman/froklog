@@ -2,8 +2,8 @@
 // No visible window; lives in the system tray when the "tray" feature is active.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -47,10 +47,12 @@ fn main() {
                 config_path_display());
             std::process::exit(1);
         }
-        let quit    = Arc::new(AtomicBool::new(false));
+        let quit = Arc::new(AtomicBool::new(false));
         let restart = Arc::new(AtomicBool::new(false));
         run_engine_once(&config, Arc::clone(&restart), Arc::clone(&quit));
-        loop { thread::sleep(Duration::from_secs(3600)); }
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
     }
 }
 
@@ -60,32 +62,39 @@ fn main() {
 /// is set — e.g. after the user picks a new log file or registers with a server.
 #[cfg(feature = "tray")]
 fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
-    thread::Builder::new().name("eq-engine-monitor".into()).spawn(move || {
-        loop {
-            if handle.quit.load(Ordering::Relaxed) {
-                break;
-            }
+    thread::Builder::new()
+        .name("eq-engine-monitor".into())
+        .spawn(move || {
+            loop {
+                if handle.quit.load(Ordering::Relaxed) {
+                    break;
+                }
 
-            let config = handle.config.lock().unwrap().clone();
+                let config = handle.config.lock().unwrap().clone();
 
-            if config.is_ready() {
-                info!("Engine starting");
-                handle.restart.store(false, Ordering::Relaxed);
-                run_engine_once(&config, Arc::clone(&handle.restart), Arc::clone(&handle.quit));
-                info!("Engine stopped");
-            } else {
-                // Not configured yet — wait quietly.
-                thread::sleep(Duration::from_secs(1));
-                continue;
-            }
+                if config.is_ready() {
+                    info!("Engine starting");
+                    handle.restart.store(false, Ordering::Relaxed);
+                    run_engine_once(
+                        &config,
+                        Arc::clone(&handle.restart),
+                        Arc::clone(&handle.quit),
+                    );
+                    info!("Engine stopped");
+                } else {
+                    // Not configured yet — wait quietly.
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
 
-            if handle.quit.load(Ordering::Relaxed) {
-                break;
+                if handle.quit.load(Ordering::Relaxed) {
+                    break;
+                }
+                // Brief pause before potential restart.
+                thread::sleep(Duration::from_millis(500));
             }
-            // Brief pause before potential restart.
-            thread::sleep(Duration::from_millis(500));
-        }
-    }).expect("spawn engine monitor");
+        })
+        .expect("spawn engine monitor");
 }
 
 // ── Engine ────────────────────────────────────────────────────────────────────
@@ -94,19 +103,18 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
 fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBool>) {
     let log_path = match config.log_path.as_ref() {
         Some(p) => p.clone(),
-        None    => return,
+        None => return,
     };
     let push_url = match config.ingest_ws_url() {
         Some(u) => u,
-        None    => return,
+        None => return,
     };
     let push_token = match config.stream_token.as_ref() {
         Some(t) => t.clone(),
-        None    => return,
+        None => return,
     };
 
-    let shared: Arc<ArcSwap<CombatState>> =
-        Arc::new(ArcSwap::from_pointee(CombatState::default()));
+    let shared: Arc<ArcSwap<CombatState>> = Arc::new(ArcSwap::from_pointee(CombatState::default()));
     let reset_flag = Arc::new(AtomicBool::new(false));
     let (broadcast_tx, _) = broadcast::channel::<Arc<CombatState>>(64);
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -115,17 +123,26 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
     let player_name = extract_player_name(&log_path);
     info!("Watching: {log_path}  player: {player_name}");
 
-    let tail_config = TailConfig { from: TailFrom::End, to: None, speed: None, dump: false };
+    let tail_config = TailConfig {
+        from: TailFrom::End,
+        to: None,
+        speed: None,
+        dump: false,
+    };
 
     // Tailer — sends raw log lines into the channel; exits when the channel closes.
     {
-        let path     = log_path.clone();
+        let path = log_path.clone();
         let restart2 = Arc::clone(&restart);
-        let quit2    = Arc::clone(&quit);
-        thread::Builder::new().name("eq-tailer".into()).spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("tailer rt");
-            rt.block_on(async move {
+        let quit2 = Arc::clone(&quit);
+        thread::Builder::new()
+            .name("eq-tailer".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("tailer rt");
+                rt.block_on(async move {
                 tokio::select! {
                     _ = tailer::tail(path, tail_config, line_tx) => {}
                     _ = async {
@@ -138,27 +155,34 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
                     } => {}
                 }
             });
-        }).expect("spawn tailer");
+            })
+            .expect("spawn tailer");
     }
 
     // Parser — reads lines, updates shared CombatState, broadcasts snapshots, emits events.
     {
         let shared2 = Arc::clone(&shared);
-        let reset2  = Arc::clone(&reset_flag);
-        let btx     = broadcast_tx.clone();
-        let pname   = player_name.clone();
-        thread::Builder::new().name("eq-parser".into())
+        let reset2 = Arc::clone(&reset_flag);
+        let btx = broadcast_tx.clone();
+        let pname = player_name.clone();
+        thread::Builder::new()
+            .name("eq-parser".into())
             .spawn(move || parser::run(line_rx, shared2, reset2, btx, event_tx, pname))
             .expect("spawn parser");
     }
 
     // Pusher — batches CombatEvents every 1 second and sends them to the remote server.
     {
-        thread::Builder::new().name("eq-pusher".into()).spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("pusher rt");
-            rt.block_on(pusher::push_to_server(push_url, push_token, event_rx));
-        }).expect("spawn pusher");
+        thread::Builder::new()
+            .name("eq-pusher".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("pusher rt");
+                rt.block_on(pusher::push_to_server(push_url, push_token, event_rx));
+            })
+            .expect("spawn pusher");
         info!("Pushing events to remote server");
     }
 
@@ -193,7 +217,11 @@ fn extract_player_name(path: &str) -> String {
 #[cfg(not(feature = "tray"))]
 fn config_path_display() -> String {
     #[cfg(target_os = "windows")]
-    { std::env::var("APPDATA").unwrap_or_else(|_| ".".into()) + r"\froklog\config.toml" }
+    {
+        std::env::var("APPDATA").unwrap_or_else(|_| ".".into()) + r"\froklog\config.toml"
+    }
     #[cfg(not(target_os = "windows"))]
-    { std::env::var("HOME").unwrap_or_else(|_| ".".into()) + "/.config/froklog/config.toml" }
+    {
+        std::env::var("HOME").unwrap_or_else(|_| ".".into()) + "/.config/froklog/config.toml"
+    }
 }

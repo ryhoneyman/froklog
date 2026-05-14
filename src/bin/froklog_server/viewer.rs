@@ -71,7 +71,10 @@ pub async fn stream_ws_handler(
         )
     };
 
-    info!("Viewer [{stream_id}]: client connected from {}", crate::client_ip(&headers, peer));
+    info!(
+        "Viewer [{stream_id}]: client connected from {}",
+        crate::client_ip(&headers, peer)
+    );
     ws.on_upgrade(move |socket| handle_viewer_ws(socket, rx, journal, client_connected))
         .into_response()
 }
@@ -130,7 +133,10 @@ enum ServerMsg {
         is_live: bool,
     },
     /// Acknowledges a seek operation and confirms the timeline bounds.
-    SeekOk { first_ts: Option<u64>, last_ts: Option<u64> },
+    SeekOk {
+        first_ts: Option<u64>,
+        last_ts: Option<u64>,
+    },
     /// Sent when the server transitions from replay to live mode.
     NowLive,
     /// Sent when catch-up completes on a stream whose client is no longer
@@ -153,7 +159,11 @@ enum ViewerMode {
     /// `target_pos` as fast as possible, then transitioning to:
     ///   - `Replay { target_pos, speed }` if `then_speed` is `Some(speed)`
     ///   - `Paused { target_pos }` if `then_speed` is `None`
-    CatchUpTo { pos: usize, target_pos: usize, then_speed: Option<f64> },
+    CatchUpTo {
+        pos: usize,
+        target_pos: usize,
+        then_speed: Option<f64>,
+    },
     /// Subscribed to the live broadcast channel.
     Live,
     /// Replaying stored batches paced at `speed` × wall-clock rate.
@@ -194,10 +204,17 @@ async fn handle_viewer_ws(
     loop {
         match mode {
             // ── Catch-up-to: blast stored batches until target, then transition
-            ViewerMode::CatchUpTo { ref mut pos, target_pos, then_speed } => {
+            ViewerMode::CatchUpTo {
+                ref mut pos,
+                target_pos,
+                then_speed,
+            } => {
                 if *pos >= target_pos {
                     mode = match then_speed {
-                        Some(speed) => ViewerMode::Replay { pos: target_pos, speed },
+                        Some(speed) => ViewerMode::Replay {
+                            pos: target_pos,
+                            speed,
+                        },
                         None => ViewerMode::Paused { pos: target_pos },
                     };
                     continue;
@@ -206,7 +223,9 @@ async fn handle_viewer_ws(
                 // client messages, amortising per-batch async overhead.
                 let mut exhausted = false;
                 for _ in 0..CATCHUP_BURST {
-                    if *pos >= target_pos { break; }
+                    if *pos >= target_pos {
+                        break;
+                    }
                     let batch = {
                         let j = journal.read().await;
                         j.read_at(*pos)
@@ -407,19 +426,17 @@ async fn handle_viewer_ws(
             }
 
             // ── Paused: hold position, wait for Resume / Seek ────────────────────────
-            ViewerMode::Paused { pos } => {
-                match socket.recv().await {
-                    Some(Ok(Message::Text(txt))) => {
-                        if let Some(new_mode) =
-                            handle_client_msg(&txt, &journal, &mut socket, pos).await
-                        {
-                            mode = new_mode;
-                        }
+            ViewerMode::Paused { pos } => match socket.recv().await {
+                Some(Ok(Message::Text(txt))) => {
+                    if let Some(new_mode) =
+                        handle_client_msg(&txt, &journal, &mut socket, pos).await
+                    {
+                        mode = new_mode;
                     }
-                    None | Some(Ok(Message::Close(_))) | Some(Err(_)) => return,
-                    _ => {}
                 }
-            }
+                None | Some(Ok(Message::Close(_))) | Some(Err(_)) => return,
+                _ => {}
+            },
         }
     }
 }
@@ -466,7 +483,11 @@ async fn handle_client_msg(
                 let _ = socket.send(Message::Text(txt.into())).await;
             }
             let speed = speed.clamp(0.1, 32.0);
-            Some(ViewerMode::CatchUpTo { pos: 0, target_pos, then_speed: Some(speed) })
+            Some(ViewerMode::CatchUpTo {
+                pos: 0,
+                target_pos,
+                then_speed: Some(speed),
+            })
         }
         ClientMsg::SeekFullPaused { to_ts } => {
             let (target_pos, first_ts, last_ts) = {
@@ -477,7 +498,11 @@ async fn handle_client_msg(
             if let Ok(txt) = serde_json::to_string(&ack) {
                 let _ = socket.send(Message::Text(txt.into())).await;
             }
-            Some(ViewerMode::CatchUpTo { pos: 0, target_pos, then_speed: None })
+            Some(ViewerMode::CatchUpTo {
+                pos: 0,
+                target_pos,
+                then_speed: None,
+            })
         }
         ClientMsg::SeekFullLog { to_log_ts, speed } => {
             let (target_pos, first_ts, last_ts) = {
@@ -489,7 +514,11 @@ async fn handle_client_msg(
                 let _ = socket.send(Message::Text(txt.into())).await;
             }
             let speed = speed.clamp(0.1, 32.0);
-            Some(ViewerMode::CatchUpTo { pos: 0, target_pos, then_speed: Some(speed) })
+            Some(ViewerMode::CatchUpTo {
+                pos: 0,
+                target_pos,
+                then_speed: Some(speed),
+            })
         }
         ClientMsg::SeekFullPausedLog { to_log_ts } => {
             let (target_pos, first_ts, last_ts) = {
@@ -500,7 +529,11 @@ async fn handle_client_msg(
             if let Ok(txt) = serde_json::to_string(&ack) {
                 let _ = socket.send(Message::Text(txt.into())).await;
             }
-            Some(ViewerMode::CatchUpTo { pos: 0, target_pos, then_speed: None })
+            Some(ViewerMode::CatchUpTo {
+                pos: 0,
+                target_pos,
+                then_speed: None,
+            })
         }
         ClientMsg::SeekLog { to_log_ts, speed } => {
             // Direct seek — client has already rebuilt state from its cache.
@@ -531,17 +564,16 @@ async fn handle_client_msg(
         ClientMsg::Pause => Some(ViewerMode::Paused { pos: current_pos }),
         ClientMsg::Resume { speed } => {
             let speed = speed.clamp(0.1, 32.0);
-            Some(ViewerMode::Replay { pos: current_pos, speed })
+            Some(ViewerMode::Replay {
+                pos: current_pos,
+                speed,
+            })
         }
         ClientMsg::Live => Some(ViewerMode::Live),
     }
 }
 
-async fn is_valid_view_token(
-    stream_id: &str,
-    vtok: &Option<String>,
-    state: &ServerState,
-) -> bool {
+async fn is_valid_view_token(stream_id: &str, vtok: &Option<String>, state: &ServerState) -> bool {
     let reg = state.registry.read().await;
     match reg.get(stream_id) {
         Some(entry) => vtok

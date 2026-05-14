@@ -65,12 +65,19 @@ impl Journal {
                 let trimmed = line.trim_end();
                 if !trimmed.is_empty() {
                     if let Ok(jl) = serde_json::from_str::<JournalLine>(trimmed) {
-                        index.push(IndexEntry { wall_ts: jl.wall_ts, log_ts: jl.log_ts, byte_offset: offset });
+                        index.push(IndexEntry {
+                            wall_ts: jl.wall_ts,
+                            log_ts: jl.log_ts,
+                            byte_offset: offset,
+                        });
                     }
                 }
                 offset += n as u64;
             }
-            info!("Journal [{stream_id}]: loaded {} batches from disk", index.len());
+            info!(
+                "Journal [{stream_id}]: loaded {} batches from disk",
+                index.len()
+            );
         }
 
         Ok(Self { path, index })
@@ -78,12 +85,23 @@ impl Journal {
 
     /// Append a raw EventBatch JSON string received at `wall_ts` to disk and update the index.
     /// `log_ts` is the max EQ log-event unix timestamp from the batch (used for replay pacing).
-    pub fn append(&mut self, wall_ts: u64, log_ts: Option<u64>, seq: u32, batch_json: &str) -> std::io::Result<()> {
+    pub fn append(
+        &mut self,
+        wall_ts: u64,
+        log_ts: Option<u64>,
+        seq: u32,
+        batch_json: &str,
+    ) -> std::io::Result<()> {
         // Parse the batch value from the already-validated JSON string.
         let batch: serde_json::Value = serde_json::from_str(batch_json)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-        let jl = JournalLine { wall_ts, log_ts, seq, batch };
+        let jl = JournalLine {
+            wall_ts,
+            log_ts,
+            seq,
+            batch,
+        };
         let line = serde_json::to_string(&jl)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
@@ -96,7 +114,11 @@ impl Journal {
         writeln!(file, "{}", line)?;
         file.flush()?;
 
-        self.index.push(IndexEntry { wall_ts, log_ts, byte_offset });
+        self.index.push(IndexEntry {
+            wall_ts,
+            log_ts,
+            byte_offset,
+        });
         Ok(())
     }
 
@@ -195,6 +217,13 @@ impl Journal {
     }
 }
 
+/// Thread-safe wrapper used from async code.
+pub type SharedJournal = Arc<RwLock<Journal>>;
+
+pub fn open_shared(data_dir: &std::path::Path, stream_id: &str) -> std::io::Result<SharedJournal> {
+    Ok(Arc::new(RwLock::new(Journal::open(data_dir, stream_id)?)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,26 +231,49 @@ mod tests {
     fn make_journal(entries: &[(u64, Option<u64>)]) -> Journal {
         Journal {
             path: std::path::PathBuf::new(),
-            index: entries.iter().map(|&(wall_ts, log_ts)| IndexEntry {
-                wall_ts, log_ts, byte_offset: 0,
-            }).collect(),
+            index: entries
+                .iter()
+                .map(|&(wall_ts, log_ts)| IndexEntry {
+                    wall_ts,
+                    log_ts,
+                    byte_offset: 0,
+                })
+                .collect(),
         }
     }
 
     // ── len / is_empty ────────────────────────────────────────────────────────────
-    #[test] fn len_empty()     { assert_eq!(make_journal(&[]).len(), 0); }
-    #[test] fn is_empty_true() { assert!(make_journal(&[]).is_empty()); }
-    #[test] fn len_nonempty()  { assert_eq!(make_journal(&[(1, None), (2, None)]).len(), 2); }
-    #[test] fn is_empty_false(){ assert!(!make_journal(&[(1, None)]).is_empty()); }
+    #[test]
+    fn len_empty() {
+        assert_eq!(make_journal(&[]).len(), 0);
+    }
+    #[test]
+    fn is_empty_true() {
+        assert!(make_journal(&[]).is_empty());
+    }
+    #[test]
+    fn len_nonempty() {
+        assert_eq!(make_journal(&[(1, None), (2, None)]).len(), 2);
+    }
+    #[test]
+    fn is_empty_false() {
+        assert!(!make_journal(&[(1, None)]).is_empty());
+    }
 
     // ── first_ts / last_ts ────────────────────────────────────────────────────────
-    #[test] fn first_ts_empty()    { assert_eq!(make_journal(&[]).first_ts(), None); }
-    #[test] fn last_ts_empty()     { assert_eq!(make_journal(&[]).last_ts(),  None); }
+    #[test]
+    fn first_ts_empty() {
+        assert_eq!(make_journal(&[]).first_ts(), None);
+    }
+    #[test]
+    fn last_ts_empty() {
+        assert_eq!(make_journal(&[]).last_ts(), None);
+    }
     #[test]
     fn first_last_ts() {
         let j = make_journal(&[(100, None), (200, None), (300, None)]);
         assert_eq!(j.first_ts(), Some(100));
-        assert_eq!(j.last_ts(),  Some(300));
+        assert_eq!(j.last_ts(), Some(300));
     }
 
     // ── log_first_ts / log_last_ts ────────────────────────────────────────────────
@@ -229,13 +281,13 @@ mod tests {
     fn log_ts_falls_back_to_wall_ts() {
         let j = make_journal(&[(100, None)]);
         assert_eq!(j.log_first_ts(), Some(100));
-        assert_eq!(j.log_last_ts(),  Some(100));
+        assert_eq!(j.log_last_ts(), Some(100));
     }
     #[test]
     fn log_ts_uses_log_ts_when_present() {
         let j = make_journal(&[(100, Some(50)), (200, Some(150))]);
         assert_eq!(j.log_first_ts(), Some(50));
-        assert_eq!(j.log_last_ts(),  Some(150));
+        assert_eq!(j.log_last_ts(), Some(150));
     }
 
     // ── ts_at / log_ts_at ─────────────────────────────────────────────────────────
@@ -245,7 +297,10 @@ mod tests {
         assert_eq!(j.ts_at(0), Some(10));
         assert_eq!(j.ts_at(1), Some(20));
     }
-    #[test] fn ts_at_out_of_range() { assert_eq!(make_journal(&[]).ts_at(0), None); }
+    #[test]
+    fn ts_at_out_of_range() {
+        assert_eq!(make_journal(&[]).ts_at(0), None);
+    }
     #[test]
     fn log_ts_at_fallback() {
         let j = make_journal(&[(10, None)]);
@@ -328,9 +383,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut j = Journal::open(dir.path(), "stream2").unwrap();
 
-        j.append(100, Some(10), 0, r#"{"seq":0,"events":[]}"#).unwrap();
-        j.append(200, Some(20), 1, r#"{"seq":1,"events":[]}"#).unwrap();
-        j.append(300, Some(30), 2, r#"{"seq":2,"events":[]}"#).unwrap();
+        j.append(100, Some(10), 0, r#"{"seq":0,"events":[]}"#)
+            .unwrap();
+        j.append(200, Some(20), 1, r#"{"seq":1,"events":[]}"#)
+            .unwrap();
+        j.append(300, Some(30), 2, r#"{"seq":2,"events":[]}"#)
+            .unwrap();
 
         assert_eq!(j.len(), 3);
         assert_eq!(j.seek_index(200), 1);
@@ -359,11 +417,4 @@ mod tests {
         let j = Journal::open(dir.path(), "empty_stream").unwrap();
         assert!(j.read_at(0).is_none());
     }
-}
-
-/// Thread-safe wrapper used from async code.
-pub type SharedJournal = Arc<RwLock<Journal>>;
-
-pub fn open_shared(data_dir: &std::path::Path, stream_id: &str) -> std::io::Result<SharedJournal> {
-    Ok(Arc::new(RwLock::new(Journal::open(data_dir, stream_id)?)))
 }

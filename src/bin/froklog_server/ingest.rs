@@ -77,7 +77,10 @@ pub async fn ingest_ws_handler(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    info!("Ingest [{stream_id}]: client connected from {}", crate::client_ip(&headers, peer));
+    info!(
+        "Ingest [{stream_id}]: client connected from {}",
+        crate::client_ip(&headers, peer)
+    );
     ws.on_upgrade(move |socket| handle_ingest(socket, stream_id, state))
         .into_response()
 }
@@ -119,7 +122,9 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                         match serde_json::to_string(&sub) {
                             Ok(sub_json) => {
                                 let arc_json = Arc::new(sub_json);
-                                entry.append_journal(wall_ts, log_ts, sub.seq, &arc_json).await;
+                                entry
+                                    .append_journal(wall_ts, log_ts, sub.seq, &arc_json)
+                                    .await;
                                 // broadcast_tx.send fails only when there are no
                                 // subscribers, which is fine (no viewers connected).
                                 let _ = entry.broadcast_tx.send(arc_json);
