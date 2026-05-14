@@ -267,7 +267,7 @@ pub mod tray {
             use std::os::windows::ffi::OsStrExt;
             use windows::core::PCWSTR;
             use windows::Win32::UI::Controls::Dialogs::{
-                GetOpenFileNameW, OPENFILENAMEW, OFN_FILEMUSTEXIST, OFN_PATHMUSTEXIST,
+                GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_PATHMUSTEXIST, OPENFILENAMEW,
             };
 
             // Build a wide-char filter string: "Log files\0*.txt\0\0"
