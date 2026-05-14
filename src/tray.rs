@@ -483,8 +483,6 @@ pub mod tray {
             // We use a console-based fallback via a hidden console window.
             // For production you'd embed a proper Win32 dialog; this gets the job done.
             show_info(title, prompt);
-            let mut s = String::new();
-            // Temporarily re-enable the console for input.
             use std::io::BufRead;
             let stdin = std::io::stdin();
             stdin
@@ -609,7 +607,7 @@ pub mod tray {
                         if !ptr.is_null() {
                             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
                             *ptr.add(bytes.len()) = 0;
-                            GlobalUnlock(hglob);
+                            let _ = GlobalUnlock(hglob);
                         }
                         let _ = SetClipboardData(
                             CF_TEXT.0 as u32,
