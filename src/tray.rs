@@ -265,20 +265,18 @@ pub mod tray {
         {
             use std::ffi::OsStr;
             use std::os::windows::ffi::OsStrExt;
-            use windows::Win32::UI::Shell::SHBrowseForFolderW;
-
-            // Use the simpler GetOpenFileName (OPENFILENAMEW) approach.
             use windows::core::PCWSTR;
-            use windows::Win32::UI::Shell::Common::ITEMIDLIST;
-            use windows::Win32::UI::WindowsAndMessaging::*;
+            use windows::Win32::UI::Controls::Dialogs::{
+                GetOpenFileNameW, OPENFILENAMEW, OFN_FILEMUSTEXIST, OFN_PATHMUSTEXIST,
+            };
 
             // Build a wide-char filter string: "Log files\0*.txt\0\0"
             let filter: Vec<u16> = OsStr::new("Log files\0*.txt\0\0").encode_wide().collect();
 
             let mut buf = vec![0u16; 1024];
 
-            let mut ofn = windows::Win32::UI::Shell::OPENFILENAMEW {
-                lStructSize: std::mem::size_of::<windows::Win32::UI::Shell::OPENFILENAMEW>() as u32,
+            let mut ofn = OPENFILENAMEW {
+                lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
                 lpstrFilter: PCWSTR(filter.as_ptr()),
                 lpstrFile: windows::core::PWSTR(buf.as_mut_ptr()),
                 nMaxFile: buf.len() as u32,
@@ -286,7 +284,7 @@ pub mod tray {
                 ..Default::default()
             };
 
-            let ok = unsafe { windows::Win32::UI::Shell::GetOpenFileNameW(&mut ofn) };
+            let ok = unsafe { GetOpenFileNameW(&mut ofn) };
             if ok.as_bool() {
                 let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
                 Some(String::from_utf16_lossy(&buf[..end]))
