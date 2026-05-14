@@ -282,6 +282,371 @@ pub fn normalize_miss(word: &str) -> &'static str {
 }
 
 #[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    // ── norm ────────────────────────────────────────────────────────────────────
+    #[test] fn norm_you_returns_player()           { assert_eq!(norm("you", "Rysk"), "Rysk"); }
+    #[test] fn norm_you_case_insensitive()         { assert_eq!(norm("YOU", "Rysk"), "Rysk"); }
+    #[test] fn norm_you_empty_player_passthrough() { assert_eq!(norm("you", ""),     "you");  }
+    #[test] fn norm_non_you_passthrough()          { assert_eq!(norm("Goblin", "Rysk"), "Goblin"); }
+    #[test] fn norm_article_a_via_norm()           { assert_eq!(norm("A Goblin", "Rysk"), "a Goblin"); }
+
+    // ── normalize_article_case ──────────────────────────────────────────────────
+    #[test] fn article_a()                { assert_eq!(normalize_article_case("A Goblin"),  "a Goblin"); }
+    #[test] fn article_an()               { assert_eq!(normalize_article_case("An Orc"),    "an Orc");   }
+    #[test] fn article_no_prefix()        { assert_eq!(normalize_article_case("Goblin"),    "Goblin");   }
+    #[test] fn article_already_lower()    { assert_eq!(normalize_article_case("a goblin"),  "a goblin"); }
+    #[test] fn article_not_a_prefix()     { assert_eq!(normalize_article_case("Aardvark"),  "Aardvark"); }
+
+    // ── normalize_verb ──────────────────────────────────────────────────────────
+    #[test] fn verb_hit()       { assert_eq!(normalize_verb("hit"),       "hit");       }
+    #[test] fn verb_hits()      { assert_eq!(normalize_verb("hits"),      "hit");       }
+    #[test] fn verb_slash()     { assert_eq!(normalize_verb("slash"),     "slash");     }
+    #[test] fn verb_slashes()   { assert_eq!(normalize_verb("slashes"),   "slash");     }
+    #[test] fn verb_backstab()  { assert_eq!(normalize_verb("backstab"),  "backstab");  }
+    #[test] fn verb_backstabs() { assert_eq!(normalize_verb("backstabs"), "backstab");  }
+    #[test] fn verb_bash()      { assert_eq!(normalize_verb("bash"),      "bash");      }
+    #[test] fn verb_bashes()    { assert_eq!(normalize_verb("bashes"),    "bash");      }
+    #[test] fn verb_kick()      { assert_eq!(normalize_verb("kick"),      "kick");      }
+    #[test] fn verb_kicks()     { assert_eq!(normalize_verb("kicks"),     "kick");      }
+    #[test] fn verb_crush()     { assert_eq!(normalize_verb("crush"),     "crush");     }
+    #[test] fn verb_crushes()   { assert_eq!(normalize_verb("crushes"),   "crush");     }
+    #[test] fn verb_pierce()    { assert_eq!(normalize_verb("pierce"),    "pierce");    }
+    #[test] fn verb_pierces()   { assert_eq!(normalize_verb("pierces"),   "pierce");    }
+    #[test] fn verb_punch()     { assert_eq!(normalize_verb("punch"),     "punch");     }
+    #[test] fn verb_punches()   { assert_eq!(normalize_verb("punches"),   "punch");     }
+    #[test] fn verb_frenzy()    { assert_eq!(normalize_verb("frenzy"),    "frenzy");    }
+    #[test] fn verb_frenzies()  { assert_eq!(normalize_verb("frenzies"),  "frenzy");    }
+    #[test] fn verb_strike()    { assert_eq!(normalize_verb("strike"),    "strike");    }
+    #[test] fn verb_strikes()   { assert_eq!(normalize_verb("strikes"),   "strike");    }
+    #[test] fn verb_slay()      { assert_eq!(normalize_verb("slay"),      "slay");      }
+    #[test] fn verb_slays()     { assert_eq!(normalize_verb("slays"),     "slay");      }
+    #[test] fn verb_maul()      { assert_eq!(normalize_verb("maul"),      "maul");      }
+    #[test] fn verb_mauls()     { assert_eq!(normalize_verb("mauls"),     "maul");      }
+    #[test] fn verb_bite()      { assert_eq!(normalize_verb("bite"),      "bite");      }
+    #[test] fn verb_bites()     { assert_eq!(normalize_verb("bites"),     "bite");      }
+    #[test] fn verb_claw()      { assert_eq!(normalize_verb("claw"),      "claw");      }
+    #[test] fn verb_claws()     { assert_eq!(normalize_verb("claws"),     "claw");      }
+    #[test] fn verb_sting()     { assert_eq!(normalize_verb("sting"),     "sting");     }
+    #[test] fn verb_stings()    { assert_eq!(normalize_verb("stings"),    "sting");     }
+    #[test] fn verb_rend()      { assert_eq!(normalize_verb("rend"),      "rend");      }
+    #[test] fn verb_rends()     { assert_eq!(normalize_verb("rends"),     "rend");      }
+    #[test] fn verb_scratch()   { assert_eq!(normalize_verb("scratch"),   "scratch");   }
+    #[test] fn verb_scratches() { assert_eq!(normalize_verb("scratches"), "scratch");   }
+    #[test] fn verb_gore()      { assert_eq!(normalize_verb("gore"),      "gore");      }
+    #[test] fn verb_gores()     { assert_eq!(normalize_verb("gores"),     "gore");      }
+    #[test] fn verb_cleave()    { assert_eq!(normalize_verb("cleave"),    "cleave");    }
+    #[test] fn verb_cleaves()   { assert_eq!(normalize_verb("cleaves"),   "cleave");    }
+    #[test] fn verb_smash()     { assert_eq!(normalize_verb("smash"),     "smash");     }
+    #[test] fn verb_smashes()   { assert_eq!(normalize_verb("smashes"),   "smash");     }
+    #[test] fn verb_shoot()     { assert_eq!(normalize_verb("shoot"),     "shoot");     }
+    #[test] fn verb_shoots()    { assert_eq!(normalize_verb("shoots"),    "shoot");     }
+    #[test] fn verb_slam()      { assert_eq!(normalize_verb("slam"),      "slam");      }
+    #[test] fn verb_slams()     { assert_eq!(normalize_verb("slams"),     "slam");      }
+    #[test] fn verb_slice()     { assert_eq!(normalize_verb("slice"),     "slice");     }
+    #[test] fn verb_slices()    { assert_eq!(normalize_verb("slices"),    "slice");     }
+    #[test] fn verb_stab()      { assert_eq!(normalize_verb("stab"),      "stab");      }
+    #[test] fn verb_stabs()     { assert_eq!(normalize_verb("stabs"),     "stab");      }
+    #[test] fn verb_sweep()     { assert_eq!(normalize_verb("sweep"),     "sweep");     }
+    #[test] fn verb_sweeps()    { assert_eq!(normalize_verb("sweeps"),    "sweep");     }
+    #[test] fn verb_unknown_fallback() { assert_eq!(normalize_verb("unknown"), "hit"); }
+
+    // ── class_name_to_code ──────────────────────────────────────────────────────
+    #[test] fn class_warrior()         { assert_eq!(class_name_to_code("warrior"),      Some("WAR")); }
+    #[test] fn class_war_code()        { assert_eq!(class_name_to_code("war"),          Some("WAR")); }
+    #[test] fn class_cleric()          { assert_eq!(class_name_to_code("cleric"),       Some("CLR")); }
+    #[test] fn class_paladin()         { assert_eq!(class_name_to_code("paladin"),      Some("PAL")); }
+    #[test] fn class_ranger()          { assert_eq!(class_name_to_code("ranger"),       Some("RNG")); }
+    #[test] fn class_shadow_knight()   { assert_eq!(class_name_to_code("shadow knight"),Some("SHD")); }
+    #[test] fn class_shadowknight()    { assert_eq!(class_name_to_code("shadowknight"), Some("SHD")); }
+    #[test] fn class_shd_code()        { assert_eq!(class_name_to_code("shd"),          Some("SHD")); }
+    #[test] fn class_druid()           { assert_eq!(class_name_to_code("druid"),        Some("DRU")); }
+    #[test] fn class_monk()            { assert_eq!(class_name_to_code("monk"),         Some("MNK")); }
+    #[test] fn class_bard()            { assert_eq!(class_name_to_code("bard"),         Some("BRD")); }
+    #[test] fn class_rogue()           { assert_eq!(class_name_to_code("rogue"),        Some("ROG")); }
+    #[test] fn class_shaman()          { assert_eq!(class_name_to_code("shaman"),       Some("SHM")); }
+    #[test] fn class_necromancer()     { assert_eq!(class_name_to_code("necromancer"),  Some("NEC")); }
+    #[test] fn class_wizard()          { assert_eq!(class_name_to_code("wizard"),       Some("WIZ")); }
+    #[test] fn class_magician()        { assert_eq!(class_name_to_code("magician"),     Some("MAG")); }
+    #[test] fn class_enchanter()       { assert_eq!(class_name_to_code("enchanter"),    Some("ENC")); }
+    #[test] fn class_beastlord()       { assert_eq!(class_name_to_code("beastlord"),    Some("BST")); }
+    #[test] fn class_berserker()       { assert_eq!(class_name_to_code("berserker"),    Some("BER")); }
+    #[test] fn class_case_insensitive(){ assert_eq!(class_name_to_code("WARRIOR"),      Some("WAR")); }
+    #[test] fn class_unknown()         { assert_eq!(class_name_to_code("unknown"),      None);         }
+    #[test] fn class_empty()           { assert_eq!(class_name_to_code(""),             None);         }
+
+    // ── normalize_miss ──────────────────────────────────────────────────────────
+    #[test] fn miss_dodge()        { assert_eq!(normalize_miss("dodge"),        "dodge");        }
+    #[test] fn miss_dodges()       { assert_eq!(normalize_miss("dodges"),       "dodge");        }
+    #[test] fn miss_dodged()       { assert_eq!(normalize_miss("dodged"),       "dodge");        }
+    #[test] fn miss_parry()        { assert_eq!(normalize_miss("parry"),        "parry");        }
+    #[test] fn miss_parried()      { assert_eq!(normalize_miss("parried"),      "parry");        }
+    #[test] fn miss_parries()      { assert_eq!(normalize_miss("parries"),      "parry");        }
+    #[test] fn miss_miss()         { assert_eq!(normalize_miss("miss"),         "miss");         }
+    #[test] fn miss_missed()       { assert_eq!(normalize_miss("missed"),       "miss");         }
+    #[test] fn miss_misses()       { assert_eq!(normalize_miss("misses"),       "miss");         }
+    #[test] fn miss_block()        { assert_eq!(normalize_miss("block"),        "block");        }
+    #[test] fn miss_blocked()      { assert_eq!(normalize_miss("blocked"),      "block");        }
+    #[test] fn miss_blocks()       { assert_eq!(normalize_miss("blocks"),       "block");        }
+    #[test] fn miss_riposte()      { assert_eq!(normalize_miss("riposte"),      "riposte");      }
+    #[test] fn miss_riposted()     { assert_eq!(normalize_miss("riposted"),     "riposte");      }
+    #[test] fn miss_ripostes()     { assert_eq!(normalize_miss("ripostes"),     "riposte");      }
+    #[test] fn miss_invulnerable() { assert_eq!(normalize_miss("INVULNERABLE"), "invulnerable"); }
+    #[test] fn miss_absorb()       { assert_eq!(normalize_miss("absorb"),       "absorb");       }
+    #[test] fn miss_absorbs()      { assert_eq!(normalize_miss("absorbs"),      "absorb");       }
+    #[test] fn miss_unknown()      { assert_eq!(normalize_miss("xyzzy"),        "miss");         }
+}
+
+#[cfg(test)]
+mod regex_tests {
+    use super::*;
+
+    // ── RE_MELEE ─────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_melee_slash() {
+        let caps = RE_MELEE.captures("Rysk slashes a goblin for 150 points of damage.").unwrap();
+        assert_eq!(caps["src"].trim(), "Rysk");
+        assert_eq!(&caps["verb"], "slashes");
+        assert_eq!(&caps["tgt"], "a goblin");
+        assert_eq!(&caps["dmg"], "150");
+    }
+    #[test]
+    fn re_melee_kick() {
+        let caps = RE_MELEE.captures("Talodar kicks a skeleton for 75 points of damage.").unwrap();
+        assert_eq!(&caps["verb"], "kicks");
+    }
+    #[test]
+    fn re_melee_backstab() {
+        let caps = RE_MELEE.captures("Rysk backstabs a guard for 2500 points of damage.").unwrap();
+        assert_eq!(&caps["verb"], "backstabs");
+        assert_eq!(&caps["dmg"], "2500");
+    }
+    #[test]
+    fn re_melee_does_match_spell_line_but_parser_checks_hit_by_spell_first() {
+        // RE_MELEE CAN match this line (via the "hit" verb), but the parser checks
+        // RE_HIT_BY_SPELL before RE_MELEE to handle "hit … by Spell" correctly.
+        assert!(RE_MELEE.captures("Rysk hit a goblin for 500 points of magic damage by Fireball.").is_some());
+    }
+    #[test]
+    fn re_melee_on_prefix() {
+        // Some mobs use "hits on" syntax
+        let caps = RE_MELEE.captures("a skeleton hits on Rysk for 50 points of damage.");
+        assert!(caps.is_some());
+    }
+
+    // ── RE_HIT_BY_SPELL ──────────────────────────────────────────────────────────
+    #[test]
+    fn re_hit_by_spell_basic() {
+        let caps = RE_HIT_BY_SPELL.captures("Rysk hit a goblin for 500 points of magic damage by Fireball.").unwrap();
+        assert_eq!(caps["src"].trim(), "Rysk");
+        assert_eq!(&caps["tgt"], "a goblin");
+        assert_eq!(&caps["dmg"], "500");
+        assert_eq!(&caps["spell"], "Fireball");
+    }
+    #[test]
+    fn re_hit_by_spell_multi_word() {
+        let caps = RE_HIT_BY_SPELL.captures("Rysk hit the Arch Lich for 1200 points of fire damage by Rend the Void.").unwrap();
+        assert_eq!(&caps["spell"], "Rend the Void");
+    }
+
+    // ── RE_SPELL_ATTR ─────────────────────────────────────────────────────────────
+    #[test]
+    fn re_spell_attr_basic() {
+        let caps = RE_SPELL_ATTR.captures("Rysk's Fireball hit a goblin for 300 points of damage.").unwrap();
+        assert_eq!(&caps["src"],   "Rysk");
+        assert_eq!(&caps["spell"], "Fireball");
+        assert_eq!(&caps["tgt"],   "a goblin");
+        assert_eq!(&caps["dmg"],   "300");
+    }
+
+    // ── RE_DOT ───────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_dot_basic() {
+        let caps = RE_DOT.captures("a goblin has been damaged by Rysk's Envenomed Bolt for 150 damage.").unwrap();
+        assert_eq!(&caps["tgt"],   "a goblin");
+        assert_eq!(&caps["src"],   "Rysk");
+        assert_eq!(&caps["spell"], "Envenomed Bolt");
+        assert_eq!(&caps["dmg"],   "150");
+    }
+
+    // ── RE_RIPOSTE ────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_riposte_basic() {
+        let caps = RE_RIPOSTE.captures("a skeleton was injured by Rysk's riposte for 200 damage.").unwrap();
+        assert_eq!(&caps["tgt"], "a skeleton");
+        assert_eq!(&caps["src"], "Rysk");
+        assert_eq!(&caps["dmg"], "200");
+    }
+
+    // ── RE_DS ────────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_ds_basic() {
+        let caps = RE_DS.captures("a goblin was struck by Rysk's damage shield for 40 damage.").unwrap();
+        assert_eq!(&caps["tgt"], "a goblin");
+        assert_eq!(&caps["src"], "Rysk");
+        assert_eq!(&caps["dmg"], "40");
+    }
+
+    // ── RE_DS_PROC ───────────────────────────────────────────────────────────────
+    #[test]
+    fn re_ds_proc_your() {
+        let caps = RE_DS_PROC.captures("a goblin is burned by YOUR flames for 20 points of non-melee damage.").unwrap();
+        assert_eq!(&caps["tgt"], "a goblin");
+        assert_eq!(&caps["dmg"], "20");
+        assert!(caps.name("src").is_none());
+    }
+    #[test]
+    fn re_ds_proc_named() {
+        let caps = RE_DS_PROC.captures("a goblin is burned by Rysk's flames for 20 points of non-melee damage.").unwrap();
+        assert_eq!(&caps["src"], "Rysk");
+    }
+
+    // ── RE_CAST ──────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_cast_basic() {
+        let caps = RE_CAST.captures("Rysk begins casting Fireball.").unwrap();
+        assert_eq!(caps["src"].trim(), "Rysk");
+        assert_eq!(&caps["spell"], "Fireball");
+    }
+
+    // ── RE_HEAL ──────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_heal_with_spell() {
+        let caps = RE_HEAL.captures("Healer healed Rysk for 1500 hit points by Complete Heal.").unwrap();
+        assert_eq!(&caps["src"], "Healer");
+        assert_eq!(caps["tgt"].trim(), "Rysk");
+        assert_eq!(&caps["amt"], "1500");
+        assert_eq!(caps["spell"].trim_end_matches('.'), "Complete Heal");
+    }
+    #[test]
+    fn re_heal_no_spell() {
+        let caps = RE_HEAL.captures("Healer healed Rysk for 500 hit points.").unwrap();
+        assert_eq!(&caps["amt"], "500");
+        assert!(caps.name("spell").is_none());
+    }
+
+    // ── RE_HAS_TAKEN ─────────────────────────────────────────────────────────────
+    #[test]
+    fn re_has_taken_your() {
+        let caps = RE_HAS_TAKEN.captures("a goblin has taken 300 damage from your Shadowbolt.").unwrap();
+        assert_eq!(&caps["tgt"], "a goblin");
+        assert_eq!(&caps["dmg"], "300");
+        assert!(caps.name("your").is_some());
+    }
+    #[test]
+    fn re_has_taken_src() {
+        let caps = RE_HAS_TAKEN.captures("a goblin has taken 300 damage from Rysk's Shadowbolt.").unwrap();
+        assert_eq!(&caps["src"],   "Rysk");
+        assert_eq!(&caps["spell"], "Shadowbolt");
+    }
+
+    // ── RE_EXTRA_DMG ─────────────────────────────────────────────────────────────
+    #[test]
+    fn re_extra_dmg_your() {
+        let caps = RE_EXTRA_DMG.captures("a goblin has taken an extra 50 points of non-melee damage from your Bane spell.").unwrap();
+        assert_eq!(&caps["tgt"],   "a goblin");
+        assert_eq!(&caps["dmg"],   "50");
+        assert_eq!(&caps["spell"], "Bane");
+        assert!(caps.name("your").is_some());
+    }
+
+    // ── RE_SLAY_HAS ──────────────────────────────────────────────────────────────
+    #[test]
+    fn re_slay_has_basic() {
+        let caps = RE_SLAY_HAS.captures("Rysk has slain a goblin!").unwrap();
+        assert_eq!(caps["killer"].trim(), "Rysk");
+        assert_eq!(&caps["tgt"], "a goblin");
+    }
+
+    // ── RE_SLAY_YOU ──────────────────────────────────────────────────────────────
+    #[test]
+    fn re_slay_you_basic() {
+        let caps = RE_SLAY_YOU.captures("You have slain a goblin!").unwrap();
+        assert_eq!(&caps["tgt"], "a goblin");
+    }
+
+    // ── RE_SLAIN_BY ──────────────────────────────────────────────────────────────
+    #[test]
+    fn re_slain_by_was() {
+        let caps = RE_SLAIN_BY.captures("a goblin was slain by Rysk!").unwrap();
+        assert_eq!(&caps["tgt"],          "a goblin");
+        assert_eq!(caps["killer"].trim(), "Rysk");
+    }
+    #[test]
+    fn re_slain_by_has_been() {
+        let caps = RE_SLAIN_BY.captures("a skeleton has been slain by Talodar!").unwrap();
+        assert_eq!(&caps["tgt"], "a skeleton");
+    }
+
+    // ── RE_DIED ──────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_died_basic() {
+        let caps = RE_DIED.captures("a goblin died.").unwrap();
+        assert_eq!(&caps["tgt"], "a goblin");
+    }
+
+    // ── RE_MISS ──────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_miss_dodge() {
+        let caps = RE_MISS.captures("a skeleton tries to slash Rysk, but Rysk dodges!").unwrap();
+        assert_eq!(caps["src"].trim(), "a skeleton");
+        assert_eq!(caps["tgt"].trim(), "Rysk");
+        assert_eq!(&caps["miss"], "dodges");
+    }
+    #[test]
+    fn re_miss_parry() {
+        let caps = RE_MISS.captures("a goblin tries to bash Rysk, but Rysk parries!").unwrap();
+        assert_eq!(&caps["miss"], "parries");
+    }
+    #[test]
+    fn re_miss_riposte() {
+        let caps = RE_MISS.captures("a goblin tries to hit Rysk, but Rysk ripostes!").unwrap();
+        assert_eq!(&caps["miss"], "ripostes");
+    }
+    #[test]
+    fn re_miss_invulnerable() {
+        let caps = RE_MISS.captures("a goblin tries to hit Rysk, but Rysk is INVULNERABLE!").unwrap();
+        assert_eq!(&caps["miss"], "INVULNERABLE");
+    }
+
+    // ── RE_ABSORB_SKIN ────────────────────────────────────────────────────────────
+    #[test]
+    fn re_absorb_skin_named() {
+        let caps = RE_ABSORB_SKIN.captures("Rysk's magical skin absorbs the damage of a goblin's thorns.").unwrap();
+        assert_eq!(&caps["tgt"], "Rysk");
+        assert_eq!(caps["src"].trim(), "a goblin");
+    }
+    #[test]
+    fn re_absorb_skin_your() {
+        let caps = RE_ABSORB_SKIN.captures("YOUR magical skin absorbs the damage of a goblin's thorns.").unwrap();
+        assert!(caps.name("tgt").is_none());
+        assert_eq!(caps["src"].trim(), "a goblin");
+    }
+
+    // ── RE_ABSORB_RUNE ────────────────────────────────────────────────────────────
+    #[test]
+    fn re_absorb_rune_basic() {
+        let caps = RE_ABSORB_RUNE.captures("Rysk has shielded itself from 200 points of damage.").unwrap();
+        assert_eq!(caps["tgt"].trim(), "Rysk");
+    }
+
+    // ── RE_RESIST ────────────────────────────────────────────────────────────────
+    #[test]
+    fn re_resist_your() {
+        let caps = RE_RESIST.captures("a goblin resisted your Shadowbolt!").unwrap();
+        assert_eq!(&caps["tgt"],   "a goblin");
+        assert_eq!(&caps["spell"], "Shadowbolt");
+        assert!(caps.name("src").is_none());
+    }
+    #[test]
+    fn re_resist_named() {
+        let caps = RE_RESIST.captures("a goblin resisted Rysk's Shadowbolt!").unwrap();
+        assert_eq!(&caps["src"], "Rysk");
+    }
+}
+
+#[cfg(test)]
 mod who_tests {
     use super::*;
     #[test]

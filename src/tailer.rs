@@ -216,6 +216,97 @@ pub fn parse_user_date(s: &str) -> Result<NaiveDateTime, String> {
     ))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Datelike, Timelike};
+
+    // ── parse_eq_timestamp ────────────────────────────────────────────────────────
+    #[test]
+    fn timestamp_zero_padded_day() {
+        // Feb 1, 2026 is a Sunday — day "01" (zero-padded)
+        let dt = parse_eq_timestamp("[Sun Feb 01 22:00:07 2026] text").unwrap();
+        assert_eq!(dt.day(), 1);
+        assert_eq!(dt.month(), 2);
+        assert_eq!(dt.year(), 2026);
+    }
+    #[test]
+    fn timestamp_space_padded_day() {
+        // Feb 7, 2026 is a Saturday — day " 7" (space-padded — some EQ versions)
+        let dt = parse_eq_timestamp("[Sat Feb  7 22:00:07 2026] text").unwrap();
+        assert_eq!(dt.day(), 7);
+    }
+    #[test]
+    fn timestamp_two_digit_day() {
+        // Feb 27, 2026 is a Friday
+        let dt = parse_eq_timestamp("[Fri Feb 27 22:00:07 2026] body").unwrap();
+        assert_eq!(dt.day(), 27);
+        assert_eq!(dt.hour(), 22);
+        assert_eq!(dt.minute(), 0);
+        assert_eq!(dt.second(), 7);
+    }
+    #[test]
+    fn timestamp_invalid() {
+        assert!(parse_eq_timestamp("Not a log line").is_none());
+    }
+    #[test]
+    fn timestamp_too_short() {
+        assert!(parse_eq_timestamp("[short]").is_none());
+    }
+    #[test]
+    fn timestamp_no_bracket() {
+        assert!(parse_eq_timestamp("Fri Feb 27 22:00:07 2026] body").is_none());
+    }
+
+    // ── parse_user_date ───────────────────────────────────────────────────────────
+    #[test]
+    fn user_date_full_datetime() {
+        let dt = parse_user_date("2026-05-14 10:30:00").unwrap();
+        assert_eq!(dt.year(), 2026);
+        assert_eq!(dt.month(), 5);
+        assert_eq!(dt.day(), 14);
+        assert_eq!(dt.hour(), 10);
+        assert_eq!(dt.minute(), 30);
+        assert_eq!(dt.second(), 0);
+    }
+    #[test]
+    fn user_date_no_seconds() {
+        let dt = parse_user_date("2026-05-14 10:30").unwrap();
+        assert_eq!(dt.minute(), 30);
+    }
+    #[test]
+    fn user_date_only() {
+        let dt = parse_user_date("2026-05-14").unwrap();
+        assert_eq!(dt.hour(), 0);
+        assert_eq!(dt.second(), 0);
+    }
+    #[test]
+    fn user_date_time_only_hhmm() {
+        // Should succeed and use today's date
+        assert!(parse_user_date("10:30").is_ok());
+    }
+    #[test]
+    fn user_date_time_only_hhmmss() {
+        assert!(parse_user_date("10:30:45").is_ok());
+    }
+    #[test]
+    fn user_date_invalid() {
+        assert!(parse_user_date("not-a-date").is_err());
+    }
+
+    // ── parse_duration_str ────────────────────────────────────────────────────────
+    #[test] fn duration_hours()      { assert_eq!(parse_duration_str("2h").unwrap().num_seconds(), 7200); }
+    #[test] fn duration_minutes()    { assert_eq!(parse_duration_str("90m").unwrap().num_seconds(), 5400); }
+    #[test] fn duration_seconds()    { assert_eq!(parse_duration_str("45s").unwrap().num_seconds(), 45); }
+    #[test] fn duration_combined()   { assert_eq!(parse_duration_str("1h30m").unwrap().num_seconds(), 5400); }
+    #[test] fn duration_hms()        { assert_eq!(parse_duration_str("1h2m3s").unwrap().num_seconds(), 3723); }
+    #[test] fn duration_bare_secs()  { assert_eq!(parse_duration_str("3600").unwrap().num_seconds(), 3600); }
+    #[test] fn duration_uppercase()  { assert_eq!(parse_duration_str("1H30M").unwrap().num_seconds(), 5400); }
+    #[test] fn duration_zero_err()   { assert!(parse_duration_str("0").is_err()); }
+    #[test] fn duration_invalid()    { assert!(parse_duration_str("1x").is_err()); }
+    #[test] fn duration_empty_err()  { assert!(parse_duration_str("").is_err()); }
+}
+
 /// Parse a duration string like `1h30m`, `90m`, `3600s`, or a bare number of seconds.
 pub fn parse_duration_str(s: &str) -> Result<chrono::Duration, String> {
     let s = s.trim();

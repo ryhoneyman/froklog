@@ -195,6 +195,172 @@ impl Journal {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_journal(entries: &[(u64, Option<u64>)]) -> Journal {
+        Journal {
+            path: std::path::PathBuf::new(),
+            index: entries.iter().map(|&(wall_ts, log_ts)| IndexEntry {
+                wall_ts, log_ts, byte_offset: 0,
+            }).collect(),
+        }
+    }
+
+    // ── len / is_empty ────────────────────────────────────────────────────────────
+    #[test] fn len_empty()     { assert_eq!(make_journal(&[]).len(), 0); }
+    #[test] fn is_empty_true() { assert!(make_journal(&[]).is_empty()); }
+    #[test] fn len_nonempty()  { assert_eq!(make_journal(&[(1, None), (2, None)]).len(), 2); }
+    #[test] fn is_empty_false(){ assert!(!make_journal(&[(1, None)]).is_empty()); }
+
+    // ── first_ts / last_ts ────────────────────────────────────────────────────────
+    #[test] fn first_ts_empty()    { assert_eq!(make_journal(&[]).first_ts(), None); }
+    #[test] fn last_ts_empty()     { assert_eq!(make_journal(&[]).last_ts(),  None); }
+    #[test]
+    fn first_last_ts() {
+        let j = make_journal(&[(100, None), (200, None), (300, None)]);
+        assert_eq!(j.first_ts(), Some(100));
+        assert_eq!(j.last_ts(),  Some(300));
+    }
+
+    // ── log_first_ts / log_last_ts ────────────────────────────────────────────────
+    #[test]
+    fn log_ts_falls_back_to_wall_ts() {
+        let j = make_journal(&[(100, None)]);
+        assert_eq!(j.log_first_ts(), Some(100));
+        assert_eq!(j.log_last_ts(),  Some(100));
+    }
+    #[test]
+    fn log_ts_uses_log_ts_when_present() {
+        let j = make_journal(&[(100, Some(50)), (200, Some(150))]);
+        assert_eq!(j.log_first_ts(), Some(50));
+        assert_eq!(j.log_last_ts(),  Some(150));
+    }
+
+    // ── ts_at / log_ts_at ─────────────────────────────────────────────────────────
+    #[test]
+    fn ts_at_valid() {
+        let j = make_journal(&[(10, None), (20, None)]);
+        assert_eq!(j.ts_at(0), Some(10));
+        assert_eq!(j.ts_at(1), Some(20));
+    }
+    #[test] fn ts_at_out_of_range() { assert_eq!(make_journal(&[]).ts_at(0), None); }
+    #[test]
+    fn log_ts_at_fallback() {
+        let j = make_journal(&[(10, None)]);
+        assert_eq!(j.log_ts_at(0), Some(10)); // falls back to wall_ts
+    }
+    #[test]
+    fn log_ts_at_explicit() {
+        let j = make_journal(&[(10, Some(5))]);
+        assert_eq!(j.log_ts_at(0), Some(5));
+    }
+
+    // ── seek_index ────────────────────────────────────────────────────────────────
+    #[test]
+    fn seek_index_empty() {
+        assert_eq!(make_journal(&[]).seek_index(100), 0);
+    }
+    #[test]
+    fn seek_index_before_all() {
+        let j = make_journal(&[(100, None), (200, None), (300, None)]);
+        assert_eq!(j.seek_index(50), 0);
+    }
+    #[test]
+    fn seek_index_exact_match() {
+        let j = make_journal(&[(100, None), (200, None), (300, None)]);
+        assert_eq!(j.seek_index(200), 1);
+    }
+    #[test]
+    fn seek_index_between_entries() {
+        let j = make_journal(&[(100, None), (200, None), (300, None)]);
+        assert_eq!(j.seek_index(150), 1); // first entry >= 150 is at index 1 (wall_ts=200)
+    }
+    #[test]
+    fn seek_index_after_all() {
+        let j = make_journal(&[(100, None), (200, None)]);
+        assert_eq!(j.seek_index(999), 2); // past the end
+    }
+
+    // ── seek_index_by_log_ts ──────────────────────────────────────────────────────
+    #[test]
+    fn seek_by_log_ts_empty() {
+        assert_eq!(make_journal(&[]).seek_index_by_log_ts(100), 0);
+    }
+    #[test]
+    fn seek_by_log_ts_exact() {
+        let j = make_journal(&[(100, Some(10)), (200, Some(20)), (300, Some(30))]);
+        assert_eq!(j.seek_index_by_log_ts(20), 1);
+    }
+    #[test]
+    fn seek_by_log_ts_fallback_to_wall() {
+        // entries without log_ts fall back to wall_ts
+        let j = make_journal(&[(100, None), (200, None)]);
+        assert_eq!(j.seek_index_by_log_ts(150), 1);
+    }
+    #[test]
+    fn seek_by_log_ts_past_end() {
+        let j = make_journal(&[(100, Some(10))]);
+        assert_eq!(j.seek_index_by_log_ts(999), 1);
+    }
+
+    // ── open / append / read_at (disk) ────────────────────────────────────────────
+    #[test]
+    fn append_and_read_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = Journal::open(dir.path(), "test_stream").unwrap();
+        assert!(j.is_empty());
+
+        let batch_json = r#"{"seq":0,"events":[]}"#;
+        j.append(1000, Some(900), 0, batch_json).unwrap();
+        assert_eq!(j.len(), 1);
+        assert_eq!(j.first_ts(), Some(1000));
+
+        let content = j.read_at(0).unwrap();
+        // read_at returns the batch field, not the full journal line
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["seq"].as_u64().unwrap(), 0);
+    }
+
+    #[test]
+    fn append_multiple_and_seek() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = Journal::open(dir.path(), "stream2").unwrap();
+
+        j.append(100, Some(10), 0, r#"{"seq":0,"events":[]}"#).unwrap();
+        j.append(200, Some(20), 1, r#"{"seq":1,"events":[]}"#).unwrap();
+        j.append(300, Some(30), 2, r#"{"seq":2,"events":[]}"#).unwrap();
+
+        assert_eq!(j.len(), 3);
+        assert_eq!(j.seek_index(200), 1);
+        assert_eq!(j.seek_index_by_log_ts(20), 1);
+        assert_eq!(j.last_ts(), Some(300));
+    }
+
+    #[test]
+    fn open_reloads_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut j = Journal::open(dir.path(), "persist").unwrap();
+            j.append(500, None, 0, r#"{"seq":0,"events":[]}"#).unwrap();
+            j.append(600, None, 1, r#"{"seq":1,"events":[]}"#).unwrap();
+        }
+        // Re-open and verify the index is rebuilt
+        let j2 = Journal::open(dir.path(), "persist").unwrap();
+        assert_eq!(j2.len(), 2);
+        assert_eq!(j2.first_ts(), Some(500));
+        assert_eq!(j2.last_ts(), Some(600));
+    }
+
+    #[test]
+    fn read_at_out_of_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let j = Journal::open(dir.path(), "empty_stream").unwrap();
+        assert!(j.read_at(0).is_none());
+    }
+}
+
 /// Thread-safe wrapper used from async code.
 pub type SharedJournal = Arc<RwLock<Journal>>;
 

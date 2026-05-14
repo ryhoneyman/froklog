@@ -52,8 +52,11 @@ fn strip_mods(line: &str) -> (&str, u16) {
     if trimmed.ends_with(')') {
         if let Some(pos) = trimmed.rfind('(') {
             let suffix = &trimmed[pos..];
-            let rest = trimmed[..pos].trim_end();
-            return (rest, parse_mods(suffix));
+            let mods = parse_mods(suffix);
+            if mods != 0 {
+                let rest = trimmed[..pos].trim_end();
+                return (rest, mods);
+            }
         }
     }
     (trimmed, 0)
@@ -740,6 +743,8 @@ pub fn run(
             shared.store(Arc::new(state.clone()));
         }
     }
+    // Channel closed (channel disconnected or all senders dropped) — publish final state.
+    publish(&shared, &broadcast_tx, &state);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -910,6 +915,342 @@ mod tests {
         let line = "Innoruuk, the Prince of Hate begins casting Avatar Power.";
         let caps = RE_CAST.captures(line).expect("RE_CAST should match comma-named mob");
         assert_eq!(caps["src"].trim(), "Innoruuk, the Prince of Hate");
+    }
+
+    // ── parse_mods ───────────────────────────────────────────────────────────────
+    #[test] fn parse_mods_empty()       { assert_eq!(parse_mods("()"),                  0); }
+    #[test] fn parse_mods_critical()    { assert_eq!(parse_mods("(Critical)"),           MODS_CRIT); }
+    #[test] fn parse_mods_deadly()      { assert_eq!(parse_mods("(Deadly Strike)"),      MODS_CRIT); }
+    #[test] fn parse_mods_crippling()   { assert_eq!(parse_mods("(Crippling Blow)"),     MODS_CRIT); }
+    #[test] fn parse_mods_finishing()   { assert_eq!(parse_mods("(Finishing Blow)"),     MODS_CRIT); }
+    #[test] fn parse_mods_twincast()    { assert_eq!(parse_mods("(Twincast)"),           MODS_TWINCAST); }
+    #[test] fn parse_mods_lucky()       { assert_eq!(parse_mods("(Lucky)"),              MODS_LUCKY); }
+    #[test] fn parse_mods_rampage()     { assert!(parse_mods("(Rampage)")     & MODS_RAMPAGE     != 0); }
+    #[test] fn parse_mods_strike()      { assert!(parse_mods("(Strikethrough)") & MODS_STRIKETHROUGH != 0); }
+    #[test] fn parse_mods_riposte_mod() { assert!(parse_mods("(Riposte)")    & MODS_RIPOSTE_MOD != 0); }
+    #[test] fn parse_mods_assassinate() { assert!(parse_mods("(Assassinate)") & MODS_ASSASSINATE != 0); }
+    #[test] fn parse_mods_headshot()    { assert!(parse_mods("(Headshot)")   & MODS_HEADSHOT    != 0); }
+    #[test] fn parse_mods_slay_undead() { assert!(parse_mods("(Slay Undead)") & MODS_SLAY_UNDEAD != 0); }
+    #[test] fn parse_mods_doublebow()   { assert!(parse_mods("(Double Bow Shot)") & MODS_DOUBLEBOW != 0); }
+    #[test] fn parse_mods_flurry()      { assert!(parse_mods("(Flurry)")     & MODS_FLURRY      != 0); }
+    #[test]
+    fn parse_mods_combined() {
+        let m = parse_mods("(Lucky Critical Twincast)");
+        assert_eq!(m, MODS_LUCKY | MODS_CRIT | MODS_TWINCAST);
+    }
+
+    // ── strip_mods ───────────────────────────────────────────────────────────────
+    #[test]
+    fn strip_mods_no_suffix() {
+        let (line, mods) = strip_mods("Rysk slashes a goblin for 150 points of damage.");
+        assert_eq!(line, "Rysk slashes a goblin for 150 points of damage.");
+        assert_eq!(mods, 0);
+    }
+    #[test]
+    fn strip_mods_critical() {
+        let (line, mods) = strip_mods("Rysk slashes a goblin for 150 points of damage. (Critical)");
+        assert_eq!(line, "Rysk slashes a goblin for 150 points of damage.");
+        assert_eq!(mods, MODS_CRIT);
+    }
+    #[test]
+    fn strip_mods_combined() {
+        let (line, mods) = strip_mods("Rysk slashes a goblin for 5000 points of damage. (Lucky Critical Twincast)");
+        assert_eq!(line, "Rysk slashes a goblin for 5000 points of damage.");
+        assert_eq!(mods, MODS_LUCKY | MODS_CRIT | MODS_TWINCAST);
+    }
+    #[test]
+    fn strip_mods_no_opening_paren() {
+        let (_, mods) = strip_mods("Some line ending in word)");
+        assert_eq!(mods, 0);
+    }
+    #[test]
+    fn strip_mods_unknown_suffix_not_stripped() {
+        // (Race) on a /who line must not be stripped — only recognised combat mods are.
+        let (line, mods) = strip_mods("[65 Warrior] Rysk (Human)");
+        assert_eq!(line, "[65 Warrior] Rysk (Human)");
+        assert_eq!(mods, 0);
+    }
+
+    // ── Parser integration ────────────────────────────────────────────────────────
+
+    const TS: &str = "[Tue Feb 27 22:00:07 2026] ";
+
+    fn run_lines(lines: &[&str], player: &str) -> Arc<CombatState> {
+        let (tx, rx) = crossbeam_channel::unbounded::<String>();
+        let shared = Arc::new(ArcSwap::from_pointee(CombatState::default()));
+        let reset_flag = Arc::new(AtomicBool::new(false));
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        for &line in lines {
+            tx.send(line.to_owned()).unwrap();
+        }
+        drop(tx);
+        run(rx, Arc::clone(&shared), reset_flag, broadcast_tx, event_tx, player.to_owned());
+        shared.load_full()
+    }
+
+    #[test]
+    fn integration_melee_player_to_mob() {
+        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 150 points of damage.")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.total_damage, 150);
+        assert_eq!(stats.damage_by_type.get("slash"), Some(&150));
+        assert!(state.known_players.contains("Rysk"));
+        assert!(state.confirmed_mobs.contains("a goblin"));
+    }
+
+    #[test]
+    fn integration_melee_mob_to_player() {
+        let state = run_lines(&[&format!("{TS}a goblin hits Rysk for 80 points of damage.")], "Rysk");
+        assert!(state.confirmed_mobs.contains("a goblin"));
+        let mob_id = state.mob_list.iter().find(|m| m.name == "a goblin").unwrap().id;
+        let tanking = state.mob_tanking.get(&mob_id).unwrap();
+        assert_eq!(tanking.get("Rysk").unwrap().total_damage, 80);
+    }
+
+    #[test]
+    fn integration_hit_by_spell_player_to_mob() {
+        let state = run_lines(&[&format!("{TS}Rysk hit a goblin for 500 points of magic damage by Fireball.")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.total_damage, 500);
+        assert_eq!(stats.damage_by_spell.get("Fireball"), Some(&500));
+    }
+
+    #[test]
+    fn integration_hit_by_spell_mob_to_player() {
+        let state = run_lines(&[&format!("{TS}an orc hit Rysk for 200 points of fire damage by Scorchblast.")], "Rysk");
+        assert!(state.confirmed_mobs.contains("an orc"));
+        let mob_id = state.mob_list.iter().find(|m| m.name == "an orc").unwrap().id;
+        let tanking = state.mob_tanking.get(&mob_id).unwrap();
+        assert_eq!(tanking.get("Rysk").unwrap().total_damage, 200);
+    }
+
+    #[test]
+    fn integration_dot_tick() {
+        let state = run_lines(&[&format!("{TS}a goblin has been damaged by Rysk's Envenomed Bolt for 150 damage.")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.total_damage, 150);
+        assert_eq!(stats.damage_by_spell.get("Envenomed Bolt"), Some(&150));
+        assert_eq!(stats.damage_by_type.get("dot"), Some(&150));
+    }
+
+    #[test]
+    fn integration_crit_mods_increments_counters() {
+        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 5000 points of damage. (Lucky Critical Twincast)")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.crit_count, 1);
+        assert_eq!(stats.twincast_count, 1);
+    }
+
+    #[test]
+    fn integration_kill_you_have_slain() {
+        let state = run_lines(&[
+            &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
+            &format!("{TS}You have slain a goblin!"),
+        ], "Rysk");
+        assert!(state.dead_mobs.contains("a goblin"));
+        assert!(state.fight_end.is_some());
+    }
+
+    #[test]
+    fn integration_kill_x_has_slain() {
+        let state = run_lines(&[
+            &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
+            &format!("{TS}Rysk has slain a skeleton!"),
+        ], "Rysk");
+        assert!(state.dead_mobs.contains("a skeleton"));
+    }
+
+    #[test]
+    fn integration_kill_slain_by() {
+        let state = run_lines(&[
+            &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
+            &format!("{TS}a skeleton was slain by Rysk!"),
+        ], "Rysk");
+        assert!(state.dead_mobs.contains("a skeleton"));
+    }
+
+    #[test]
+    fn integration_kill_died() {
+        let state = run_lines(&[
+            &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
+            &format!("{TS}a skeleton died."),
+        ], "Rysk");
+        assert!(state.dead_mobs.contains("a skeleton"));
+    }
+
+    #[test]
+    fn integration_article_normalized_on_kill() {
+        // "A goblin" at sentence start → should still hit dead_mobs["a goblin"]
+        let state = run_lines(&[
+            &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
+            &format!("{TS}A goblin was slain by Rysk!"),
+        ], "Rysk");
+        assert!(state.dead_mobs.contains("a goblin"));
+    }
+
+    #[test]
+    fn integration_heal_tracked() {
+        let state = run_lines(&[
+            &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
+            &format!("{TS}Healer healed Rysk for 1500 hit points by Complete Heal."),
+        ], "Rysk");
+        let healer = state.entities.get("Healer").unwrap();
+        assert_eq!(healer.total_heals, 1500);
+        assert_eq!(healer.heals_by_spell.get("Complete Heal"), Some(&1500));
+        let healee = state.entities.get("Rysk").unwrap();
+        assert_eq!(healee.total_healed_received, 1500);
+    }
+
+    #[test]
+    fn integration_who_populates_classes() {
+        let state = run_lines(&[&format!("{TS}[65 Warrior] Rysk (Human)")], "Rysk");
+        assert_eq!(state.player_classes.get("Rysk"), Some(&vec!["WAR".to_owned()]));
+    }
+
+    #[test]
+    fn integration_mob_name_set() {
+        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 150 points of damage.")], "Rysk");
+        assert_eq!(state.mob_name, "a goblin");
+    }
+
+    #[test]
+    fn integration_riposte_player() {
+        let state = run_lines(&[&format!("{TS}a skeleton was injured by Rysk's riposte for 200 damage.")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.total_damage, 200);
+        assert_eq!(stats.damage_by_type.get("riposte"), Some(&200));
+    }
+
+    #[test]
+    fn integration_ds_player() {
+        let state = run_lines(&[&format!("{TS}a goblin was struck by Rysk's damage shield for 40 damage.")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.total_damage, 40);
+        assert_eq!(stats.damage_by_type.get("ds"), Some(&40));
+    }
+
+    #[test]
+    fn integration_ds_proc_your() {
+        let state = run_lines(&[&format!("{TS}a goblin is burned by YOUR flames for 12 points of non-melee damage.")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.total_damage, 12);
+        assert_eq!(stats.damage_by_type.get("ds"), Some(&12));
+    }
+
+    #[test]
+    fn integration_miss_avoidance() {
+        let state = run_lines(&[&format!("{TS}a skeleton tries to slash Rysk, but Rysk dodges!")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.avoidance_by_type.get("dodge"), Some(&1));
+    }
+
+    #[test]
+    fn integration_cast_populates_active_casts() {
+        // RE_CAST records the player and spell in active_casts, visible in JSON.
+        // Note: "SpellName hit Target for N" is caught by RE_MELEE before RE_SPELL_HIT,
+        // so unattributed spell attribution via the cast map doesn't fire for "hit" verbs.
+        // Attribution for DD spells comes via RE_HIT_BY_SPELL instead.
+        let state = run_lines(&[
+            &format!("{TS}Rysk begins casting Complete Heal."),
+        ], "Rysk");
+        let json = state.to_api_json();
+        let casting = json["casting"].as_object().unwrap();
+        assert!(casting.contains_key("Rysk"), "active_casts should contain Rysk");
+        assert_eq!(casting["Rysk"]["spell"].as_str().unwrap(), "Complete Heal");
+    }
+
+    #[test]
+    fn integration_resist() {
+        let state = run_lines(&[&format!("{TS}a goblin resisted your Shadowbolt!")], "Rysk");
+        let stats = state.entities.get("Rysk").unwrap();
+        assert_eq!(stats.resists_by_spell.get("Shadowbolt"), Some(&1));
+    }
+
+    #[test]
+    fn integration_damage_accumulates() {
+        let state = run_lines(&[
+            &format!("{TS}Rysk slashes a goblin for 100 points of damage."),
+            &format!("{TS}Rysk slashes a goblin for 200 points of damage."),
+            &format!("{TS}Rysk slashes a goblin for 300 points of damage."),
+        ], "Rysk");
+        assert_eq!(state.total_damage(), 600);
+    }
+
+    #[test]
+    fn integration_mob_list_tracks_mob() {
+        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 150 points of damage.")], "Rysk");
+        assert_eq!(state.mob_list.len(), 1);
+        assert_eq!(state.mob_list[0].name, "a goblin");
+    }
+
+    #[test]
+    fn integration_mob_damage_breakdown() {
+        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 150 points of damage.")], "Rysk");
+        let mob_id = state.mob_list[0].id;
+        let by_player = state.mob_damage.get(&mob_id).unwrap();
+        assert_eq!(by_player.get("Rysk").unwrap().total_damage, 150);
+    }
+
+    #[test]
+    fn integration_reset_clears_combat() {
+        use std::sync::atomic::AtomicBool;
+        use std::thread;
+        use std::time::Duration;
+
+        let (tx, rx) = crossbeam_channel::unbounded::<String>();
+        let shared = Arc::new(ArcSwap::from_pointee(CombatState::default()));
+        let reset_flag = Arc::new(AtomicBool::new(false));
+        let reset_flag2 = Arc::clone(&reset_flag);
+        let shared2 = Arc::clone(&shared);
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel();
+
+        tx.send(format!("{TS}Rysk slashes a goblin for 150 points of damage.")).unwrap();
+        let tx2 = tx.clone();
+        thread::spawn(move || {
+            // The parser processes one line in microseconds; 20ms is a wide margin.
+            thread::sleep(Duration::from_millis(20));
+            reset_flag2.store(true, Ordering::Relaxed);
+            tx2.send(format!("{TS}Rysk slashes a skeleton for 99 points of damage.")).unwrap();
+            drop(tx2);
+        });
+        drop(tx);
+
+        run(rx, Arc::clone(&shared), reset_flag, broadcast_tx, event_tx, "Rysk".to_owned());
+        let state = shared2.load_full();
+        // After reset: only the skeleton hit is present (99 dmg, not 150+99)
+        assert_eq!(state.total_damage(), 99);
+    }
+
+    #[test]
+    fn integration_player_classes_survive_reset() {
+        use std::sync::atomic::AtomicBool;
+        use std::thread;
+        use std::time::Duration;
+
+        let (tx, rx) = crossbeam_channel::unbounded::<String>();
+        let shared = Arc::new(ArcSwap::from_pointee(CombatState::default()));
+        let reset_flag = Arc::new(AtomicBool::new(false));
+        let reset_flag2 = Arc::clone(&reset_flag);
+        let shared2 = Arc::clone(&shared);
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel();
+
+        tx.send(format!("{TS}[65 Warrior] Rysk (Human)")).unwrap();
+        let tx2 = tx.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            reset_flag2.store(true, Ordering::Relaxed);
+            tx2.send(format!("{TS}Rysk slashes a skeleton for 50 points of damage.")).unwrap();
+            drop(tx2);
+        });
+        drop(tx);
+
+        run(rx, Arc::clone(&shared), reset_flag, broadcast_tx, event_tx, "Rysk".to_owned());
+        let state = shared2.load_full();
+        // player_classes must survive the reset
+        assert_eq!(state.player_classes.get("Rysk"), Some(&vec!["WAR".to_owned()]));
     }
 }
 

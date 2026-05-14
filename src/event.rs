@@ -66,6 +66,91 @@ impl CombatEvent {
     }
 }
 
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    fn melee(ts: u32) -> CombatEvent {
+        CombatEvent::Melee { ts, mob: 0, src: "A".into(), tgt: "B".into(), dmg: 10, typ: "slash".into(), tank: false, mods: 0 }
+    }
+
+    #[test]
+    fn max_log_ts_empty()    { assert_eq!(EventBatch { seq: 0, events: vec![] }.max_log_ts(), None); }
+    #[test]
+    fn max_log_ts_single()   { assert_eq!(EventBatch { seq: 0, events: vec![melee(100)] }.max_log_ts(), Some(100)); }
+    #[test]
+    fn max_log_ts_multiple() {
+        let batch = EventBatch { seq: 1, events: vec![melee(100), melee(300), melee(200)] };
+        assert_eq!(batch.max_log_ts(), Some(300));
+    }
+}
+
+#[cfg(test)]
+mod ts_tests {
+    use super::*;
+
+    fn melee(ts: u32) -> CombatEvent {
+        CombatEvent::Melee { ts, mob: 0, src: "A".into(), tgt: "B".into(), dmg: 10, typ: "slash".into(), tank: false, mods: 0 }
+    }
+
+    #[test] fn ts_melee()  { assert_eq!(melee(100).ts(), 100); }
+    #[test]
+    fn ts_spell() {
+        let ev = CombatEvent::Spell { ts: 200, mob: 0, src: "A".into(), tgt: "B".into(), dmg: 10, sp: "Bolt".into(), tank: false, mods: 0 };
+        assert_eq!(ev.ts(), 200);
+    }
+    #[test]
+    fn ts_dot() {
+        let ev = CombatEvent::Dot { ts: 300, mob: 0, src: "A".into(), tgt: "B".into(), dmg: 5, sp: "Dot".into(), mods: 0 };
+        assert_eq!(ev.ts(), 300);
+    }
+    #[test]
+    fn ts_rip() {
+        let ev = CombatEvent::Rip { ts: 400, mob: 0, src: "A".into(), tgt: "B".into(), dmg: 50, mods: 0 };
+        assert_eq!(ev.ts(), 400);
+    }
+    #[test]
+    fn ts_ds() {
+        let ev = CombatEvent::Ds { ts: 500, mob: 0, src: "A".into(), tgt: "B".into(), dmg: 20 };
+        assert_eq!(ev.ts(), 500);
+    }
+    #[test]
+    fn ts_heal() {
+        let ev = CombatEvent::Heal { ts: 600, mob: None, src: "A".into(), tgt: "B".into(), amt: 100, sp: "CH".into(), mods: 0 };
+        assert_eq!(ev.ts(), 600);
+    }
+    #[test]
+    fn ts_slay() {
+        let ev = CombatEvent::Slay { ts: 700, mob: 1, tgt: "Mob".into(), killer: "P".into() };
+        assert_eq!(ev.ts(), 700);
+    }
+    #[test]
+    fn ts_cast() {
+        let ev = CombatEvent::Cast { ts: 800, src: "A".into(), sp: "Fireball".into() };
+        assert_eq!(ev.ts(), 800);
+    }
+    #[test]
+    fn ts_miss() {
+        let ev = CombatEvent::Miss { ts: 900, mob: 0, src: "A".into(), tgt: "B".into(), typ: "dodge".into() };
+        assert_eq!(ev.ts(), 900);
+    }
+    #[test]
+    fn ts_absorb() {
+        let ev = CombatEvent::Absorb { ts: 1000, mob: 0, tgt: "A".into(), src: "B".into() };
+        assert_eq!(ev.ts(), 1000);
+    }
+    #[test]
+    fn ts_resist() {
+        let ev = CombatEvent::Resist { ts: 1100, src: "A".into(), tgt: "B".into(), sp: "Bolt".into() };
+        assert_eq!(ev.ts(), 1100);
+    }
+    #[test]
+    fn ts_who() {
+        let ev = CombatEvent::Who { ts: 1200, name: "Rysk".into(), classes: vec!["WAR".into()] };
+        assert_eq!(ev.ts(), 1200);
+    }
+}
+
 /// One second's worth of events batched by the Windows client and sent to the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventBatch {
