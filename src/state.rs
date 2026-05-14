@@ -103,6 +103,161 @@ pub struct CombatState {
     pub active_mob_id: Option<u64>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn two_player_state() -> CombatState {
+        let mut state = CombatState::default();
+        let mut rysk = EntityCombatStats::default();
+        rysk.total_damage = 5000;
+        *rysk.damage_by_type.entry("slash".to_owned()).or_default() = 3000;
+        *rysk.damage_by_type.entry("backstab".to_owned()).or_default() = 2000;
+        state.entities.insert("Rysk".to_owned(), rysk);
+        let mut talodar = EntityCombatStats::default();
+        talodar.total_damage = 2000;
+        state.entities.insert("Talodar".to_owned(), talodar);
+        state.known_players.insert("Rysk".to_owned());
+        state.known_players.insert("Talodar".to_owned());
+        state
+    }
+
+    // ── elapsed_secs ─────────────────────────────────────────────────────────────
+    #[test]
+    fn elapsed_no_fight() {
+        let state = CombatState::default();
+        assert_eq!(state.elapsed_secs(), 0.0);
+    }
+    #[test]
+    fn elapsed_active_fight() {
+        let mut state = CombatState::default();
+        state.fight_start = Some(Instant::now());
+        let e = state.elapsed_secs();
+        assert!(e >= 0.0 && e < 1.0);
+    }
+    #[test]
+    fn elapsed_ended_fight() {
+        let mut state = CombatState::default();
+        let start = Instant::now();
+        std::thread::sleep(Duration::from_millis(20));
+        state.fight_start = Some(start);
+        state.fight_end   = Some(Instant::now());
+        let e = state.elapsed_secs();
+        assert!(e >= 0.01 && e < 1.0, "elapsed {e}");
+    }
+
+    // ── total_damage / total_heals ────────────────────────────────────────────────
+    #[test] fn total_damage_empty() { assert_eq!(CombatState::default().total_damage(), 0); }
+    #[test] fn total_damage_sum()   { assert_eq!(two_player_state().total_damage(), 7000); }
+    #[test]
+    fn total_heals_sum() {
+        let mut state = CombatState::default();
+        let mut e = EntityCombatStats::default();
+        e.total_heals = 3000;
+        state.entities.insert("Healer".to_owned(), e);
+        assert_eq!(state.total_heals(), 3000);
+    }
+
+    // ── sorted_by_damage ─────────────────────────────────────────────────────────
+    #[test]
+    fn sorted_by_damage_order() {
+        let state = two_player_state();
+        let sorted = state.sorted_by_damage();
+        assert_eq!(sorted.len(), 2);
+        assert_eq!(sorted[0].0, "Rysk");
+        assert_eq!(sorted[0].1.total_damage, 5000);
+        assert_eq!(sorted[1].0, "Talodar");
+    }
+    #[test]
+    fn sorted_by_damage_excludes_confirmed_mobs() {
+        let mut state = two_player_state();
+        let mut mob = EntityCombatStats::default();
+        mob.total_damage = 9999;
+        state.entities.insert("a goblin".to_owned(), mob);
+        state.confirmed_mobs.insert("a goblin".to_owned());
+        assert!(!state.sorted_by_damage().iter().any(|(n, _)| *n == "a goblin"));
+    }
+
+    // ── healers_sorted / healees_sorted ───────────────────────────────────────────
+    #[test]
+    fn healers_sorted_order() {
+        let mut state = CombatState::default();
+        let mut h1 = EntityCombatStats::default(); h1.total_heals = 5000;
+        let mut h2 = EntityCombatStats::default(); h2.total_heals = 10000;
+        let mut d  = EntityCombatStats::default(); d.total_heals  = 0;
+        state.entities.insert("Healer1".to_owned(), h1);
+        state.entities.insert("Healer2".to_owned(), h2);
+        state.entities.insert("Damager".to_owned(), d);
+        let sorted = state.healers_sorted();
+        assert_eq!(sorted.len(), 2);
+        assert_eq!(sorted[0].1.total_heals, 10000);
+    }
+    #[test]
+    fn healees_sorted_order() {
+        let mut state = CombatState::default();
+        let mut e1 = EntityCombatStats::default(); e1.total_healed_received = 3000;
+        let mut e2 = EntityCombatStats::default(); e2.total_healed_received = 8000;
+        state.entities.insert("Tank1".to_owned(), e1);
+        state.entities.insert("Tank2".to_owned(), e2);
+        let sorted = state.healees_sorted();
+        assert_eq!(sorted.len(), 2);
+        assert_eq!(sorted[0].1.total_healed_received, 8000);
+    }
+
+    // ── mob_players_by_damage / mob_players_by_tanking ────────────────────────────
+    #[test]
+    fn mob_players_by_damage_empty() {
+        assert!(CombatState::default().mob_players_by_damage(0).is_empty());
+    }
+    #[test]
+    fn mob_players_by_damage_sorted() {
+        let mut state = CombatState::default();
+        let mut p1 = EntityCombatStats::default(); p1.total_damage = 1000;
+        let mut p2 = EntityCombatStats::default(); p2.total_damage = 3000;
+        let mut by_player = HashMap::new();
+        by_player.insert("Rysk".to_owned(),    p1);
+        by_player.insert("Talodar".to_owned(), p2);
+        state.mob_damage.insert(42, by_player);
+        let sorted = state.mob_players_by_damage(42);
+        assert_eq!(sorted.len(), 2);
+        assert_eq!(sorted[0].0, "Talodar");
+        assert_eq!(sorted[0].1.total_damage, 3000);
+    }
+    #[test]
+    fn mob_players_by_tanking_empty() {
+        assert!(CombatState::default().mob_players_by_tanking(99).is_empty());
+    }
+
+    // ── to_api_json ───────────────────────────────────────────────────────────────
+    #[test]
+    fn to_api_json_required_keys() {
+        let json = CombatState::default().to_api_json();
+        for key in &["mob_name","entities","healers","healees","tanked","resists",
+                     "total_damage","total_heals","mob_list","mob_damage",
+                     "mob_tanking","mob_healing","mob_healed","casting"] {
+            assert!(json.get(key).is_some(), "missing key: {key}");
+        }
+    }
+    #[test]
+    fn to_api_json_entity_shape() {
+        let mut state = CombatState::default();
+        let mut stats = EntityCombatStats::default();
+        stats.total_damage = 5000;
+        stats.crit_count   = 3;
+        state.entities.insert("Rysk".to_owned(), stats);
+        state.known_players.insert("Rysk".to_owned());
+        state.fight_start = Some(Instant::now());
+        let json = state.to_api_json();
+        let entities = json["entities"].as_array().unwrap();
+        assert_eq!(entities.len(), 1);
+        let e = &entities[0];
+        assert_eq!(e["name"].as_str().unwrap(), "Rysk");
+        assert_eq!(e["total_damage"].as_u64().unwrap(), 5000);
+        assert_eq!(e["crit_count"].as_u64().unwrap(), 3);
+    }
+}
+
 impl CombatState {
     pub fn elapsed_secs(&self) -> f64 {
         match (self.fight_start, self.fight_end) {

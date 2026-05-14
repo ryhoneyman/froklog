@@ -122,6 +122,58 @@ fn split_by_game_second(mut events: Vec<CombatEvent>) -> Vec<Vec<CombatEvent>> {
     result
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::CombatEvent;
+
+    fn melee(ts: u32) -> CombatEvent {
+        CombatEvent::Melee {
+            ts, mob: 0, src: "A".into(), tgt: "B".into(),
+            dmg: 100, typ: "slash".into(), tank: false, mods: 0,
+        }
+    }
+
+    #[test]
+    fn split_empty() {
+        assert!(split_by_game_second(vec![]).is_empty());
+    }
+    #[test]
+    fn split_single_event() {
+        let batches = split_by_game_second(vec![melee(1000)]);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].len(), 1);
+    }
+    #[test]
+    fn split_same_second_groups_together() {
+        let batches = split_by_game_second(vec![melee(1000), melee(1000), melee(1000)]);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].len(), 3);
+    }
+    #[test]
+    fn split_three_seconds_three_batches() {
+        let batches = split_by_game_second(vec![melee(1000), melee(1001), melee(1002)]);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0].len(), 1);
+    }
+    #[test]
+    fn split_out_of_order_sorted() {
+        let batches = split_by_game_second(vec![melee(1002), melee(1000), melee(1001)]);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0][0].ts(), 1000);
+        assert_eq!(batches[1][0].ts(), 1001);
+        assert_eq!(batches[2][0].ts(), 1002);
+    }
+    #[test]
+    fn split_mixed_counts_per_second() {
+        // 3 events at t=5, 1 event at t=6
+        let batches = split_by_game_second(vec![melee(5), melee(5), melee(5), melee(6)]);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].len(), 3);
+        assert_eq!(batches[1].len(), 1);
+    }
+}
+
 fn build_request(
     url: &str,
     token: &str,
