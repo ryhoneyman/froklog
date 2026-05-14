@@ -1,5 +1,7 @@
 # froklog — EverQuest Log Parser
 
+[![CI](https://github.com/ryhoneyman/froklog/actions/workflows/ci.yml/badge.svg)](https://github.com/ryhoneyman/froklog/actions/workflows/ci.yml)
+
 Real-time EQ combat stats: Windows tray client + embedded web server (Axum).
 
 ## Architecture
