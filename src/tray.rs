@@ -5,12 +5,12 @@
 /// co-ordinated through the `AppHandle` passed in from main.
 #[cfg(feature = "tray")]
 pub mod tray {
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use tray_icon::{
-        TrayIconBuilder, TrayIconEvent,
         menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+        TrayIconBuilder, TrayIconEvent,
     };
     use winit::event_loop::{ControlFlow, EventLoop};
 
@@ -18,28 +18,28 @@ pub mod tray {
 
     // ── Menu item IDs ─────────────────────────────────────────────────────────
 
-    const ID_PICK_LOG:      &str = "pick_log";
-    const ID_REGISTER:      &str = "register";
-    const ID_RESET_TOKEN:   &str = "reset_token";
-    const ID_COPY_VIEWER:   &str = "copy_viewer";
-    const ID_STATUS:        &str = "status";
-    const ID_QUIT:          &str = "quit";
+    const ID_PICK_LOG: &str = "pick_log";
+    const ID_REGISTER: &str = "register";
+    const ID_RESET_TOKEN: &str = "reset_token";
+    const ID_COPY_VIEWER: &str = "copy_viewer";
+    const ID_STATUS: &str = "status";
+    const ID_QUIT: &str = "quit";
 
     /// Shared state between the tray event loop and the background engine.
     pub struct AppHandle {
-        pub config:    Arc<Mutex<Config>>,
+        pub config: Arc<Mutex<Config>>,
         /// Set to true when the engine should restart (new log file / token).
-        pub restart:   Arc<AtomicBool>,
+        pub restart: Arc<AtomicBool>,
         /// Set to true to request a clean shutdown.
-        pub quit:      Arc<AtomicBool>,
+        pub quit: Arc<AtomicBool>,
     }
 
     impl AppHandle {
         pub fn new(config: Config) -> Self {
             Self {
-                config:  Arc::new(Mutex::new(config)),
+                config: Arc::new(Mutex::new(config)),
                 restart: Arc::new(AtomicBool::new(false)),
-                quit:    Arc::new(AtomicBool::new(false)),
+                quit: Arc::new(AtomicBool::new(false)),
             }
         }
     }
@@ -170,13 +170,14 @@ pub mod tray {
     fn build_tray(cfg: &Config) -> (tray_icon::TrayIcon, Menu) {
         let menu = Menu::new();
 
-        let status_item   = MenuItem::with_id(ID_STATUS,       "Status…",                    true, None);
-        let pick_item     = MenuItem::with_id(ID_PICK_LOG,     "Pick log file…",             true, None);
-        let register_item = MenuItem::with_id(ID_REGISTER,     "Register with server…",      true, None);
-        let reset_item    = MenuItem::with_id(ID_RESET_TOKEN,  "Re-register / Reset token…", true, None);
-        let copy_item     = MenuItem::with_id(ID_COPY_VIEWER,  "Copy viewer URL",            true, None);
-        let sep           = PredefinedMenuItem::separator();
-        let quit_item     = MenuItem::with_id(ID_QUIT,         "Quit",                       true, None);
+        let status_item = MenuItem::with_id(ID_STATUS, "Status…", true, None);
+        let pick_item = MenuItem::with_id(ID_PICK_LOG, "Pick log file…", true, None);
+        let register_item = MenuItem::with_id(ID_REGISTER, "Register with server…", true, None);
+        let reset_item =
+            MenuItem::with_id(ID_RESET_TOKEN, "Re-register / Reset token…", true, None);
+        let copy_item = MenuItem::with_id(ID_COPY_VIEWER, "Copy viewer URL", true, None);
+        let sep = PredefinedMenuItem::separator();
+        let quit_item = MenuItem::with_id(ID_QUIT, "Quit", true, None);
 
         menu.append(&status_item).unwrap();
         menu.append(&pick_item).unwrap();
@@ -186,7 +187,7 @@ pub mod tray {
         menu.append(&sep).unwrap();
         menu.append(&quit_item).unwrap();
 
-        let icon    = make_icon(cfg);
+        let icon = make_icon(cfg);
         let tooltip = make_tooltip(cfg);
 
         let tray = TrayIconBuilder::new()
@@ -200,7 +201,9 @@ pub mod tray {
     }
 
     fn make_tooltip(cfg: &Config) -> String {
-        let log = cfg.log_path.as_deref()
+        let log = cfg
+            .log_path
+            .as_deref()
             .and_then(|p| std::path::Path::new(p).file_name()?.to_str())
             .unwrap_or("no log");
         if cfg.is_registered() {
@@ -226,9 +229,9 @@ pub mod tray {
     ///   gray   = not configured
     fn make_icon(cfg: &Config) -> tray_icon::Icon {
         let (r, g, b): (u8, u8, u8) = if cfg.is_registered() {
-            (60, 200, 80)   // green
+            (60, 200, 80) // green
         } else if cfg.log_path.is_some() {
-            (220, 160, 30)  // amber
+            (220, 160, 30) // amber
         } else {
             (110, 110, 120) // gray
         };
@@ -244,7 +247,7 @@ pub mod tray {
                 let dy = y as f32 - cy;
                 if dx * dx + dy * dy <= radius * radius {
                     let idx = (y * SIZE + x) * 4;
-                    rgba[idx]     = r;
+                    rgba[idx] = r;
                     rgba[idx + 1] = g;
                     rgba[idx + 2] = b;
                     rgba[idx + 3] = 255;
@@ -260,19 +263,17 @@ pub mod tray {
     fn pick_log_file() -> Option<String> {
         #[cfg(target_os = "windows")]
         {
-            use windows::Win32::UI::Shell::SHBrowseForFolderW;
             use std::ffi::OsStr;
             use std::os::windows::ffi::OsStrExt;
+            use windows::Win32::UI::Shell::SHBrowseForFolderW;
 
             // Use the simpler GetOpenFileName (OPENFILENAMEW) approach.
-            use windows::Win32::UI::Shell::Common::ITEMIDLIST;
             use windows::core::PCWSTR;
+            use windows::Win32::UI::Shell::Common::ITEMIDLIST;
             use windows::Win32::UI::WindowsAndMessaging::*;
 
             // Build a wide-char filter string: "Log files\0*.txt\0\0"
-            let filter: Vec<u16> = OsStr::new("Log files\0*.txt\0\0")
-                .encode_wide()
-                .collect();
+            let filter: Vec<u16> = OsStr::new("Log files\0*.txt\0\0").encode_wide().collect();
 
             let mut buf = vec![0u16; 1024];
 
@@ -300,7 +301,11 @@ pub mod tray {
             let mut s = String::new();
             std::io::stdin().read_line(&mut s).ok();
             let s = s.trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         }
     }
 
@@ -353,11 +358,16 @@ pub mod tray {
         // Determine player name from the currently configured log file.
         let player_name = {
             let cfg = config.lock().unwrap();
-            cfg.log_path.as_deref()
+            cfg.log_path
+                .as_deref()
                 .and_then(|p| {
                     let stem = std::path::Path::new(p).file_stem()?.to_str()?;
                     let parts: Vec<&str> = stem.split('_').collect();
-                    if parts.len() >= 3 { Some(parts[1].to_string()) } else { None }
+                    if parts.len() >= 3 {
+                        Some(parts[1].to_string())
+                    } else {
+                        None
+                    }
                 })
                 .unwrap_or_else(|| "Unknown".into())
         };
@@ -365,12 +375,12 @@ pub mod tray {
         // Clear old stream credentials if this is a reset.
         if reset {
             let mut cfg = config.lock().unwrap();
-            cfg.stream_id    = None;
+            cfg.stream_id = None;
             cfg.stream_token = None;
-            cfg.view_token   = None;
+            cfg.view_token = None;
         }
 
-        let url  = format!("{server_url}/stream");
+        let url = format!("{server_url}/stream");
         let body = format!(r#"{{"player":"{player_name}"}}"#);
         let resp = blocking_post_json(&url, &admin_token, &body)?;
 
@@ -382,15 +392,24 @@ pub mod tray {
             return Err(format!("Server error: {err}"));
         }
 
-        let stream_id    = v["stream_id"]   .as_str().ok_or("missing stream_id")?   .to_string();
-        let stream_token = v["stream_token"].as_str().ok_or("missing stream_token")?.to_string();
-        let view_token   = v["view_token"]  .as_str().ok_or("missing view_token")?  .to_string();
+        let stream_id = v["stream_id"]
+            .as_str()
+            .ok_or("missing stream_id")?
+            .to_string();
+        let stream_token = v["stream_token"]
+            .as_str()
+            .ok_or("missing stream_token")?
+            .to_string();
+        let view_token = v["view_token"]
+            .as_str()
+            .ok_or("missing view_token")?
+            .to_string();
 
         let mut cfg = config.lock().unwrap();
-        cfg.server_url   = Some(server_url);
-        cfg.stream_id    = Some(stream_id);
+        cfg.server_url = Some(server_url);
+        cfg.stream_id = Some(stream_id);
         cfg.stream_token = Some(stream_token);
-        cfg.view_token   = Some(view_token);
+        cfg.view_token = Some(view_token);
         cfg.save();
 
         Ok(())
@@ -412,7 +431,11 @@ pub mod tray {
             .map(|(h, p)| (h, format!("/{p}")))
             .unwrap_or((without_scheme, "/".to_string()));
 
-        let default_port = if url.starts_with("https") { "443" } else { "80" };
+        let default_port = if url.starts_with("https") {
+            "443"
+        } else {
+            "80"
+        };
         let addr = if hostport.contains(':') {
             hostport.to_string()
         } else {
@@ -433,17 +456,21 @@ pub mod tray {
             len = body.len()
         );
 
-        let mut stream = TcpStream::connect(&addr)
-            .map_err(|e| format!("Cannot connect to {addr}: {e}"))?;
-        stream.write_all(request.as_bytes())
+        let mut stream =
+            TcpStream::connect(&addr).map_err(|e| format!("Cannot connect to {addr}: {e}"))?;
+        stream
+            .write_all(request.as_bytes())
             .map_err(|e| format!("Write error: {e}"))?;
 
         let mut raw = String::new();
-        stream.read_to_string(&mut raw)
+        stream
+            .read_to_string(&mut raw)
             .map_err(|e| format!("Read error: {e}"))?;
 
         // Split off the HTTP headers from the body.
-        let body = raw.split("\r\n\r\n").nth(1)
+        let body = raw
+            .split("\r\n\r\n")
+            .nth(1)
             .ok_or_else(|| "Malformed HTTP response".to_string())?;
 
         Ok(body.to_string())
@@ -462,7 +489,10 @@ pub mod tray {
             // Temporarily re-enable the console for input.
             use std::io::BufRead;
             let stdin = std::io::stdin();
-            stdin.lock().lines().next()
+            stdin
+                .lock()
+                .lines()
+                .next()
                 .and_then(|l| l.ok())
                 .filter(|s| !s.is_empty())
         }
@@ -472,7 +502,11 @@ pub mod tray {
             let mut s = String::new();
             std::io::stdin().read_line(&mut s).ok();
             let s = s.trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         }
     }
 
@@ -482,10 +516,10 @@ pub mod tray {
         {
             use windows::core::PCSTR;
             use windows::Win32::UI::WindowsAndMessaging::{
-                MessageBoxA, MB_YESNO, MB_ICONWARNING, HWND_DESKTOP, IDYES,
+                MessageBoxA, HWND_DESKTOP, IDYES, MB_ICONWARNING, MB_YESNO,
             };
             let title_c = std::ffi::CString::new(title).unwrap_or_default();
-            let msg_c   = std::ffi::CString::new(msg).unwrap_or_default();
+            let msg_c = std::ffi::CString::new(msg).unwrap_or_default();
             let result = unsafe {
                 MessageBoxA(
                     HWND_DESKTOP,
@@ -510,9 +544,11 @@ pub mod tray {
         #[cfg(target_os = "windows")]
         {
             use windows::core::PCSTR;
-            use windows::Win32::UI::WindowsAndMessaging::{MessageBoxA, MB_OK, MB_ICONINFORMATION, HWND_DESKTOP};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                MessageBoxA, HWND_DESKTOP, MB_ICONINFORMATION, MB_OK,
+            };
             let title_c = std::ffi::CString::new(title).unwrap_or_default();
-            let msg_c   = std::ffi::CString::new(msg).unwrap_or_default();
+            let msg_c = std::ffi::CString::new(msg).unwrap_or_default();
             unsafe {
                 MessageBoxA(
                     HWND_DESKTOP,
@@ -532,9 +568,11 @@ pub mod tray {
         #[cfg(target_os = "windows")]
         {
             use windows::core::PCSTR;
-            use windows::Win32::UI::WindowsAndMessaging::{MessageBoxA, MB_OK, MB_ICONERROR, HWND_DESKTOP};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                MessageBoxA, HWND_DESKTOP, MB_ICONERROR, MB_OK,
+            };
             let title_c = std::ffi::CString::new(title).unwrap_or_default();
-            let msg_c   = std::ffi::CString::new(msg).unwrap_or_default();
+            let msg_c = std::ffi::CString::new(msg).unwrap_or_default();
             unsafe {
                 MessageBoxA(
                     HWND_DESKTOP,
@@ -557,9 +595,11 @@ pub mod tray {
             use windows::Win32::System::DataExchange::{
                 CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
             };
-            use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-            use windows::Win32::UI::WindowsAndMessaging::HWND_DESKTOP;
+            use windows::Win32::System::Memory::{
+                GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+            };
             use windows::Win32::System::Ole::CF_TEXT;
+            use windows::Win32::UI::WindowsAndMessaging::HWND_DESKTOP;
 
             unsafe {
                 if OpenClipboard(HWND_DESKTOP).is_ok() {
@@ -573,7 +613,10 @@ pub mod tray {
                             *ptr.add(bytes.len()) = 0;
                             GlobalUnlock(hglob);
                         }
-                        let _ = SetClipboardData(CF_TEXT.0 as u32, windows::Win32::Foundation::HANDLE(hglob.0));
+                        let _ = SetClipboardData(
+                            CF_TEXT.0 as u32,
+                            windows::Win32::Foundation::HANDLE(hglob.0),
+                        );
                     }
                     let _ = CloseClipboard();
                 }

@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 /// froklog-replay — CLI tool for streaming a saved EQ log file to a froklog-server.
 ///
 /// Runs the same tailer → parser → pusher pipeline as the Windows client but
@@ -21,9 +22,7 @@
 ///     --from "2024-01-15 19:30:00" \
 ///     --to   "2024-01-15 20:00:00" \
 ///     --speed 10.0
-
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -121,7 +120,10 @@ fn main() {
     let (stream_id, stream_token) = match &args.admin_token {
         Some(admin_token) => {
             if player_name.is_empty() {
-                eprintln!("error: could not extract player name from log filename \"{}\"", args.log);
+                eprintln!(
+                    "error: could not extract player name from log filename \"{}\"",
+                    args.log
+                );
                 eprintln!("       Expected format: eqlog_<PlayerName>_<Server>.txt");
                 std::process::exit(1);
             }
@@ -141,74 +143,87 @@ fn main() {
     };
 
     let from = args.from.as_deref().map(|s| parse_datetime(s, "--from"));
-    let to   = args.to  .as_deref().map(|s| parse_datetime(s, "--to"));
+    let to = args.to.as_deref().map(|s| parse_datetime(s, "--to"));
 
     let tail_from = match from {
         Some(dt) => TailFrom::Date(dt),
-        None     => TailFrom::Start,
+        None => TailFrom::Start,
     };
 
     let tail_config = TailConfig {
-        from:  tail_from,
-        to:    if args.dump { None } else { to },
+        from: tail_from,
+        to: if args.dump { None } else { to },
         speed: if args.dump { None } else { Some(args.speed) },
-        dump:  args.dump,
+        dump: args.dump,
     };
 
     let push_url = {
         let base = args.server.trim_end_matches('/');
         let ws_base = base
             .replacen("https://", "wss://", 1)
-            .replacen("http://",  "ws://",  1);
+            .replacen("http://", "ws://", 1);
         format!("{ws_base}/ingest/{stream_id}")
     };
 
     info!("Replaying: {}", args.log);
     info!("Push URL:  {push_url}");
-    if let Some(ref t) = to { info!("Range:     {:?} → {t}", args.from); }
+    if let Some(ref t) = to {
+        info!("Range:     {:?} → {t}", args.from);
+    }
     info!("Speed:     {}×", args.speed);
     info!("Player:    {player_name}");
 
     let done = Arc::new(AtomicBool::new(false));
 
-    let shared     = Arc::new(ArcSwap::from_pointee(CombatState::default()));
+    let shared = Arc::new(ArcSwap::from_pointee(CombatState::default()));
     let reset_flag = Arc::new(AtomicBool::new(false));
     let (broadcast_tx, _) = broadcast::channel::<Arc<CombatState>>(64);
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (line_tx, line_rx)   = bounded::<String>(4096);
+    let (line_tx, line_rx) = bounded::<String>(4096);
 
     // Tailer — exits naturally when the replay window is exhausted.
     {
-        let path   = args.log.clone();
-        let done2  = Arc::clone(&done);
-        thread::Builder::new().name("eq-tailer".into()).spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("tailer rt");
-            rt.block_on(tailer::tail(path, tail_config, line_tx));
-            done2.store(true, Ordering::Relaxed);
-        }).expect("spawn tailer");
+        let path = args.log.clone();
+        let done2 = Arc::clone(&done);
+        thread::Builder::new()
+            .name("eq-tailer".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("tailer rt");
+                rt.block_on(tailer::tail(path, tail_config, line_tx));
+                done2.store(true, Ordering::Relaxed);
+            })
+            .expect("spawn tailer");
     }
 
     // Parser
     {
         let shared2 = Arc::clone(&shared);
-        let reset2  = Arc::clone(&reset_flag);
-        let btx     = broadcast_tx.clone();
-        let pname   = player_name.clone();
-        thread::Builder::new().name("eq-parser".into())
+        let reset2 = Arc::clone(&reset_flag);
+        let btx = broadcast_tx.clone();
+        let pname = player_name.clone();
+        thread::Builder::new()
+            .name("eq-parser".into())
             .spawn(move || parser::run(line_rx, shared2, reset2, btx, event_tx, pname))
             .expect("spawn parser");
     }
 
     // Pusher
     {
-        let url   = push_url.clone();
+        let url = push_url.clone();
         let token = stream_token.clone();
-        thread::Builder::new().name("eq-pusher".into()).spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all().build().expect("pusher rt");
-            rt.block_on(pusher::push_to_server(url, token, event_rx));
-        }).expect("spawn pusher");
+        thread::Builder::new()
+            .name("eq-pusher".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("pusher rt");
+                rt.block_on(pusher::push_to_server(url, token, event_rx));
+            })
+            .expect("spawn pusher");
     }
 
     // Wait for the tailer to finish replaying.
@@ -250,11 +265,7 @@ fn register_stream(server: &str, admin_token: &str, player: &str) -> (String, St
         std::process::exit(1);
     });
 
-    let view_url = format!(
-        "{}{}",
-        server.trim_end_matches('/'),
-        reg.view_path
-    );
+    let view_url = format!("{}{}", server.trim_end_matches('/'), reg.view_path);
 
     eprintln!("─────────────────────────────────────────────");
     eprintln!("  Stream registered for player: {player}");
@@ -268,12 +279,11 @@ fn register_stream(server: &str, admin_token: &str, player: &str) -> (String, St
 }
 
 fn parse_datetime(s: &str, flag: &str) -> NaiveDateTime {
-    NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .unwrap_or_else(|e| {
-            eprintln!("Invalid datetime for {flag} \"{s}\": {e}");
-            eprintln!("Expected format: YYYY-MM-DD HH:MM:SS");
-            std::process::exit(1);
-        })
+    NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap_or_else(|e| {
+        eprintln!("Invalid datetime for {flag} \"{s}\": {e}");
+        eprintln!("Expected format: YYYY-MM-DD HH:MM:SS");
+        std::process::exit(1);
+    })
 }
 
 fn extract_player_name(path: &str) -> String {

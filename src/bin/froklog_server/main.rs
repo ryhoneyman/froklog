@@ -92,7 +92,11 @@ async fn main() {
     // previously-created stream we can restore (journal already on disk).
     load_persisted_streams(&data_dir, &registry).await;
 
-    let state = ServerState { registry, data_dir, admin_token };
+    let state = ServerState {
+        registry,
+        data_dir,
+        admin_token,
+    };
 
     let cors = CorsLayer::new().allow_origin(Any);
 
@@ -122,9 +126,12 @@ async fn main() {
         .await
         .expect("bind server");
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .expect("server");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("server");
 }
 
 // ── Stream creation ───────────────────────────────────────────────────────────
@@ -253,14 +260,18 @@ struct StreamMeta {
 }
 
 async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedRegistry) {
-    let Ok(entries) = std::fs::read_dir(data_dir) else { return };
+    let Ok(entries) = std::fs::read_dir(data_dir) else {
+        return;
+    };
     let mut loaded = 0usize;
     for entry in entries.flatten() {
         let meta_path = entry.path().join("meta.json");
         if !meta_path.exists() {
             continue;
         }
-        let Ok(raw) = std::fs::read_to_string(&meta_path) else { continue };
+        let Ok(raw) = std::fs::read_to_string(&meta_path) else {
+            continue;
+        };
         let Ok(meta) = serde_json::from_str::<StreamMeta>(&raw) else {
             tracing::warn!("Skipping malformed meta at {}", meta_path.display());
             continue;
@@ -275,12 +286,18 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
             Ok(entry) => {
                 registry.write().await.insert(entry);
                 loaded += 1;
-                info!("Restored stream {} (player: {})", meta.stream_id, meta.player);
+                info!(
+                    "Restored stream {} (player: {})",
+                    meta.stream_id, meta.player
+                );
             }
             Err(e) => {
                 tracing::warn!("Failed to restore stream {}: {e}", meta.stream_id);
             }
         }
     }
-    info!("Loaded {loaded} persisted stream(s) from {}", data_dir.display());
+    info!(
+        "Loaded {loaded} persisted stream(s) from {}",
+        data_dir.display()
+    );
 }

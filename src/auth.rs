@@ -36,7 +36,11 @@ mod tests {
     #[test]
     fn token_all_lowercase_hex() {
         let t = generate_token();
-        assert!(t.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()), "token: {t}");
+        assert!(
+            t.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+            "token: {t}"
+        );
     }
     #[test]
     fn tokens_match_same_length_different_content() {

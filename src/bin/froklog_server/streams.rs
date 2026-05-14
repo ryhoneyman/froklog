@@ -74,11 +74,16 @@ pub struct StreamRegistry {
 
 impl StreamRegistry {
     pub fn new(data_dir: PathBuf) -> Self {
-        Self { by_id: HashMap::new(), token_to_id: HashMap::new(), data_dir }
+        Self {
+            by_id: HashMap::new(),
+            token_to_id: HashMap::new(),
+            data_dir,
+        }
     }
 
     pub fn insert(&mut self, entry: StreamEntry) {
-        self.token_to_id.insert(entry.stream_token.clone(), entry.stream_id.clone());
+        self.token_to_id
+            .insert(entry.stream_token.clone(), entry.stream_id.clone());
         self.by_id.insert(entry.stream_id.clone(), entry);
     }
 
@@ -104,8 +109,15 @@ impl StreamRegistry {
     }
 
     pub fn list(&self) -> Vec<(&str, &str, bool)> {
-        self.by_id.values()
-            .map(|e| (e.stream_id.as_str(), e.player_name.as_str(), e.client_connected.load(Ordering::Relaxed)))
+        self.by_id
+            .values()
+            .map(|e| {
+                (
+                    e.stream_id.as_str(),
+                    e.player_name.as_str(),
+                    e.client_connected.load(Ordering::Relaxed),
+                )
+            })
             .collect()
     }
 }

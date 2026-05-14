@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -9,15 +9,16 @@ use crossbeam_channel::Receiver;
 use tokio::sync::{broadcast, mpsc};
 use tracing::trace;
 
-use crate::event::{CombatEvent, MODS_CRIT, MODS_TWINCAST, MODS_LUCKY, MODS_RAMPAGE,
-    MODS_STRIKETHROUGH, MODS_RIPOSTE_MOD, MODS_ASSASSINATE, MODS_HEADSHOT,
-    MODS_SLAY_UNDEAD, MODS_DOUBLEBOW, MODS_FLURRY};
+use crate::event::{
+    CombatEvent, MODS_ASSASSINATE, MODS_CRIT, MODS_DOUBLEBOW, MODS_FLURRY, MODS_HEADSHOT,
+    MODS_LUCKY, MODS_RAMPAGE, MODS_RIPOSTE_MOD, MODS_SLAY_UNDEAD, MODS_STRIKETHROUGH,
+    MODS_TWINCAST,
+};
 use crate::patterns::{
-    TS_LEN, norm, normalize_article_case, normalize_verb, normalize_miss,
-    RE_HIT_BY_SPELL, RE_MELEE, RE_SPELL_ATTR, RE_SPELL_HIT, RE_DOT,
-    RE_RIPOSTE, RE_DS, RE_DS_PROC, RE_CAST, RE_HEAL, RE_HAS_TAKEN, RE_EXTRA_DMG,
-    RE_SLAY_HAS, RE_SLAY_YOU, RE_SLAIN_BY, RE_DIED,
-    RE_MISS, RE_ABSORB_SKIN, RE_ABSORB_RUNE, RE_RESIST, RE_WHO, parse_who_classes,
+    norm, normalize_article_case, normalize_miss, normalize_verb, parse_who_classes,
+    RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_DIED, RE_DOT, RE_DS, RE_DS_PROC, RE_EXTRA_DMG,
+    RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE, RE_SLAIN_BY,
+    RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
 use crate::state::{CombatState, EntityCombatStats, MobSighting};
 
@@ -27,20 +28,43 @@ use crate::state::{CombatState, EntityCombatStats, MobSighting};
 fn parse_mods(suffix: &str) -> u16 {
     let text = suffix.trim_matches(|c| c == '(' || c == ')').trim();
     let mut mods = 0u16;
-    if text.contains("Critical") || text.contains("Deadly Strike")
-        || text.contains("Crippling Blow") || text.contains("Finishing Blow") {
+    if text.contains("Critical")
+        || text.contains("Deadly Strike")
+        || text.contains("Crippling Blow")
+        || text.contains("Finishing Blow")
+    {
         mods |= MODS_CRIT;
     }
-    if text.contains("Twincast")      { mods |= MODS_TWINCAST; }
-    if text.contains("Lucky")         { mods |= MODS_LUCKY; }
-    if text.contains("Rampage")       { mods |= MODS_RAMPAGE; }
-    if text.contains("Strikethrough") { mods |= MODS_STRIKETHROUGH; }
-    if text.contains("Riposte")       { mods |= MODS_RIPOSTE_MOD; }
-    if text.contains("Assassinate")   { mods |= MODS_ASSASSINATE; }
-    if text.contains("Headshot")      { mods |= MODS_HEADSHOT; }
-    if text.contains("Slay Undead")   { mods |= MODS_SLAY_UNDEAD; }
-    if text.contains("Double Bow Shot") { mods |= MODS_DOUBLEBOW; }
-    if text.contains("Flurry")        { mods |= MODS_FLURRY; }
+    if text.contains("Twincast") {
+        mods |= MODS_TWINCAST;
+    }
+    if text.contains("Lucky") {
+        mods |= MODS_LUCKY;
+    }
+    if text.contains("Rampage") {
+        mods |= MODS_RAMPAGE;
+    }
+    if text.contains("Strikethrough") {
+        mods |= MODS_STRIKETHROUGH;
+    }
+    if text.contains("Riposte") {
+        mods |= MODS_RIPOSTE_MOD;
+    }
+    if text.contains("Assassinate") {
+        mods |= MODS_ASSASSINATE;
+    }
+    if text.contains("Headshot") {
+        mods |= MODS_HEADSHOT;
+    }
+    if text.contains("Slay Undead") {
+        mods |= MODS_SLAY_UNDEAD;
+    }
+    if text.contains("Double Bow Shot") {
+        mods |= MODS_DOUBLEBOW;
+    }
+    if text.contains("Flurry") {
+        mods |= MODS_FLURRY;
+    }
     mods
 }
 
@@ -62,7 +86,6 @@ fn strip_mods(line: &str) -> (&str, u16) {
     (trimmed, 0)
 }
 
-
 pub fn run(
     rx: Receiver<String>,
     shared: Arc<ArcSwap<CombatState>>,
@@ -71,7 +94,10 @@ pub fn run(
     event_tx: mpsc::UnboundedSender<CombatEvent>,
     player_name: String,
 ) {
-    let mut state = CombatState { player_name: player_name.clone(), ..Default::default() };
+    let mut state = CombatState {
+        player_name: player_name.clone(),
+        ..Default::default()
+    };
 
     let mut spell_caster: HashMap<String, String> = HashMap::new();
     let mut mob_candidates: HashMap<String, HashSet<String>> = HashMap::new();
@@ -85,7 +111,12 @@ pub fn run(
             let lines = state.lines_parsed;
             let player = state.player_name.clone();
             let player_classes = std::mem::take(&mut state.player_classes);
-            state = CombatState { lines_parsed: lines, player_name: player, player_classes, ..Default::default() };
+            state = CombatState {
+                lines_parsed: lines,
+                player_name: player,
+                player_classes,
+                ..Default::default()
+            };
             spell_caster.clear();
             mob_candidates.clear();
             publish(&shared, &broadcast_tx, &state);
@@ -96,7 +127,12 @@ pub fn run(
 
         let line = if raw_line.len() > TS_LEN && raw_line.starts_with('[') {
             if let Some(dt) = crate::tailer::parse_eq_timestamp(&raw_line) {
-                state.last_log_time = format!("{} {:02}:{:02}", dt.format("%b %-d"), dt.hour(), dt.minute());
+                state.last_log_time = format!(
+                    "{} {:02}:{:02}",
+                    dt.format("%b %-d"),
+                    dt.hour(),
+                    dt.minute()
+                );
                 // Treat the naive log datetime as-is (no timezone conversion).
                 // The log records local streamer time with no offset, so we
                 // store it as a "fake UTC" unix timestamp and display it as
@@ -139,33 +175,63 @@ pub fn run(
                     state.confirmed_mobs.insert(src.clone());
                 }
                 let mob_id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state.mob_tanking.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let tank = state
+                    .mob_tanking
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 tank.total_damage += dmg;
                 *tank.damage_by_type.entry("hit".to_owned()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Spell {
-                    ts: current_ts, mob: mob_id as u32,
-                    src, tgt, dmg: dmg as u32, sp: spell, tank: true, mods,
-                });
+                emit(
+                    &event_tx,
+                    CombatEvent::Spell {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src,
+                        tgt,
+                        dmg: dmg as u32,
+                        sp: spell,
+                        tank: true,
+                        mods,
+                    },
+                );
             } else {
                 // Player spell hitting a mob — record as player damage.
                 state.known_players.insert(src.clone());
                 let stats = entity_stats(&mut state, &src);
                 stats.total_damage += dmg;
                 *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                if mods & MODS_CRIT != 0      { stats.crit_count += 1; }
-                if mods & MODS_TWINCAST != 0  { stats.twincast_count += 1; }
+                if mods & MODS_CRIT != 0 {
+                    stats.crit_count += 1;
+                }
+                if mods & MODS_TWINCAST != 0 {
+                    stats.twincast_count += 1;
+                }
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state.mob_damage.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 mob_p.total_damage += dmg;
                 *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Spell {
-                    ts: current_ts, mob: mob_id as u32,
-                    src, tgt, dmg: dmg as u32, sp: spell, tank: false, mods,
-                });
+                emit(
+                    &event_tx,
+                    CombatEvent::Spell {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src,
+                        tgt,
+                        dmg: dmg as u32,
+                        sp: spell,
+                        tank: false,
+                        mods,
+                    },
+                );
             }
             touch_fight_start(&mut state);
             matched = true;
@@ -186,7 +252,8 @@ pub fn run(
             // However, if src is a confirmed player (in known_players), always treat as player
             // regardless of verb — some procs/items produce a bare "hit" line from players.
             let src_is_mob = !state.known_players.contains(&src)
-                && (verb == "hit" || verb == "hits"
+                && (verb == "hit"
+                    || verb == "hits"
                     || src.contains(' ')
                     || state.confirmed_mobs.contains(&src)
                     || mob_candidates.contains_key(src.as_str())
@@ -196,14 +263,27 @@ pub fn run(
             if src_is_mob {
                 // Tanking: mob (src) damages player (tgt)
                 let mob_id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state.mob_tanking.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let tank = state
+                    .mob_tanking
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 tank.total_damage += dmg;
                 *tank.damage_by_type.entry(typ.clone()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Melee {
-                    ts: current_ts, mob: mob_id as u32,
-                    src: src.clone(), tgt, dmg: dmg as u32, typ, tank: true, mods,
-                });
+                emit(
+                    &event_tx,
+                    CombatEvent::Melee {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src: src.clone(),
+                        tgt,
+                        dmg: dmg as u32,
+                        typ,
+                        tank: true,
+                        mods,
+                    },
+                );
                 if !state.known_players.contains(&src) {
                     state.confirmed_mobs.insert(src);
                 }
@@ -213,19 +293,36 @@ pub fn run(
                 let stats = entity_stats(&mut state, &src);
                 stats.total_damage += dmg;
                 *stats.damage_by_type.entry(typ.clone()).or_default() += dmg;
-                if mods & MODS_CRIT != 0      { stats.crit_count += 1; }
-                if mods & MODS_TWINCAST != 0  { stats.twincast_count += 1; }
+                if mods & MODS_CRIT != 0 {
+                    stats.crit_count += 1;
+                }
+                if mods & MODS_TWINCAST != 0 {
+                    stats.twincast_count += 1;
+                }
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state.mob_damage.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 mob_p.total_damage += dmg;
                 *mob_p.damage_by_type.entry(typ.clone()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Melee {
-                    ts: current_ts, mob: mob_id as u32,
-                    src, tgt, dmg: dmg as u32, typ, tank: false, mods,
-                });
+                emit(
+                    &event_tx,
+                    CombatEvent::Melee {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src,
+                        tgt,
+                        dmg: dmg as u32,
+                        typ,
+                        tank: false,
+                        mods,
+                    },
+                );
             }
             touch_fight_start(&mut state);
             matched = true;
@@ -245,8 +342,7 @@ pub fn run(
             // Otherwise we'd create a phantom "Denon" player from a spell name prefix.
             let combined = format!("{}'s {}", raw_src, raw_spell);
             let real_caster_opt = spell_caster.get(&combined).cloned();
-            let is_attributed = real_caster_opt.is_some()
-                || state.known_players.contains(&raw_src);
+            let is_attributed = real_caster_opt.is_some() || state.known_players.contains(&raw_src);
 
             if is_attributed {
                 let (src, spell) = if let Some(real_caster) = real_caster_opt {
@@ -259,19 +355,36 @@ pub fn run(
                 let stats = entity_stats(&mut state, &src);
                 stats.total_damage += dmg;
                 *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                if mods & MODS_CRIT != 0      { stats.crit_count += 1; }
-                if mods & MODS_TWINCAST != 0  { stats.twincast_count += 1; }
+                if mods & MODS_CRIT != 0 {
+                    stats.crit_count += 1;
+                }
+                if mods & MODS_TWINCAST != 0 {
+                    stats.twincast_count += 1;
+                }
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state.mob_damage.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 mob_p.total_damage += dmg;
                 *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Spell {
-                    ts: current_ts, mob: mob_id as u32,
-                    src, tgt, dmg: dmg as u32, sp: spell, tank: false, mods,
-                });
+                emit(
+                    &event_tx,
+                    CombatEvent::Spell {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src,
+                        tgt,
+                        dmg: dmg as u32,
+                        sp: spell,
+                        tank: false,
+                        mods,
+                    },
+                );
             }
 
             touch_fight_start(&mut state);
@@ -286,8 +399,7 @@ pub fn run(
             if let Some(caster) = spell_caster.get(&spell).cloned() {
                 // If the caster is mob-like (multi-word name or already a confirmed mob)
                 // the target is a player being hit by a mob spell — don't track as mob.
-                let caster_is_mob = caster.contains(' ')
-                    || state.confirmed_mobs.contains(&caster);
+                let caster_is_mob = caster.contains(' ') || state.confirmed_mobs.contains(&caster);
 
                 if caster_is_mob {
                     // Confirm the mob caster; ignore the player target for mob tracking.
@@ -299,19 +411,36 @@ pub fn run(
                     let stats = entity_stats(&mut state, &caster);
                     stats.total_damage += dmg;
                     *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                    if mods & MODS_CRIT != 0      { stats.crit_count += 1; }
-                    if mods & MODS_TWINCAST != 0  { stats.twincast_count += 1; }
+                    if mods & MODS_CRIT != 0 {
+                        stats.crit_count += 1;
+                    }
+                    if mods & MODS_TWINCAST != 0 {
+                        stats.twincast_count += 1;
+                    }
 
                     track_mob_candidate(&mut mob_candidates, tgt.clone(), &caster);
                     let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                    let mob_p = state.mob_damage.entry(mob_id).or_default()
-                        .entry(caster.clone()).or_default();
+                    let mob_p = state
+                        .mob_damage
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(caster.clone())
+                        .or_default();
                     mob_p.total_damage += dmg;
                     *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                    emit(&event_tx, CombatEvent::Spell {
-                        ts: current_ts, mob: mob_id as u32,
-                        src: caster, tgt, dmg: dmg as u32, sp: spell, tank: false, mods,
-                    });
+                    emit(
+                        &event_tx,
+                        CombatEvent::Spell {
+                            ts: current_ts,
+                            mob: mob_id as u32,
+                            src: caster,
+                            tgt,
+                            dmg: dmg as u32,
+                            sp: spell,
+                            tank: false,
+                            mods,
+                        },
+                    );
                 }
                 touch_fight_start(&mut state);
                 matched = true;
@@ -329,20 +458,36 @@ pub fn run(
             stats.total_damage += dmg;
             *stats.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
             *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-            if mods & MODS_CRIT != 0      { stats.crit_count += 1; }
-            if mods & MODS_TWINCAST != 0  { stats.twincast_count += 1; }
+            if mods & MODS_CRIT != 0 {
+                stats.crit_count += 1;
+            }
+            if mods & MODS_TWINCAST != 0 {
+                stats.twincast_count += 1;
+            }
 
             track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
             let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-            let mob_p = state.mob_damage.entry(mob_id).or_default()
-                .entry(src.clone()).or_default();
+            let mob_p = state
+                .mob_damage
+                .entry(mob_id)
+                .or_default()
+                .entry(src.clone())
+                .or_default();
             mob_p.total_damage += dmg;
             *mob_p.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
             *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-            emit(&event_tx, CombatEvent::Dot {
-                ts: current_ts, mob: mob_id as u32,
-                src, tgt, dmg: dmg as u32, sp: spell, mods,
-            });
+            emit(
+                &event_tx,
+                CombatEvent::Dot {
+                    ts: current_ts,
+                    mob: mob_id as u32,
+                    src,
+                    tgt,
+                    dmg: dmg as u32,
+                    sp: spell,
+                    mods,
+                },
+            );
 
             touch_fight_start(&mut state);
             matched = true;
@@ -364,31 +509,63 @@ pub fn run(
                     state.confirmed_mobs.insert(src.clone());
                 }
                 let mob_id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state.mob_tanking.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let tank = state
+                    .mob_tanking
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 tank.total_damage += dmg;
                 *tank.damage_by_type.entry("riposte".to_owned()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Spell {
-                    ts: current_ts, mob: mob_id as u32,
-                    src, tgt, dmg: dmg as u32, sp: "riposte".to_owned(), tank: true, mods,
-                });
+                emit(
+                    &event_tx,
+                    CombatEvent::Spell {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src,
+                        tgt,
+                        dmg: dmg as u32,
+                        sp: "riposte".to_owned(),
+                        tank: true,
+                        mods,
+                    },
+                );
             } else {
                 state.known_players.insert(src.clone());
                 let stats = entity_stats(&mut state, &src);
                 stats.total_damage += dmg;
-                *stats.damage_by_type.entry("riposte".to_owned()).or_default() += dmg;
-                if mods & MODS_CRIT != 0 { stats.crit_count += 1; }
+                *stats
+                    .damage_by_type
+                    .entry("riposte".to_owned())
+                    .or_default() += dmg;
+                if mods & MODS_CRIT != 0 {
+                    stats.crit_count += 1;
+                }
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state.mob_damage.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 mob_p.total_damage += dmg;
-                *mob_p.damage_by_type.entry("riposte".to_owned()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Rip {
-                    ts: current_ts, mob: mob_id as u32,
-                    src, tgt, dmg: dmg as u32, mods,
-                });
+                *mob_p
+                    .damage_by_type
+                    .entry("riposte".to_owned())
+                    .or_default() += dmg;
+                emit(
+                    &event_tx,
+                    CombatEvent::Rip {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src,
+                        tgt,
+                        dmg: dmg as u32,
+                        mods,
+                    },
+                );
             }
 
             touch_fight_start(&mut state);
@@ -411,14 +588,27 @@ pub fn run(
                     state.confirmed_mobs.insert(src.clone());
                 }
                 let mob_id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state.mob_tanking.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let tank = state
+                    .mob_tanking
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 tank.total_damage += dmg;
                 *tank.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Spell {
-                    ts: current_ts, mob: mob_id as u32,
-                    src, tgt, dmg: dmg as u32, sp: "ds".to_owned(), tank: true, mods: 0,
-                });
+                emit(
+                    &event_tx,
+                    CombatEvent::Spell {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src,
+                        tgt,
+                        dmg: dmg as u32,
+                        sp: "ds".to_owned(),
+                        tank: true,
+                        mods: 0,
+                    },
+                );
             } else {
                 state.known_players.insert(src.clone());
                 let stats = entity_stats(&mut state, &src);
@@ -427,14 +617,24 @@ pub fn run(
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state.mob_damage.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 mob_p.total_damage += dmg;
                 *mob_p.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
-                emit(&event_tx, CombatEvent::Ds {
-                    ts: current_ts, mob: mob_id as u32,
-                    src, tgt, dmg: dmg as u32,
-                });
+                emit(
+                    &event_tx,
+                    CombatEvent::Ds {
+                        ts: current_ts,
+                        mob: mob_id as u32,
+                        src,
+                        tgt,
+                        dmg: dmg as u32,
+                    },
+                );
             }
 
             touch_fight_start(&mut state);
@@ -457,15 +657,25 @@ pub fn run(
 
             track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
             let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-            let mob_p = state.mob_damage.entry(mob_id).or_default()
-                .entry(src.clone()).or_default();
+            let mob_p = state
+                .mob_damage
+                .entry(mob_id)
+                .or_default()
+                .entry(src.clone())
+                .or_default();
             mob_p.total_damage += dmg;
             *mob_p.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
 
-            emit(&event_tx, CombatEvent::Ds {
-                ts: current_ts, mob: mob_id as u32,
-                src, tgt, dmg: dmg as u32,
-            });
+            emit(
+                &event_tx,
+                CombatEvent::Ds {
+                    ts: current_ts,
+                    mob: mob_id as u32,
+                    src,
+                    tgt,
+                    dmg: dmg as u32,
+                },
+            );
 
             touch_fight_start(&mut state);
             matched = true;
@@ -475,8 +685,17 @@ pub fn run(
             let src = norm(&caps["src"], &player_name);
             let spell = caps["spell"].to_owned();
             spell_caster.insert(spell.clone(), src.clone());
-            state.active_casts.insert(src.clone(), (spell.clone(), Instant::now()));
-            emit(&event_tx, CombatEvent::Cast { ts: current_ts, src, sp: spell });
+            state
+                .active_casts
+                .insert(src.clone(), (spell.clone(), Instant::now()));
+            emit(
+                &event_tx,
+                CombatEvent::Cast {
+                    ts: current_ts,
+                    src,
+                    sp: spell,
+                },
+            );
 
         // ── Kill messages ──────────────────────────────────────────────────────
 
@@ -518,7 +737,11 @@ pub fn run(
                 (Some(player_name.clone()), spell)
             } else if let Some(m) = caps.name("by_src") {
                 let s = m.as_str().trim().trim_end_matches('.');
-                let real_src = if s.is_empty() { None } else { Some(norm(s, &player_name)) };
+                let real_src = if s.is_empty() {
+                    None
+                } else {
+                    Some(norm(s, &player_name))
+                };
                 let full_spell = if let Some(pfx) = caps.name("src") {
                     format!("{}'s {}", pfx.as_str(), spell)
                 } else {
@@ -542,14 +765,27 @@ pub fn run(
                         state.confirmed_mobs.insert(src.clone());
                     }
                     let mob_id = update_mob_list(&mut state, &src, current_ts);
-                    let tank = state.mob_tanking.entry(mob_id).or_default()
-                        .entry(tgt.clone()).or_default();
+                    let tank = state
+                        .mob_tanking
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(tgt.clone())
+                        .or_default();
                     tank.total_damage += dmg;
                     *tank.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
-                    emit(&event_tx, CombatEvent::Spell {
-                        ts: current_ts, mob: mob_id as u32,
-                        src, tgt, dmg: dmg as u32, sp: spell, tank: true, mods,
-                    });
+                    emit(
+                        &event_tx,
+                        CombatEvent::Spell {
+                            ts: current_ts,
+                            mob: mob_id as u32,
+                            src,
+                            tgt,
+                            dmg: dmg as u32,
+                            sp: spell,
+                            tank: true,
+                            mods,
+                        },
+                    );
                 } else {
                     // Player DoT hitting a mob
                     state.known_players.insert(src.clone());
@@ -557,20 +793,36 @@ pub fn run(
                     stats.total_damage += dmg;
                     *stats.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
                     *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                    if mods & MODS_CRIT != 0     { stats.crit_count += 1; }
-                    if mods & MODS_TWINCAST != 0 { stats.twincast_count += 1; }
+                    if mods & MODS_CRIT != 0 {
+                        stats.crit_count += 1;
+                    }
+                    if mods & MODS_TWINCAST != 0 {
+                        stats.twincast_count += 1;
+                    }
 
                     track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                     let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                    let mob_p = state.mob_damage.entry(mob_id).or_default()
-                        .entry(src.clone()).or_default();
+                    let mob_p = state
+                        .mob_damage
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(src.clone())
+                        .or_default();
                     mob_p.total_damage += dmg;
                     *mob_p.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
                     *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-                    emit(&event_tx, CombatEvent::Dot {
-                        ts: current_ts, mob: mob_id as u32,
-                        src, tgt, dmg: dmg as u32, sp: spell, mods,
-                    });
+                    emit(
+                        &event_tx,
+                        CombatEvent::Dot {
+                            ts: current_ts,
+                            mob: mob_id as u32,
+                            src,
+                            tgt,
+                            dmg: dmg as u32,
+                            sp: spell,
+                            mods,
+                        },
+                    );
                 }
                 touch_fight_start(&mut state);
                 matched = true;
@@ -593,19 +845,36 @@ pub fn run(
             let stats = entity_stats(&mut state, &src);
             stats.total_damage += dmg;
             *stats.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-            if mods & MODS_CRIT != 0     { stats.crit_count += 1; }
-            if mods & MODS_TWINCAST != 0 { stats.twincast_count += 1; }
+            if mods & MODS_CRIT != 0 {
+                stats.crit_count += 1;
+            }
+            if mods & MODS_TWINCAST != 0 {
+                stats.twincast_count += 1;
+            }
 
             track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
             let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-            let mob_p = state.mob_damage.entry(mob_id).or_default()
-                .entry(src.clone()).or_default();
+            let mob_p = state
+                .mob_damage
+                .entry(mob_id)
+                .or_default()
+                .entry(src.clone())
+                .or_default();
             mob_p.total_damage += dmg;
             *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
-            emit(&event_tx, CombatEvent::Spell {
-                ts: current_ts, mob: mob_id as u32,
-                src, tgt, dmg: dmg as u32, sp: spell, tank: false, mods,
-            });
+            emit(
+                &event_tx,
+                CombatEvent::Spell {
+                    ts: current_ts,
+                    mob: mob_id as u32,
+                    src,
+                    tgt,
+                    dmg: dmg as u32,
+                    sp: spell,
+                    tank: false,
+                    mods,
+                },
+            );
             touch_fight_start(&mut state);
             matched = true;
 
@@ -617,7 +886,10 @@ pub fn run(
 
             // Track avoidance on the defender (tgt).
             let def_stats = entity_stats(&mut state, &tgt);
-            *def_stats.avoidance_by_type.entry(miss_type.clone()).or_default() += 1;
+            *def_stats
+                .avoidance_by_type
+                .entry(miss_type.clone())
+                .or_default() += 1;
 
             // If src is a mob, also record on mob_tanking avoidance.
             let src_is_mob = src.contains(' ')
@@ -629,17 +901,28 @@ pub fn run(
                     state.confirmed_mobs.insert(src.clone());
                 }
                 let id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state.mob_tanking.entry(id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let tank = state
+                    .mob_tanking
+                    .entry(id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 *tank.avoidance_by_type.entry(miss_type.clone()).or_default() += 1;
                 id
             } else {
                 state.active_mob_id.unwrap_or(0)
             };
 
-            emit(&event_tx, CombatEvent::Miss {
-                ts: current_ts, mob: mob_id as u32, src, tgt, typ: miss_type,
-            });
+            emit(
+                &event_tx,
+                CombatEvent::Miss {
+                    ts: current_ts,
+                    mob: mob_id as u32,
+                    src,
+                    tgt,
+                    typ: miss_type,
+                },
+            );
 
         // ── Absorb: magical skin ("X's magical skin absorbs the damage…") ─────
         } else if let Some(caps) = RE_ABSORB_SKIN.captures(line) {
@@ -650,17 +933,29 @@ pub fn run(
             };
             let src = norm(caps["src"].trim(), &player_name);
             let mob_id = state.active_mob_id.unwrap_or(0);
-            emit(&event_tx, CombatEvent::Absorb {
-                ts: current_ts, mob: mob_id as u32, tgt, src,
-            });
+            emit(
+                &event_tx,
+                CombatEvent::Absorb {
+                    ts: current_ts,
+                    mob: mob_id as u32,
+                    tgt,
+                    src,
+                },
+            );
 
         // ── Absorb: rune shield ("X has shielded itself from N points…") ──────
         } else if let Some(caps) = RE_ABSORB_RUNE.captures(line) {
             let tgt = norm(caps["tgt"].trim(), &player_name);
             let mob_id = state.active_mob_id.unwrap_or(0);
-            emit(&event_tx, CombatEvent::Absorb {
-                ts: current_ts, mob: mob_id as u32, tgt, src: String::new(),
-            });
+            emit(
+                &event_tx,
+                CombatEvent::Absorb {
+                    ts: current_ts,
+                    mob: mob_id as u32,
+                    tgt,
+                    src: String::new(),
+                },
+            );
 
         // ── Spell resist ("NPC resisted your Spell!" / "NPC resisted X's Spell!")
         } else if let Some(caps) = RE_RESIST.captures(line) {
@@ -674,7 +969,15 @@ pub fn run(
             // Track resist count on the caster's stats.
             let stats = entity_stats(&mut state, &src);
             *stats.resists_by_spell.entry(spell.clone()).or_default() += 1;
-            emit(&event_tx, CombatEvent::Resist { ts: current_ts, src, tgt, sp: spell });
+            emit(
+                &event_tx,
+                CombatEvent::Resist {
+                    ts: current_ts,
+                    src,
+                    tgt,
+                    sp: spell,
+                },
+            );
 
         // ── /who player listing ("[65 Warrior Monk Rogue] Name (Race)") ─────────
         } else if let Some(caps) = RE_WHO.captures(line) {
@@ -682,7 +985,14 @@ pub fn run(
             let classes = parse_who_classes(&caps["classes"]);
             if !classes.is_empty() {
                 state.player_classes.insert(name.clone(), classes.clone());
-                emit(&event_tx, CombatEvent::Who { ts: current_ts, name, classes });
+                emit(
+                    &event_tx,
+                    CombatEvent::Who {
+                        ts: current_ts,
+                        name,
+                        classes,
+                    },
+                );
             }
 
         // ── Healing ────────────────────────────────────────────────────────────
@@ -695,8 +1005,14 @@ pub fn run(
                 other => norm(other, &player_name),
             };
             let amt: u64 = caps["amt"].parse().unwrap_or(0);
-            let spell = caps.name("spell")
-                .map(|m| m.as_str().trim_end_matches('.').trim_end_matches(" over time").to_owned())
+            let spell = caps
+                .name("spell")
+                .map(|m| {
+                    m.as_str()
+                        .trim_end_matches('.')
+                        .trim_end_matches(" over time")
+                        .to_owned()
+                })
                 .unwrap_or_else(|| "Unknown".to_owned());
 
             // Global aggregate healing
@@ -705,26 +1021,47 @@ pub fn run(
             *stats.heals_by_spell.entry(spell.clone()).or_default() += amt;
             let tgt_stats = entity_stats(&mut state, &tgt);
             tgt_stats.total_healed_received += amt;
-            *tgt_stats.healed_received_by_spell.entry(spell.clone()).or_default() += amt;
+            *tgt_stats
+                .healed_received_by_spell
+                .entry(spell.clone())
+                .or_default() += amt;
 
             // Per-mob-instance healing attribution
             let active_mob = state.active_mob_id;
             if let Some(mob_id) = active_mob {
-                let heal_stats = state.mob_healing.entry(mob_id).or_default()
-                    .entry(src.clone()).or_default();
+                let heal_stats = state
+                    .mob_healing
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
                 heal_stats.total_heals += amt;
                 *heal_stats.heals_by_spell.entry(spell.clone()).or_default() += amt;
 
-                let healed_stats = state.mob_healed.entry(mob_id).or_default()
-                    .entry(tgt.clone()).or_default();
+                let healed_stats = state
+                    .mob_healed
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(tgt.clone())
+                    .or_default();
                 healed_stats.total_healed_received += amt;
-                *healed_stats.healed_received_by_spell.entry(spell.clone()).or_default() += amt;
+                *healed_stats
+                    .healed_received_by_spell
+                    .entry(spell.clone())
+                    .or_default() += amt;
             }
-            emit(&event_tx, CombatEvent::Heal {
-                ts: current_ts,
-                mob: active_mob.map(|id| id as u32),
-                src, tgt, amt: amt as u32, sp: spell, mods,
-            });
+            emit(
+                &event_tx,
+                CombatEvent::Heal {
+                    ts: current_ts,
+                    mob: active_mob.map(|id| id as u32),
+                    src,
+                    tgt,
+                    amt: amt as u32,
+                    sp: spell,
+                    mods,
+                },
+            );
         }
 
         // Update mob name and confirmed set from candidate tracking.
@@ -739,7 +1076,7 @@ pub fn run(
                 publish(&shared, &broadcast_tx, &state);
                 last_publish = now;
             }
-        } else if state.lines_parsed % 200 == 0 {
+        } else if state.lines_parsed.is_multiple_of(200) {
             shared.store(Arc::new(state.clone()));
         }
     }
@@ -760,17 +1097,29 @@ fn handle_slay(
 ) {
     state.dead_mobs.insert(tgt.clone());
     let all_dead = !state.mob_list.is_empty()
-        && state.mob_list.iter()
+        && state
+            .mob_list
+            .iter()
             .filter(|m| state.confirmed_mobs.contains(&m.name))
             .all(|m| state.dead_mobs.contains(&m.name));
     if all_dead && state.fight_end.is_none() {
         state.fight_end = Some(Instant::now());
     }
-    let mob_id = state.mob_list.iter()
+    let mob_id = state
+        .mob_list
+        .iter()
         .find(|m| m.name == tgt)
         .map(|m| m.id as u32)
         .unwrap_or(0);
-    emit(event_tx, CombatEvent::Slay { ts, mob: mob_id, tgt, killer });
+    emit(
+        event_tx,
+        CombatEvent::Slay {
+            ts,
+            mob: mob_id,
+            tgt,
+            killer,
+        },
+    );
 }
 
 fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> u64 {
@@ -792,26 +1141,46 @@ fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> u64 {
     let was_dead = state.dead_mobs.remove(tgt);
 
     let id = if !was_dead {
-        if let Some(s) = state.mob_list.iter_mut()
+        if let Some(s) = state
+            .mob_list
+            .iter_mut()
             .find(|m| m.name == tgt && now.duration_since(m.last_seen) < GAP)
         {
             s.last_seen = now;
-            if log_ts != 0 { s.last_log_ts = log_ts; }
+            if log_ts != 0 {
+                s.last_log_ts = log_ts;
+            }
             s.id
         } else {
             let id = state.next_mob_id;
             state.next_mob_id += 1;
-            state.mob_list.push(MobSighting { id, name: tgt.to_owned(), first_seen: now, last_seen: now, first_log_ts: log_ts, last_log_ts: log_ts });
+            state.mob_list.push(MobSighting {
+                id,
+                name: tgt.to_owned(),
+                first_seen: now,
+                last_seen: now,
+                first_log_ts: log_ts,
+                last_log_ts: log_ts,
+            });
             id
         }
     } else {
         let id = state.next_mob_id;
         state.next_mob_id += 1;
-        state.mob_list.push(MobSighting { id, name: tgt.to_owned(), first_seen: now, last_seen: now, first_log_ts: log_ts, last_log_ts: log_ts });
+        state.mob_list.push(MobSighting {
+            id,
+            name: tgt.to_owned(),
+            first_seen: now,
+            last_seen: now,
+            first_log_ts: log_ts,
+            last_log_ts: log_ts,
+        });
         id
     };
 
-    state.mob_list.sort_unstable_by(|a, b| b.last_seen.cmp(&a.last_seen));
+    state
+        .mob_list
+        .sort_unstable_by_key(|b| std::cmp::Reverse(b.last_seen));
     state.active_mob_id = Some(id);
     id
 }
@@ -820,11 +1189,7 @@ fn entity_stats<'a>(state: &'a mut CombatState, name: &str) -> &'a mut EntityCom
     state.entities.entry(name.to_owned()).or_default()
 }
 
-fn track_mob_candidate(
-    candidates: &mut HashMap<String, HashSet<String>>,
-    tgt: String,
-    src: &str,
-) {
+fn track_mob_candidate(candidates: &mut HashMap<String, HashSet<String>>, tgt: String, src: &str) {
     candidates.entry(tgt).or_default().insert(src.to_owned());
 }
 
@@ -862,8 +1227,17 @@ fn touch_fight_start(state: &mut CombatState) {
         let now = Local::now();
         state.fight_start_display = format!(
             "{}/{}/{}, {}:{:02}:{:02} {}",
-            now.month(), now.day(), now.year(),
-            { let h = now.hour12().1; if h == 0 { 12 } else { h } },
+            now.month(),
+            now.day(),
+            now.year(),
+            {
+                let h = now.hour12().1;
+                if h == 0 {
+                    12
+                } else {
+                    h
+                }
+            },
             now.minute(),
             now.second(),
             if now.hour() < 12 { "AM" } else { "PM" },
@@ -875,6 +1249,16 @@ fn emit(tx: &mpsc::UnboundedSender<CombatEvent>, ev: CombatEvent) {
     let _ = tx.send(ev);
 }
 
+fn publish(
+    shared: &Arc<ArcSwap<CombatState>>,
+    tx: &broadcast::Sender<Arc<CombatState>>,
+    state: &CombatState,
+) {
+    let snap = Arc::new(state.clone());
+    shared.store(Arc::clone(&snap));
+    let _ = tx.send(snap);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,7 +1266,9 @@ mod tests {
     #[test]
     fn re_melee_comma_name_src() {
         let line = "Innoruuk, the Prince of Hate hits YOU for 170 points of damage.";
-        let caps = RE_MELEE.captures(line).expect("RE_MELEE should match comma-named mob");
+        let caps = RE_MELEE
+            .captures(line)
+            .expect("RE_MELEE should match comma-named mob");
         assert_eq!(caps["src"].trim(), "Innoruuk, the Prince of Hate");
         assert_eq!(&caps["tgt"], "YOU");
         assert_eq!(&caps["dmg"], "170");
@@ -891,14 +1277,18 @@ mod tests {
     #[test]
     fn re_melee_comma_name_bash() {
         let line = "Innoruuk, the Prince of Hate bashes YOU for 136 points of damage.";
-        let caps = RE_MELEE.captures(line).expect("RE_MELEE should match comma-named bash");
+        let caps = RE_MELEE
+            .captures(line)
+            .expect("RE_MELEE should match comma-named bash");
         assert_eq!(caps["src"].trim(), "Innoruuk, the Prince of Hate");
     }
 
     #[test]
     fn re_hit_by_spell_comma_name() {
         let line = "Innoruuk, the Prince of Hate hit Talodar for 100 points of unresistable damage by Avatar Power.";
-        let caps = RE_HIT_BY_SPELL.captures(line).expect("RE_HIT_BY_SPELL should match comma-named mob");
+        let caps = RE_HIT_BY_SPELL
+            .captures(line)
+            .expect("RE_HIT_BY_SPELL should match comma-named mob");
         assert_eq!(caps["src"].trim(), "Innoruuk, the Prince of Hate");
         assert_eq!(&caps["tgt"], "Talodar");
     }
@@ -906,33 +1296,82 @@ mod tests {
     #[test]
     fn re_miss_comma_name() {
         let line = "Innoruuk, the Prince of Hate tries to bash YOU, but YOU dodge!";
-        let caps = RE_MISS.captures(line).expect("RE_MISS should match comma-named mob");
+        let caps = RE_MISS
+            .captures(line)
+            .expect("RE_MISS should match comma-named mob");
         assert_eq!(caps["src"].trim(), "Innoruuk, the Prince of Hate");
     }
 
     #[test]
     fn re_cast_comma_name() {
         let line = "Innoruuk, the Prince of Hate begins casting Avatar Power.";
-        let caps = RE_CAST.captures(line).expect("RE_CAST should match comma-named mob");
+        let caps = RE_CAST
+            .captures(line)
+            .expect("RE_CAST should match comma-named mob");
         assert_eq!(caps["src"].trim(), "Innoruuk, the Prince of Hate");
     }
 
     // ── parse_mods ───────────────────────────────────────────────────────────────
-    #[test] fn parse_mods_empty()       { assert_eq!(parse_mods("()"),                  0); }
-    #[test] fn parse_mods_critical()    { assert_eq!(parse_mods("(Critical)"),           MODS_CRIT); }
-    #[test] fn parse_mods_deadly()      { assert_eq!(parse_mods("(Deadly Strike)"),      MODS_CRIT); }
-    #[test] fn parse_mods_crippling()   { assert_eq!(parse_mods("(Crippling Blow)"),     MODS_CRIT); }
-    #[test] fn parse_mods_finishing()   { assert_eq!(parse_mods("(Finishing Blow)"),     MODS_CRIT); }
-    #[test] fn parse_mods_twincast()    { assert_eq!(parse_mods("(Twincast)"),           MODS_TWINCAST); }
-    #[test] fn parse_mods_lucky()       { assert_eq!(parse_mods("(Lucky)"),              MODS_LUCKY); }
-    #[test] fn parse_mods_rampage()     { assert!(parse_mods("(Rampage)")     & MODS_RAMPAGE     != 0); }
-    #[test] fn parse_mods_strike()      { assert!(parse_mods("(Strikethrough)") & MODS_STRIKETHROUGH != 0); }
-    #[test] fn parse_mods_riposte_mod() { assert!(parse_mods("(Riposte)")    & MODS_RIPOSTE_MOD != 0); }
-    #[test] fn parse_mods_assassinate() { assert!(parse_mods("(Assassinate)") & MODS_ASSASSINATE != 0); }
-    #[test] fn parse_mods_headshot()    { assert!(parse_mods("(Headshot)")   & MODS_HEADSHOT    != 0); }
-    #[test] fn parse_mods_slay_undead() { assert!(parse_mods("(Slay Undead)") & MODS_SLAY_UNDEAD != 0); }
-    #[test] fn parse_mods_doublebow()   { assert!(parse_mods("(Double Bow Shot)") & MODS_DOUBLEBOW != 0); }
-    #[test] fn parse_mods_flurry()      { assert!(parse_mods("(Flurry)")     & MODS_FLURRY      != 0); }
+    #[test]
+    fn parse_mods_empty() {
+        assert_eq!(parse_mods("()"), 0);
+    }
+    #[test]
+    fn parse_mods_critical() {
+        assert_eq!(parse_mods("(Critical)"), MODS_CRIT);
+    }
+    #[test]
+    fn parse_mods_deadly() {
+        assert_eq!(parse_mods("(Deadly Strike)"), MODS_CRIT);
+    }
+    #[test]
+    fn parse_mods_crippling() {
+        assert_eq!(parse_mods("(Crippling Blow)"), MODS_CRIT);
+    }
+    #[test]
+    fn parse_mods_finishing() {
+        assert_eq!(parse_mods("(Finishing Blow)"), MODS_CRIT);
+    }
+    #[test]
+    fn parse_mods_twincast() {
+        assert_eq!(parse_mods("(Twincast)"), MODS_TWINCAST);
+    }
+    #[test]
+    fn parse_mods_lucky() {
+        assert_eq!(parse_mods("(Lucky)"), MODS_LUCKY);
+    }
+    #[test]
+    fn parse_mods_rampage() {
+        assert!(parse_mods("(Rampage)") & MODS_RAMPAGE != 0);
+    }
+    #[test]
+    fn parse_mods_strike() {
+        assert!(parse_mods("(Strikethrough)") & MODS_STRIKETHROUGH != 0);
+    }
+    #[test]
+    fn parse_mods_riposte_mod() {
+        assert!(parse_mods("(Riposte)") & MODS_RIPOSTE_MOD != 0);
+    }
+    #[test]
+    fn parse_mods_assassinate() {
+        assert!(parse_mods("(Assassinate)") & MODS_ASSASSINATE != 0);
+    }
+    #[test]
+    fn parse_mods_headshot() {
+        assert!(parse_mods("(Headshot)") & MODS_HEADSHOT != 0);
+    }
+    #[test]
+    fn parse_mods_slay_undead() {
+        assert!(parse_mods("(Slay Undead)") & MODS_SLAY_UNDEAD != 0);
+    }
+    #[test]
+    fn parse_mods_doublebow() {
+        assert!(parse_mods("(Double Bow Shot)") & MODS_DOUBLEBOW != 0);
+    }
+    #[test]
+    fn parse_mods_flurry() {
+        assert!(parse_mods("(Flurry)") & MODS_FLURRY != 0);
+    }
     #[test]
     fn parse_mods_combined() {
         let m = parse_mods("(Lucky Critical Twincast)");
@@ -954,7 +1393,9 @@ mod tests {
     }
     #[test]
     fn strip_mods_combined() {
-        let (line, mods) = strip_mods("Rysk slashes a goblin for 5000 points of damage. (Lucky Critical Twincast)");
+        let (line, mods) = strip_mods(
+            "Rysk slashes a goblin for 5000 points of damage. (Lucky Critical Twincast)",
+        );
         assert_eq!(line, "Rysk slashes a goblin for 5000 points of damage.");
         assert_eq!(mods, MODS_LUCKY | MODS_CRIT | MODS_TWINCAST);
     }
@@ -985,13 +1426,25 @@ mod tests {
             tx.send(line.to_owned()).unwrap();
         }
         drop(tx);
-        run(rx, Arc::clone(&shared), reset_flag, broadcast_tx, event_tx, player.to_owned());
+        run(
+            rx,
+            Arc::clone(&shared),
+            reset_flag,
+            broadcast_tx,
+            event_tx,
+            player.to_owned(),
+        );
         shared.load_full()
     }
 
     #[test]
     fn integration_melee_player_to_mob() {
-        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 150 points of damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}Rysk slashes a goblin for 150 points of damage."
+            )],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.total_damage, 150);
         assert_eq!(stats.damage_by_type.get("slash"), Some(&150));
@@ -1001,16 +1454,29 @@ mod tests {
 
     #[test]
     fn integration_melee_mob_to_player() {
-        let state = run_lines(&[&format!("{TS}a goblin hits Rysk for 80 points of damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!("{TS}a goblin hits Rysk for 80 points of damage.")],
+            "Rysk",
+        );
         assert!(state.confirmed_mobs.contains("a goblin"));
-        let mob_id = state.mob_list.iter().find(|m| m.name == "a goblin").unwrap().id;
+        let mob_id = state
+            .mob_list
+            .iter()
+            .find(|m| m.name == "a goblin")
+            .unwrap()
+            .id;
         let tanking = state.mob_tanking.get(&mob_id).unwrap();
         assert_eq!(tanking.get("Rysk").unwrap().total_damage, 80);
     }
 
     #[test]
     fn integration_hit_by_spell_player_to_mob() {
-        let state = run_lines(&[&format!("{TS}Rysk hit a goblin for 500 points of magic damage by Fireball.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}Rysk hit a goblin for 500 points of magic damage by Fireball."
+            )],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.total_damage, 500);
         assert_eq!(stats.damage_by_spell.get("Fireball"), Some(&500));
@@ -1018,16 +1484,31 @@ mod tests {
 
     #[test]
     fn integration_hit_by_spell_mob_to_player() {
-        let state = run_lines(&[&format!("{TS}an orc hit Rysk for 200 points of fire damage by Scorchblast.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}an orc hit Rysk for 200 points of fire damage by Scorchblast."
+            )],
+            "Rysk",
+        );
         assert!(state.confirmed_mobs.contains("an orc"));
-        let mob_id = state.mob_list.iter().find(|m| m.name == "an orc").unwrap().id;
+        let mob_id = state
+            .mob_list
+            .iter()
+            .find(|m| m.name == "an orc")
+            .unwrap()
+            .id;
         let tanking = state.mob_tanking.get(&mob_id).unwrap();
         assert_eq!(tanking.get("Rysk").unwrap().total_damage, 200);
     }
 
     #[test]
     fn integration_dot_tick() {
-        let state = run_lines(&[&format!("{TS}a goblin has been damaged by Rysk's Envenomed Bolt for 150 damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}a goblin has been damaged by Rysk's Envenomed Bolt for 150 damage."
+            )],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.total_damage, 150);
         assert_eq!(stats.damage_by_spell.get("Envenomed Bolt"), Some(&150));
@@ -1036,7 +1517,12 @@ mod tests {
 
     #[test]
     fn integration_crit_mods_increments_counters() {
-        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 5000 points of damage. (Lucky Critical Twincast)")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}Rysk slashes a goblin for 5000 points of damage. (Lucky Critical Twincast)"
+            )],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.crit_count, 1);
         assert_eq!(stats.twincast_count, 1);
@@ -1044,57 +1530,75 @@ mod tests {
 
     #[test]
     fn integration_kill_you_have_slain() {
-        let state = run_lines(&[
-            &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
-            &format!("{TS}You have slain a goblin!"),
-        ], "Rysk");
+        let state = run_lines(
+            &[
+                &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
+                &format!("{TS}You have slain a goblin!"),
+            ],
+            "Rysk",
+        );
         assert!(state.dead_mobs.contains("a goblin"));
         assert!(state.fight_end.is_some());
     }
 
     #[test]
     fn integration_kill_x_has_slain() {
-        let state = run_lines(&[
-            &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
-            &format!("{TS}Rysk has slain a skeleton!"),
-        ], "Rysk");
+        let state = run_lines(
+            &[
+                &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
+                &format!("{TS}Rysk has slain a skeleton!"),
+            ],
+            "Rysk",
+        );
         assert!(state.dead_mobs.contains("a skeleton"));
     }
 
     #[test]
     fn integration_kill_slain_by() {
-        let state = run_lines(&[
-            &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
-            &format!("{TS}a skeleton was slain by Rysk!"),
-        ], "Rysk");
+        let state = run_lines(
+            &[
+                &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
+                &format!("{TS}a skeleton was slain by Rysk!"),
+            ],
+            "Rysk",
+        );
         assert!(state.dead_mobs.contains("a skeleton"));
     }
 
     #[test]
     fn integration_kill_died() {
-        let state = run_lines(&[
-            &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
-            &format!("{TS}a skeleton died."),
-        ], "Rysk");
+        let state = run_lines(
+            &[
+                &format!("{TS}Rysk slashes a skeleton for 100 points of damage."),
+                &format!("{TS}a skeleton died."),
+            ],
+            "Rysk",
+        );
         assert!(state.dead_mobs.contains("a skeleton"));
     }
 
     #[test]
     fn integration_article_normalized_on_kill() {
         // "A goblin" at sentence start → should still hit dead_mobs["a goblin"]
-        let state = run_lines(&[
-            &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
-            &format!("{TS}A goblin was slain by Rysk!"),
-        ], "Rysk");
+        let state = run_lines(
+            &[
+                &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
+                &format!("{TS}A goblin was slain by Rysk!"),
+            ],
+            "Rysk",
+        );
         assert!(state.dead_mobs.contains("a goblin"));
     }
 
     #[test]
     fn integration_heal_tracked() {
-        let state = run_lines(&[
-            &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
-            &format!("{TS}Healer healed Rysk for 1500 hit points by Complete Heal."),
-        ], "Rysk");
+        let state = run_lines(
+            &[
+                &format!("{TS}Rysk slashes a goblin for 150 points of damage."),
+                &format!("{TS}Healer healed Rysk for 1500 hit points by Complete Heal."),
+            ],
+            "Rysk",
+        );
         let healer = state.entities.get("Healer").unwrap();
         assert_eq!(healer.total_heals, 1500);
         assert_eq!(healer.heals_by_spell.get("Complete Heal"), Some(&1500));
@@ -1105,18 +1609,31 @@ mod tests {
     #[test]
     fn integration_who_populates_classes() {
         let state = run_lines(&[&format!("{TS}[65 Warrior] Rysk (Human)")], "Rysk");
-        assert_eq!(state.player_classes.get("Rysk"), Some(&vec!["WAR".to_owned()]));
+        assert_eq!(
+            state.player_classes.get("Rysk"),
+            Some(&vec!["WAR".to_owned()])
+        );
     }
 
     #[test]
     fn integration_mob_name_set() {
-        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 150 points of damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}Rysk slashes a goblin for 150 points of damage."
+            )],
+            "Rysk",
+        );
         assert_eq!(state.mob_name, "a goblin");
     }
 
     #[test]
     fn integration_riposte_player() {
-        let state = run_lines(&[&format!("{TS}a skeleton was injured by Rysk's riposte for 200 damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}a skeleton was injured by Rysk's riposte for 200 damage."
+            )],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.total_damage, 200);
         assert_eq!(stats.damage_by_type.get("riposte"), Some(&200));
@@ -1124,7 +1641,12 @@ mod tests {
 
     #[test]
     fn integration_ds_player() {
-        let state = run_lines(&[&format!("{TS}a goblin was struck by Rysk's damage shield for 40 damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}a goblin was struck by Rysk's damage shield for 40 damage."
+            )],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.total_damage, 40);
         assert_eq!(stats.damage_by_type.get("ds"), Some(&40));
@@ -1132,7 +1654,12 @@ mod tests {
 
     #[test]
     fn integration_ds_proc_your() {
-        let state = run_lines(&[&format!("{TS}a goblin is burned by YOUR flames for 12 points of non-melee damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}a goblin is burned by YOUR flames for 12 points of non-melee damage."
+            )],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.total_damage, 12);
         assert_eq!(stats.damage_by_type.get("ds"), Some(&12));
@@ -1140,7 +1667,12 @@ mod tests {
 
     #[test]
     fn integration_miss_avoidance() {
-        let state = run_lines(&[&format!("{TS}a skeleton tries to slash Rysk, but Rysk dodges!")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}a skeleton tries to slash Rysk, but Rysk dodges!"
+            )],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.avoidance_by_type.get("dodge"), Some(&1));
     }
@@ -1151,42 +1683,62 @@ mod tests {
         // Note: "SpellName hit Target for N" is caught by RE_MELEE before RE_SPELL_HIT,
         // so unattributed spell attribution via the cast map doesn't fire for "hit" verbs.
         // Attribution for DD spells comes via RE_HIT_BY_SPELL instead.
-        let state = run_lines(&[
-            &format!("{TS}Rysk begins casting Complete Heal."),
-        ], "Rysk");
+        let state = run_lines(
+            &[&format!("{TS}Rysk begins casting Complete Heal.")],
+            "Rysk",
+        );
         let json = state.to_api_json();
         let casting = json["casting"].as_object().unwrap();
-        assert!(casting.contains_key("Rysk"), "active_casts should contain Rysk");
+        assert!(
+            casting.contains_key("Rysk"),
+            "active_casts should contain Rysk"
+        );
         assert_eq!(casting["Rysk"]["spell"].as_str().unwrap(), "Complete Heal");
     }
 
     #[test]
     fn integration_resist() {
-        let state = run_lines(&[&format!("{TS}a goblin resisted your Shadowbolt!")], "Rysk");
+        let state = run_lines(
+            &[&format!("{TS}a goblin resisted your Shadowbolt!")],
+            "Rysk",
+        );
         let stats = state.entities.get("Rysk").unwrap();
         assert_eq!(stats.resists_by_spell.get("Shadowbolt"), Some(&1));
     }
 
     #[test]
     fn integration_damage_accumulates() {
-        let state = run_lines(&[
-            &format!("{TS}Rysk slashes a goblin for 100 points of damage."),
-            &format!("{TS}Rysk slashes a goblin for 200 points of damage."),
-            &format!("{TS}Rysk slashes a goblin for 300 points of damage."),
-        ], "Rysk");
+        let state = run_lines(
+            &[
+                &format!("{TS}Rysk slashes a goblin for 100 points of damage."),
+                &format!("{TS}Rysk slashes a goblin for 200 points of damage."),
+                &format!("{TS}Rysk slashes a goblin for 300 points of damage."),
+            ],
+            "Rysk",
+        );
         assert_eq!(state.total_damage(), 600);
     }
 
     #[test]
     fn integration_mob_list_tracks_mob() {
-        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 150 points of damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}Rysk slashes a goblin for 150 points of damage."
+            )],
+            "Rysk",
+        );
         assert_eq!(state.mob_list.len(), 1);
         assert_eq!(state.mob_list[0].name, "a goblin");
     }
 
     #[test]
     fn integration_mob_damage_breakdown() {
-        let state = run_lines(&[&format!("{TS}Rysk slashes a goblin for 150 points of damage.")], "Rysk");
+        let state = run_lines(
+            &[&format!(
+                "{TS}Rysk slashes a goblin for 150 points of damage."
+            )],
+            "Rysk",
+        );
         let mob_id = state.mob_list[0].id;
         let by_player = state.mob_damage.get(&mob_id).unwrap();
         assert_eq!(by_player.get("Rysk").unwrap().total_damage, 150);
@@ -1206,18 +1758,31 @@ mod tests {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
         let (event_tx, _) = tokio::sync::mpsc::unbounded_channel();
 
-        tx.send(format!("{TS}Rysk slashes a goblin for 150 points of damage.")).unwrap();
+        tx.send(format!(
+            "{TS}Rysk slashes a goblin for 150 points of damage."
+        ))
+        .unwrap();
         let tx2 = tx.clone();
         thread::spawn(move || {
             // The parser processes one line in microseconds; 20ms is a wide margin.
             thread::sleep(Duration::from_millis(20));
             reset_flag2.store(true, Ordering::Relaxed);
-            tx2.send(format!("{TS}Rysk slashes a skeleton for 99 points of damage.")).unwrap();
+            tx2.send(format!(
+                "{TS}Rysk slashes a skeleton for 99 points of damage."
+            ))
+            .unwrap();
             drop(tx2);
         });
         drop(tx);
 
-        run(rx, Arc::clone(&shared), reset_flag, broadcast_tx, event_tx, "Rysk".to_owned());
+        run(
+            rx,
+            Arc::clone(&shared),
+            reset_flag,
+            broadcast_tx,
+            event_tx,
+            "Rysk".to_owned(),
+        );
         let state = shared2.load_full();
         // After reset: only the skeleton hit is present (99 dmg, not 150+99)
         assert_eq!(state.total_damage(), 99);
@@ -1242,24 +1807,27 @@ mod tests {
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(20));
             reset_flag2.store(true, Ordering::Relaxed);
-            tx2.send(format!("{TS}Rysk slashes a skeleton for 50 points of damage.")).unwrap();
+            tx2.send(format!(
+                "{TS}Rysk slashes a skeleton for 50 points of damage."
+            ))
+            .unwrap();
             drop(tx2);
         });
         drop(tx);
 
-        run(rx, Arc::clone(&shared), reset_flag, broadcast_tx, event_tx, "Rysk".to_owned());
+        run(
+            rx,
+            Arc::clone(&shared),
+            reset_flag,
+            broadcast_tx,
+            event_tx,
+            "Rysk".to_owned(),
+        );
         let state = shared2.load_full();
         // player_classes must survive the reset
-        assert_eq!(state.player_classes.get("Rysk"), Some(&vec!["WAR".to_owned()]));
+        assert_eq!(
+            state.player_classes.get("Rysk"),
+            Some(&vec!["WAR".to_owned()])
+        );
     }
-}
-
-fn publish(
-    shared: &Arc<ArcSwap<CombatState>>,
-    tx: &broadcast::Sender<Arc<CombatState>>,
-    state: &CombatState,
-) {
-    let snap = Arc::new(state.clone());
-    shared.store(Arc::clone(&snap));
-    let _ = tx.send(snap);
 }

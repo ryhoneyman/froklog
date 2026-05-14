@@ -26,7 +26,12 @@ pub struct TailConfig {
 
 impl Default for TailConfig {
     fn default() -> Self {
-        Self { from: TailFrom::End, to: None, speed: None, dump: false }
+        Self {
+            from: TailFrom::End,
+            to: None,
+            speed: None,
+            dump: false,
+        }
     }
 }
 
@@ -36,7 +41,9 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
     let p = Path::new(&path);
 
     loop {
-        if p.exists() { break; }
+        if p.exists() {
+            break;
+        }
         warn!("Log file not found: {path} — retrying in 2s");
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -61,8 +68,9 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
 
     // Only stop at EOF when replaying a bounded window (from-start/from-date + --to),
     // or when dump mode is active (read the whole file then exit).
-    let stop_at_eof = config.dump || (!matches!(&config.from, TailFrom::End) && config.to.is_some());
-    let is_replay   = !config.dump && !matches!(&config.from, TailFrom::End);
+    let stop_at_eof =
+        config.dump || (!matches!(&config.from, TailFrom::End) && config.to.is_some());
+    let is_replay = !config.dump && !matches!(&config.from, TailFrom::End);
 
     // (log_timestamp_of_first_sent_line, wall_instant_it_was_sent)
     let mut pace_anchor: Option<(NaiveDateTime, tokio::time::Instant)> = None;
@@ -89,7 +97,9 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
             if skipping {
                 if let TailFrom::Date(from_dt) = &config.from {
                     if let Some(ts) = parse_eq_timestamp(trimmed) {
-                        if ts >= *from_dt { skipping = false; }
+                        if ts >= *from_dt {
+                            skipping = false;
+                        }
                     }
                 }
             }
@@ -109,11 +119,11 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
                     // Default to real-time (1.0×) when no --speed is given.
                     let speed = config.speed.unwrap_or(1.0);
                     if let Some(ts) = parse_eq_timestamp(trimmed) {
-                        let anchor = pace_anchor
-                            .get_or_insert_with(|| (ts, tokio::time::Instant::now()));
+                        let anchor =
+                            pace_anchor.get_or_insert_with(|| (ts, tokio::time::Instant::now()));
                         let log_ms = (ts - anchor.0).num_milliseconds() as f64;
-                        let wall_target = anchor.1
-                            + Duration::from_secs_f64(log_ms / 1000.0 / speed);
+                        let wall_target =
+                            anchor.1 + Duration::from_secs_f64(log_ms / 1000.0 / speed);
                         tokio::time::sleep_until(wall_target).await;
                     }
                 }
@@ -136,7 +146,10 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
 async fn seek_to_date(file: &mut File, target: NaiveDateTime) {
     let file_len = match file.seek(SeekFrom::End(0)).await {
         Ok(n) => n,
-        Err(_) => { let _ = file.seek(SeekFrom::Start(0)).await; return; }
+        Err(_) => {
+            let _ = file.seek(SeekFrom::Start(0)).await;
+            return;
+        }
     };
 
     let mut lo: u64 = 0;
@@ -148,13 +161,16 @@ async fn seek_to_date(file: &mut File, target: NaiveDateTime) {
 
         let mut buf = [0u8; 512];
         let n = match file.read(&mut buf).await {
-            Ok(0) | Err(_) => { hi = mid; continue; }
+            Ok(0) | Err(_) => {
+                hi = mid;
+                continue;
+            }
             Ok(n) => n,
         };
 
         // Skip the partial first line (we landed mid-line); use the next complete line.
         let text = String::from_utf8_lossy(&buf[..n]);
-        let ts = text.split('\n').nth(1).and_then(|l| parse_eq_timestamp(l));
+        let ts = text.split('\n').nth(1).and_then(parse_eq_timestamp);
 
         match ts {
             Some(t) if t < target => lo = mid,
@@ -171,7 +187,9 @@ async fn seek_to_date(file: &mut File, target: NaiveDateTime) {
 
 /// Extract the EQ log timestamp from a raw line like `[Tue Jan 01 00:00:01 2000] ...`.
 pub fn parse_eq_timestamp(line: &str) -> Option<NaiveDateTime> {
-    if line.len() < 26 || !line.starts_with('[') { return None; }
+    if line.len() < 26 || !line.starts_with('[') {
+        return None;
+    }
     let ts = &line[1..25];
     // EQ zero-pads days in some versions and space-pads in others.
     NaiveDateTime::parse_from_str(ts, "%a %b %d %H:%M:%S %Y")
@@ -214,6 +232,51 @@ pub fn parse_user_date(s: &str) -> Result<NaiveDateTime, String> {
     Err(format!(
         "Cannot parse '{s}' as a date. Try: YYYY-MM-DD HH:MM:SS  or  HH:MM:SS"
     ))
+}
+
+/// Parse a duration string like `1h30m`, `90m`, `3600s`, or a bare number of seconds.
+pub fn parse_duration_str(s: &str) -> Result<chrono::Duration, String> {
+    let s = s.trim();
+    let mut total_secs: i64 = 0;
+    let mut current: i64 = 0;
+    let mut has_unit = false;
+
+    for ch in s.chars() {
+        match ch {
+            '0'..='9' => current = current * 10 + (ch as i64 - '0' as i64),
+            'h' | 'H' => {
+                total_secs += current * 3600;
+                current = 0;
+                has_unit = true;
+            }
+            'm' | 'M' => {
+                total_secs += current * 60;
+                current = 0;
+                has_unit = true;
+            }
+            's' | 'S' => {
+                total_secs += current;
+                current = 0;
+                has_unit = true;
+            }
+            _ => {
+                return Err(format!(
+                    "Invalid duration '{s}': use e.g. 1h30m, 90m, 45s, or bare seconds"
+                ))
+            }
+        }
+    }
+
+    // Bare number with no unit = seconds
+    if !has_unit {
+        total_secs += current;
+    }
+
+    if total_secs <= 0 {
+        return Err(format!("Duration '{s}' must be greater than zero"));
+    }
+
+    Ok(chrono::Duration::seconds(total_secs))
 }
 
 #[cfg(test)]
@@ -295,43 +358,44 @@ mod tests {
     }
 
     // ── parse_duration_str ────────────────────────────────────────────────────────
-    #[test] fn duration_hours()      { assert_eq!(parse_duration_str("2h").unwrap().num_seconds(), 7200); }
-    #[test] fn duration_minutes()    { assert_eq!(parse_duration_str("90m").unwrap().num_seconds(), 5400); }
-    #[test] fn duration_seconds()    { assert_eq!(parse_duration_str("45s").unwrap().num_seconds(), 45); }
-    #[test] fn duration_combined()   { assert_eq!(parse_duration_str("1h30m").unwrap().num_seconds(), 5400); }
-    #[test] fn duration_hms()        { assert_eq!(parse_duration_str("1h2m3s").unwrap().num_seconds(), 3723); }
-    #[test] fn duration_bare_secs()  { assert_eq!(parse_duration_str("3600").unwrap().num_seconds(), 3600); }
-    #[test] fn duration_uppercase()  { assert_eq!(parse_duration_str("1H30M").unwrap().num_seconds(), 5400); }
-    #[test] fn duration_zero_err()   { assert!(parse_duration_str("0").is_err()); }
-    #[test] fn duration_invalid()    { assert!(parse_duration_str("1x").is_err()); }
-    #[test] fn duration_empty_err()  { assert!(parse_duration_str("").is_err()); }
-}
-
-/// Parse a duration string like `1h30m`, `90m`, `3600s`, or a bare number of seconds.
-pub fn parse_duration_str(s: &str) -> Result<chrono::Duration, String> {
-    let s = s.trim();
-    let mut total_secs: i64 = 0;
-    let mut current: i64 = 0;
-    let mut has_unit = false;
-
-    for ch in s.chars() {
-        match ch {
-            '0'..='9' => current = current * 10 + (ch as i64 - '0' as i64),
-            'h' | 'H' => { total_secs += current * 3600; current = 0; has_unit = true; }
-            'm' | 'M' => { total_secs += current * 60;   current = 0; has_unit = true; }
-            's' | 'S' => { total_secs += current;         current = 0; has_unit = true; }
-            _ => return Err(format!(
-                "Invalid duration '{s}': use e.g. 1h30m, 90m, 45s, or bare seconds"
-            )),
-        }
+    #[test]
+    fn duration_hours() {
+        assert_eq!(parse_duration_str("2h").unwrap().num_seconds(), 7200);
     }
-
-    // Bare number with no unit = seconds
-    if !has_unit { total_secs += current; }
-
-    if total_secs <= 0 {
-        return Err(format!("Duration '{s}' must be greater than zero"));
+    #[test]
+    fn duration_minutes() {
+        assert_eq!(parse_duration_str("90m").unwrap().num_seconds(), 5400);
     }
-
-    Ok(chrono::Duration::seconds(total_secs))
+    #[test]
+    fn duration_seconds() {
+        assert_eq!(parse_duration_str("45s").unwrap().num_seconds(), 45);
+    }
+    #[test]
+    fn duration_combined() {
+        assert_eq!(parse_duration_str("1h30m").unwrap().num_seconds(), 5400);
+    }
+    #[test]
+    fn duration_hms() {
+        assert_eq!(parse_duration_str("1h2m3s").unwrap().num_seconds(), 3723);
+    }
+    #[test]
+    fn duration_bare_secs() {
+        assert_eq!(parse_duration_str("3600").unwrap().num_seconds(), 3600);
+    }
+    #[test]
+    fn duration_uppercase() {
+        assert_eq!(parse_duration_str("1H30M").unwrap().num_seconds(), 5400);
+    }
+    #[test]
+    fn duration_zero_err() {
+        assert!(parse_duration_str("0").is_err());
+    }
+    #[test]
+    fn duration_invalid() {
+        assert!(parse_duration_str("1x").is_err());
+    }
+    #[test]
+    fn duration_empty_err() {
+        assert!(parse_duration_str("").is_err());
+    }
 }
