@@ -182,10 +182,10 @@ pub mod tray {
     }
 
     fn make_icon(cfg: &Config, logging_on: bool) -> tray_icon::Icon {
-        const GREEN:  &[u8] = include_bytes!("../assets/froklog-green.png");
-        const GRAY:   &[u8] = include_bytes!("../assets/froklog-gray.png");
+        const GREEN: &[u8] = include_bytes!("../assets/froklog-green.png");
+        const GRAY: &[u8] = include_bytes!("../assets/froklog-gray.png");
         const ORANGE: &[u8] = include_bytes!("../assets/froklog-orange.png");
-        const RED:    &[u8] = include_bytes!("../assets/froklog-red.png");
+        const RED: &[u8] = include_bytes!("../assets/froklog-red.png");
 
         let bytes = if !logging_on {
             RED

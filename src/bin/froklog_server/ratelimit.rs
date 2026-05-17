@@ -85,7 +85,7 @@ impl RateLimiter {
         let now = Instant::now();
         let mut ips = self.ips.lock().await;
         ips.retain(|_, s| {
-            s.banned_until.map_or(false, |u| u > now)
+            s.banned_until.is_some_and(|u| u > now)
                 || now.duration_since(s.window_start) < self.window * 3
         });
     }
