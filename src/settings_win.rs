@@ -978,9 +978,17 @@ mod win {
             .and_then(|c| c.get(&health).send())
         {
             Ok(resp) => {
-                let requires = resp
-                    .json::<serde_json::Value>()
-                    .ok()
+                let json = resp.json::<serde_json::Value>().ok();
+                let is_froklog = json
+                    .as_ref()
+                    .and_then(|v| v.get("ok")?.as_bool())
+                    .unwrap_or(false);
+                if !is_froklog {
+                    return UrlTestResult::Failed(
+                        "Not a froklog server (wrong URL or port?)".into(),
+                    );
+                }
+                let requires = json
                     .and_then(|v| v.get("requires_password")?.as_bool())
                     .unwrap_or(false);
                 UrlTestResult::Connected {
