@@ -19,6 +19,7 @@ struct StreamDisplay {
     view_token: String,
     connected: bool,
     public_stream: bool,
+    is_replay: bool,
     first_ts: Option<u64>,
     last_ts: Option<u64>,
     batches: usize,
@@ -78,6 +79,7 @@ pub async fn admin_panel_handler(
                 view_token: info.view_token,
                 connected: info.connected,
                 public_stream: info.public_stream,
+                is_replay: info.is_replay,
                 first_ts,
                 last_ts,
                 batches,
@@ -205,7 +207,13 @@ pub async fn admin_panel_handler(
                     html_escape(player)
                 ));
                 for s in streams {
-                    let (row_class, status, status_kw) = if s.connected {
+                    let (row_class, status, status_kw) = if s.is_replay {
+                        (
+                            "recorded-row",
+                            r#"<span class="recorded">&#9679; Recorded</span>"#,
+                            "recorded",
+                        )
+                    } else if s.connected {
                         (
                             "live-row",
                             r#"<span class="live">&#9679; Live</span>"#,
@@ -362,11 +370,14 @@ tr.player-hdr:hover td{{background:#333348}}
 .dur{{color:#f9e2af}}
 .live{{color:#a6e3a1;font-weight:600}}
 .offline{{color:#6c7086}}
+.recorded{{color:#cba6f7;font-weight:600}}
 .pub-yes{{color:#89dceb;font-weight:600}}
 .pub-no{{color:#45475a}}
 .empty{{text-align:center;color:#6c7086;padding:2rem}}
 tr.live-row td{{background:#1e2a1e}}
 tr.live-row td:first-child{{border-left:3px solid #a6e3a1}}
+tr.recorded-row td{{background:#1e1a2a}}
+tr.recorded-row td:first-child{{border-left:3px solid #cba6f7}}
 tr.live-row:hover td{{background:#243024}}
 a{{color:#89b4fa;text-decoration:none}}
 a:hover{{text-decoration:underline}}
@@ -379,7 +390,7 @@ a:hover{{text-decoration:underline}}
     <p class="count" id="count-line" data-full="{total_streams} stream(s) across {total_players} player(s)">{total_streams} stream(s) across {total_players} player(s)</p>
   </div>
   <div>
-    <input type="search" id="search" placeholder="Filter by player, server, stream ID, live, public&#8230;" autocomplete="off" spellcheck="false">
+    <input type="search" id="search" placeholder="Filter by player, server, stream ID, live, recorded, public&#8230;" autocomplete="off" spellcheck="false">
   </div>
 </div>
 <table>

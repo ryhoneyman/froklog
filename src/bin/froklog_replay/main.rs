@@ -275,7 +275,7 @@ fn register_stream(
     let resp = client
         .post(&url)
         .bearer_auth(admin_token)
-        .json(&serde_json::json!({ "game": game, "server": eq_server, "player": player }))
+        .json(&serde_json::json!({ "game": game, "server": eq_server, "player": player, "is_replay": true }))
         .send()
         .unwrap_or_else(|e| {
             eprintln!("error: failed to reach server at {url}: {e}");

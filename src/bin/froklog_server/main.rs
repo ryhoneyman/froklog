@@ -216,6 +216,8 @@ struct CreateStreamBody {
     player: String,
     #[serde(default)]
     public_stream: bool,
+    #[serde(default)]
+    is_replay: bool,
 }
 
 #[derive(Serialize)]
@@ -271,6 +273,7 @@ async fn create_stream_handler(
         body.server.clone(),
         body.player.clone(),
         body.public_stream,
+        body.is_replay,
         &state.data_dir,
     );
 
@@ -292,6 +295,7 @@ async fn create_stream_handler(
         "server": body.server,
         "player": body.player,
         "public_stream": body.public_stream,
+        "is_replay": body.is_replay,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         tracing::warn!("Failed to write meta for {stream_id}: {e}");
@@ -474,6 +478,8 @@ struct StreamMeta {
     player: String,
     #[serde(default)]
     public_stream: bool,
+    #[serde(default)]
+    is_replay: bool,
 }
 
 fn default_eql() -> String {
@@ -520,6 +526,7 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
             meta.server,
             meta.player.clone(),
             meta.public_stream,
+            meta.is_replay,
             data_dir,
         ) {
             Ok(entry) => {
