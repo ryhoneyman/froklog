@@ -73,7 +73,7 @@ pub async fn admin_panel_handler(
 
     // Sort each group's streams by last_ts descending (no data → bottom).
     for streams in by_player.values_mut() {
-        streams.sort_by(|a, b| b.last_ts.cmp(&a.last_ts));
+        streams.sort_by_key(|b| std::cmp::Reverse(b.last_ts));
     }
 
     // Sort player groups by their most recent last_ts descending.
