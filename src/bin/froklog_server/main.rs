@@ -1,21 +1,24 @@
 mod admin;
 mod ingest;
 mod journal;
+mod ratelimit;
 mod streams;
 mod viewer;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 
 use streams::{new_registry, SharedRegistry, StreamEntry};
 
@@ -62,6 +65,8 @@ pub struct ServerState {
     /// Optional password required to create streams via `POST /stream`.
     /// When `None`, stream creation is open to anyone.
     stream_password: Option<String>,
+    /// Per-IP request rate limiter / DoS blacklist.
+    pub rate_limiter: Arc<ratelimit::RateLimiter>,
 }
 
 impl ServerState {
@@ -128,12 +133,45 @@ async fn main() {
         info!("Stream creation: open (set FROKLOG_STREAM_PASSWORD to require a password)");
     }
 
+    let rate_max: u32 = std::env::var("FROKLOG_RATE_MAX")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+    let rate_window: u64 = std::env::var("FROKLOG_RATE_WINDOW_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let ban_secs: u64 = std::env::var("FROKLOG_BAN_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
+
+    info!(
+        "DoS protection: max {rate_max} req / {rate_window}s per IP, ban duration {ban_secs}s \
+         (override with FROKLOG_RATE_MAX / FROKLOG_RATE_WINDOW_SECS / FROKLOG_BAN_SECS)"
+    );
+
+    let rate_limiter = ratelimit::RateLimiter::new(rate_max, rate_window, ban_secs);
+
     let state = ServerState {
         registry,
         data_dir,
         admin_token,
         stream_password,
+        rate_limiter: Arc::clone(&rate_limiter),
     };
+
+    // Periodically evict stale rate-limiter entries so memory doesn't grow unboundedly.
+    tokio::spawn({
+        let limiter = Arc::clone(&rate_limiter);
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                limiter.cleanup().await;
+            }
+        }
+    });
 
     let cors = CorsLayer::new().allow_origin(Any);
 
@@ -155,6 +193,11 @@ async fn main() {
         .route("/health", get(health_handler))
         // Stream list / index
         .route("/", get(index_handler))
+        .fallback(unmatched_handler)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            ratelimit::rate_limit_middleware,
+        ))
         .layer(cors)
         .with_state(state);
 
@@ -199,14 +242,21 @@ struct CreateStreamResponse {
 }
 
 async fn create_stream_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<ServerState>,
     headers: HeaderMap,
     Json(body): Json<CreateStreamBody>,
 ) -> impl IntoResponse {
+    let ip = client_ip(&headers, peer);
     let supplied = ingest::extract_bearer(&headers);
     if !state.stream_auth_ok(supplied.as_deref()) {
+        warn!("Register [{ip}]: rejected — bad or missing stream password");
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    info!(
+        "Register [{ip}]: player '{}' on '{}'",
+        body.player, body.server
+    );
 
     // Use the first 16 chars of a random token as the public stream ID.
     let stream_id = froklog::auth::generate_token()[..16].to_string();
@@ -273,10 +323,16 @@ async fn create_stream_handler(
 // ── HTTP stats snapshot (poll fallback for viewers) ───────────────────────────
 
 async fn stream_stats_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     axum::extract::Path(stream_id): axum::extract::Path<String>,
     axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
     State(state): State<ServerState>,
 ) -> impl IntoResponse {
+    info!(
+        "Stats [{stream_id}] from {}",
+        client_ip(&headers, peer)
+    );
     let reg = state.registry.read().await;
     match reg.get(&stream_id) {
         Some(entry) => {
@@ -303,7 +359,15 @@ async fn stream_stats_handler(
 
 // ── Health check ──────────────────────────────────────────────────────────────
 
-async fn health_handler(State(state): State<ServerState>) -> impl IntoResponse {
+async fn health_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+) -> impl IntoResponse {
+    info!(
+        "Health check (Test) from {}",
+        client_ip(&headers, peer)
+    );
     Json(serde_json::json!({
         "ok": true,
         "requires_password": state.requires_stream_password(),
@@ -312,7 +376,26 @@ async fn health_handler(State(state): State<ServerState>) -> impl IntoResponse {
 
 // ── Server index ──────────────────────────────────────────────────────────────
 
-async fn index_handler() -> impl IntoResponse {
+async fn index_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    info!("Index from {}", client_ip(&headers, peer));
+    StatusCode::NOT_FOUND
+}
+
+async fn unmatched_handler(
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    warn!(
+        "Unmatched {} {} from {}",
+        method,
+        uri,
+        client_ip(&headers, peer)
+    );
     StatusCode::NOT_FOUND
 }
 

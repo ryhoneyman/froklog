@@ -182,34 +182,25 @@ pub mod tray {
     }
 
     fn make_icon(cfg: &Config, logging_on: bool) -> tray_icon::Icon {
-        let (r, g, b): (u8, u8, u8) = if !logging_on {
-            (80, 80, 200) // blue = paused
+        const GREEN:  &[u8] = include_bytes!("../assets/froklog-green.png");
+        const GRAY:   &[u8] = include_bytes!("../assets/froklog-gray.png");
+        const ORANGE: &[u8] = include_bytes!("../assets/froklog-orange.png");
+        const RED:    &[u8] = include_bytes!("../assets/froklog-red.png");
+
+        let bytes = if !logging_on {
+            RED
         } else if cfg.is_registered() {
-            (60, 200, 80) // green = fully operational
+            GREEN
         } else if cfg.log_path.is_some() {
-            (220, 160, 30) // amber = log set, not registered
+            ORANGE
         } else {
-            (110, 110, 120) // gray = not configured
+            GRAY
         };
 
-        const SIZE: usize = 16;
-        let mut rgba = vec![0u8; SIZE * SIZE * 4];
-        let cx = (SIZE / 2) as f32;
-        let cy = (SIZE / 2) as f32;
-        let radius = (SIZE / 2 - 1) as f32;
-        for y in 0..SIZE {
-            for x in 0..SIZE {
-                let dx = x as f32 - cx;
-                let dy = y as f32 - cy;
-                if dx * dx + dy * dy <= radius * radius {
-                    let idx = (y * SIZE + x) * 4;
-                    rgba[idx] = r;
-                    rgba[idx + 1] = g;
-                    rgba[idx + 2] = b;
-                    rgba[idx + 3] = 255;
-                }
-            }
-        }
-        tray_icon::Icon::from_rgba(rgba, SIZE as u32, SIZE as u32).expect("icon")
+        let img = image::load_from_memory(bytes)
+            .expect("embedded icon PNG")
+            .into_rgba8();
+        let (w, h) = img.dimensions();
+        tray_icon::Icon::from_rgba(img.into_raw(), w, h).expect("icon")
     }
 }

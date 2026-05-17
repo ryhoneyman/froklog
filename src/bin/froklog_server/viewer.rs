@@ -26,6 +26,8 @@ pub struct ViewQuery {
 
 /// `GET /stream/:id?vtok=<view_token>` — serves the viewer HTML page.
 pub async fn stream_page_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(stream_id): Path<String>,
     Query(params): Query<ViewQuery>,
     State(state): State<ServerState>,
@@ -33,6 +35,10 @@ pub async fn stream_page_handler(
     if !is_valid_view_token(&stream_id, &params.vtok, &state).await {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    info!(
+        "Stream page [{stream_id}] from {}",
+        crate::client_ip(&headers, peer)
+    );
     let vtok = params.vtok.unwrap_or_default();
     let player_name = {
         let reg = state.registry.read().await;
@@ -568,9 +574,15 @@ async fn handle_client_msg(
 /// `GET /player/:server/:name` — serves the viewer page for a live public stream.
 /// Returns a simple offline page if the player has no stream or is not connected.
 pub async fn player_page_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path((server, name)): Path<(String, String)>,
     State(state): State<ServerState>,
 ) -> Response {
+    info!(
+        "Player page [{server}/{name}] from {}",
+        crate::client_ip(&headers, peer)
+    );
     let entry_data = {
         let reg = state.registry.read().await;
         reg.find_id_by_player(&server, &name).and_then(|id| {
