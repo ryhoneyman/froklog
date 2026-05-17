@@ -329,10 +329,7 @@ async fn stream_stats_handler(
     axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
     State(state): State<ServerState>,
 ) -> impl IntoResponse {
-    info!(
-        "Stats [{stream_id}] from {}",
-        client_ip(&headers, peer)
-    );
+    info!("Stats [{stream_id}] from {}", client_ip(&headers, peer));
     let reg = state.registry.read().await;
     match reg.get(&stream_id) {
         Some(entry) => {
@@ -364,10 +361,7 @@ async fn health_handler(
     headers: HeaderMap,
     State(state): State<ServerState>,
 ) -> impl IntoResponse {
-    info!(
-        "Health check (Test) from {}",
-        client_ip(&headers, peer)
-    );
+    info!("Health check (Test) from {}", client_ip(&headers, peer));
     Json(serde_json::json!({
         "ok": true,
         "requires_password": state.requires_stream_password(),
