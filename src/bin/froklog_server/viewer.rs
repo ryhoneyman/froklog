@@ -32,27 +32,30 @@ pub async fn stream_page_handler(
     Query(params): Query<ViewQuery>,
     State(state): State<ServerState>,
 ) -> Response {
-    if !is_valid_view_token(&stream_id, &params.vtok, &state).await {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    info!(
-        "Stream page [{stream_id}] from {}",
-        crate::client_ip(&headers, peer)
-    );
-    let vtok = params.vtok.unwrap_or_default();
-    let player_name = {
-        let reg = state.registry.read().await;
-        reg.get(&stream_id)
-            .map(|e| e.player_name.clone())
-            .unwrap_or_default()
+    let response = if !is_valid_view_token(&stream_id, &params.vtok, &state).await {
+        StatusCode::UNAUTHORIZED.into_response()
+    } else {
+        let vtok = params.vtok.unwrap_or_default();
+        let player_name = {
+            let reg = state.registry.read().await;
+            reg.get(&stream_id)
+                .map(|e| e.player_name.clone())
+                .unwrap_or_default()
+        };
+        let ws_path = format!("/stream/{stream_id}/ws?vtok={vtok}");
+        let html = include_str!("../../../static/stream.html")
+            .replace("__STREAM_ID__", &stream_id)
+            .replace("__VIEW_TOKEN__", &vtok)
+            .replace("__PLAYER_NAME__", &player_name)
+            .replace("__WS_PATH__", &ws_path);
+        Html(html).into_response()
     };
-    let ws_path = format!("/stream/{stream_id}/ws?vtok={vtok}");
-    let html = include_str!("../../../static/stream.html")
-        .replace("__STREAM_ID__", &stream_id)
-        .replace("__VIEW_TOKEN__", &vtok)
-        .replace("__PLAYER_NAME__", &player_name)
-        .replace("__WS_PATH__", &ws_path);
-    Html(html).into_response()
+    info!(
+        "Stream page [{stream_id}] from {} ({})",
+        crate::client_ip(&headers, peer),
+        response.status()
+    );
+    response
 }
 
 /// `GET /stream/:id/ws?vtok=<view_token>` — viewer WebSocket.
@@ -610,10 +613,6 @@ pub async fn player_page_handler(
     Path((game, server, name)): Path<(String, String, String)>,
     State(state): State<ServerState>,
 ) -> Response {
-    info!(
-        "Player page [{game}/{server}/{name}] from {}",
-        crate::client_ip(&headers, peer)
-    );
     let entry_data = {
         let reg = state.registry.read().await;
         reg.find_id_by_player(&game, &server, &name).and_then(|id| {
@@ -629,7 +628,7 @@ pub async fn player_page_handler(
         })
     };
 
-    match entry_data {
+    let response = match entry_data {
         None | Some((_, _, _, _, false)) => StatusCode::NOT_FOUND.into_response(),
         Some((_, player_name, server_name, false, true)) => {
             player_offline_page(&player_name, &server_name)
@@ -643,7 +642,13 @@ pub async fn player_page_handler(
                 .replace("__WS_PATH__", &ws_path);
             Html(html).into_response()
         }
-    }
+    };
+    info!(
+        "Player page [{game}/{server}/{name}] from {} ({})",
+        crate::client_ip(&headers, peer),
+        response.status()
+    );
+    response
 }
 
 /// `GET /player/:game/:server/:name/ws` — viewer WebSocket for a live public stream.
