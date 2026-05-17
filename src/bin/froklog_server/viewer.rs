@@ -50,8 +50,16 @@ pub async fn stream_page_handler(
             if let (Some(num), Some(si_arc)) = (params.session, session_index) {
                 let si = si_arc.read().await;
                 let sessions = si.list();
-                let start = sessions.iter().find(|s| s.num == num).map(|s| s.start_log_ts).unwrap_or(0);
-                let end = sessions.iter().find(|s| s.num > num).map(|s| s.start_log_ts).unwrap_or(0);
+                let start = sessions
+                    .iter()
+                    .find(|s| s.num == num)
+                    .map(|s| s.start_log_ts)
+                    .unwrap_or(0);
+                let end = sessions
+                    .iter()
+                    .find(|s| s.num > num)
+                    .map(|s| s.start_log_ts)
+                    .unwrap_or(0);
                 (start, end)
             } else {
                 (0, 0)
@@ -656,11 +664,20 @@ pub async fn player_page_handler(
     let response = match entry_data {
         None => StatusCode::NOT_FOUND.into_response(),
         Some((stream_id, player_name, session_index)) => {
-            let (session_log_ts, session_end_log_ts): (u64, u64) = if let Some(num) = params.session {
+            let (session_log_ts, session_end_log_ts): (u64, u64) = if let Some(num) = params.session
+            {
                 let si = session_index.read().await;
                 let sessions = si.list();
-                let start = sessions.iter().find(|s| s.num == num).map(|s| s.start_log_ts).unwrap_or(0);
-                let end = sessions.iter().find(|s| s.num > num).map(|s| s.start_log_ts).unwrap_or(0);
+                let start = sessions
+                    .iter()
+                    .find(|s| s.num == num)
+                    .map(|s| s.start_log_ts)
+                    .unwrap_or(0);
+                let end = sessions
+                    .iter()
+                    .find(|s| s.num > num)
+                    .map(|s| s.start_log_ts)
+                    .unwrap_or(0);
                 (start, end)
             } else {
                 (0, 0)

@@ -115,14 +115,12 @@ pub mod tray {
                 if now >= next_tick {
                     let cur = handle_clone.events_sent.load(Ordering::Relaxed);
                     let elapsed = now.duration_since(prev_sample).as_secs_f64().max(0.001);
-                    let rate =
-                        ((cur.saturating_sub(prev_count)) as f64 / elapsed * 60.0) as u32;
+                    let rate = ((cur.saturating_sub(prev_count)) as f64 / elapsed * 60.0) as u32;
                     prev_count = cur;
                     prev_sample = now;
                     next_tick = now + Duration::from_secs(TICK_SECS);
 
-                    let logging_on =
-                        handle_clone.logging_enabled.load(Ordering::Relaxed);
+                    let logging_on = handle_clone.logging_enabled.load(Ordering::Relaxed);
                     let is_connected = handle_clone.connected.load(Ordering::Relaxed);
                     let cfg = handle_clone.config.lock().unwrap();
 
@@ -132,8 +130,7 @@ pub mod tray {
                         is_connected,
                         rate,
                     )));
-                    let _ = status_item
-                        .set_text(make_status_text(logging_on, is_connected, rate));
+                    let _ = status_item.set_text(make_status_text(logging_on, is_connected, rate));
                 }
 
                 let _ = event;
@@ -180,7 +177,12 @@ pub mod tray {
     fn build_tray(cfg: &Config, logging_on: bool) -> (tray_icon::TrayIcon, MenuItem, MenuItem) {
         let menu = Menu::new();
 
-        let status_item = MenuItem::with_id(ID_STATUS, make_status_text(logging_on, false, 0), false, None);
+        let status_item = MenuItem::with_id(
+            ID_STATUS,
+            make_status_text(logging_on, false, 0),
+            false,
+            None,
+        );
         let sep_status = PredefinedMenuItem::separator();
         let toggle_label = if logging_on {
             "Disable Logging"
