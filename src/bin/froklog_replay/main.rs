@@ -59,6 +59,17 @@ struct Args {
     #[arg(long)]
     admin_token: Option<String>,
 
+    /// Game identifier sent to the server (e.g. "eql", "eq2").
+    /// Defaults to "eql" when --admin-token is used.
+    #[arg(long, default_value = "eql")]
+    game: String,
+
+    /// EverQuest server name (e.g. "Teek", "Tormax").
+    /// When --admin-token is used this is auto-extracted from the log filename
+    /// (eqlog_<Player>_<Server>.txt) if not provided here.
+    #[arg(long, value_name = "EQSERVER")]
+    eq_server: Option<String>,
+
     /// Stream ID (from `POST /stream` registration).
     /// Required when --admin-token is not provided.
     #[arg(long)]
@@ -127,7 +138,11 @@ fn main() {
                 eprintln!("       Expected format: eqlog_<PlayerName>_<Server>.txt");
                 std::process::exit(1);
             }
-            register_stream(&args.server, admin_token, &player_name)
+            let eq_server = args
+                .eq_server
+                .clone()
+                .unwrap_or_else(|| extract_eq_server(&args.log));
+            register_stream(&args.server, admin_token, &args.game, &eq_server, &player_name)
         }
         None => {
             let id = args.stream_id.as_deref().unwrap_or_else(|| {
@@ -242,13 +257,13 @@ fn main() {
 
 /// Call `POST /stream` on the server and return `(stream_id, stream_token)`.
 /// Prints viewer URL and tokens to stdout so the user can bookmark the stream.
-fn register_stream(server: &str, admin_token: &str, player: &str) -> (String, String) {
+fn register_stream(server: &str, admin_token: &str, game: &str, eq_server: &str, player: &str) -> (String, String) {
     let url = format!("{}/stream", server.trim_end_matches('/'));
     let client = reqwest::blocking::Client::new();
     let resp = client
         .post(&url)
         .bearer_auth(admin_token)
-        .json(&serde_json::json!({ "player": player }))
+        .json(&serde_json::json!({ "game": game, "server": eq_server, "player": player }))
         .send()
         .unwrap_or_else(|e| {
             eprintln!("error: failed to reach server at {url}: {e}");
@@ -297,6 +312,23 @@ fn extract_player_name(path: &str) -> String {
             let name = &without_ext[..idx];
             if !name.is_empty() {
                 return name.to_owned();
+            }
+        }
+    }
+    String::new()
+}
+
+fn extract_eq_server(path: &str) -> String {
+    let filename = std::path::Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(path);
+    if let Some(rest) = filename.strip_prefix("eqlog_") {
+        let without_ext = rest.trim_end_matches(".txt");
+        if let Some(idx) = without_ext.rfind('_') {
+            let server = &without_ext[idx + 1..];
+            if !server.is_empty() {
+                return server.to_owned();
             }
         }
     }
