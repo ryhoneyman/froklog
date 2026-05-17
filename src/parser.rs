@@ -1123,6 +1123,10 @@ fn handle_slay(
 }
 
 fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> u64 {
+    // Corpses ("X's corpse") are dead mobs and must never enter the mob list.
+    if tgt.ends_with("'s corpse") {
+        return state.active_mob_id.unwrap_or(u64::MAX);
+    }
     // If this entity is a known player (has dealt damage), never add it to the mob list,
     // and remove it if it somehow got there. Use known_players rather than entities
     // because entities is also populated by mob healers.

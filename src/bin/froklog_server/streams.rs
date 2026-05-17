@@ -18,6 +18,8 @@ pub struct StreamEntry {
     pub stream_token: String,
     /// Secret token viewers must supply in the query string to watch the stream.
     pub view_token: String,
+    /// EverQuest server name (e.g. "Bristlebane").
+    pub server: String,
     /// EverQuest character name reported by the client on stream creation.
     pub player_name: String,
     /// Persistent on-disk journal (append-only, seekable).
@@ -35,6 +37,7 @@ impl StreamEntry {
         stream_id: String,
         stream_token: String,
         view_token: String,
+        server: String,
         player_name: String,
         data_dir: &std::path::Path,
     ) -> std::io::Result<Self> {
@@ -44,6 +47,7 @@ impl StreamEntry {
             stream_id,
             stream_token,
             view_token,
+            server,
             player_name,
             journal,
             broadcast_tx,
@@ -68,6 +72,9 @@ pub struct StreamRegistry {
     by_id: HashMap<String, StreamEntry>,
     /// Reverse index: stream_token → stream_id (for O(1) ingest auth lookup).
     token_to_id: HashMap<String, String>,
+    /// Public name index: (server_lower, player_lower) → stream_id.
+    /// Points to the most recently inserted stream for that identity.
+    name_to_id: HashMap<(String, String), String>,
     /// Root directory for on-disk journals.
     pub data_dir: PathBuf,
 }
@@ -77,14 +84,28 @@ impl StreamRegistry {
         Self {
             by_id: HashMap::new(),
             token_to_id: HashMap::new(),
+            name_to_id: HashMap::new(),
             data_dir,
         }
     }
 
     pub fn insert(&mut self, entry: StreamEntry) {
+        if !entry.server.is_empty() {
+            let key = (
+                entry.server.to_lowercase(),
+                entry.player_name.to_lowercase(),
+            );
+            self.name_to_id.insert(key, entry.stream_id.clone());
+        }
         self.token_to_id
             .insert(entry.stream_token.clone(), entry.stream_id.clone());
         self.by_id.insert(entry.stream_id.clone(), entry);
+    }
+
+    /// Look up the stream_id for a public player identity (case-insensitive).
+    pub fn find_id_by_player(&self, server: &str, name: &str) -> Option<String> {
+        let key = (server.to_lowercase(), name.to_lowercase());
+        self.name_to_id.get(&key).cloned()
     }
 
     pub fn get(&self, stream_id: &str) -> Option<&StreamEntry> {
@@ -102,6 +123,14 @@ impl StreamRegistry {
     pub fn remove(&mut self, stream_id: &str) -> Option<StreamEntry> {
         if let Some(entry) = self.by_id.remove(stream_id) {
             self.token_to_id.remove(&entry.stream_token);
+            let key = (
+                entry.server.to_lowercase(),
+                entry.player_name.to_lowercase(),
+            );
+            // Only remove from name_to_id if this stream is still the active one.
+            if self.name_to_id.get(&key).map(|id| id == stream_id).unwrap_or(false) {
+                self.name_to_id.remove(&key);
+            }
             Some(entry)
         } else {
             None
@@ -120,6 +149,34 @@ impl StreamRegistry {
             })
             .collect()
     }
+
+    pub fn list_admin(&self) -> Vec<AdminStreamInfo> {
+        self.by_id
+            .values()
+            .map(|e| AdminStreamInfo {
+                stream_id: e.stream_id.clone(),
+                server: e.server.clone(),
+                player_name: e.player_name.clone(),
+                view_token: e.view_token.clone(),
+                connected: e.client_connected.load(Ordering::Relaxed),
+                journal: e.journal.clone(),
+                journal_path: self.data_dir.join(&e.stream_id).join("journal.jsonl"),
+            })
+            .collect()
+    }
+}
+
+/// Snapshot of a stream's fields needed by the admin panel.
+pub struct AdminStreamInfo {
+    pub stream_id: String,
+    pub server: String,
+    pub player_name: String,
+    pub view_token: String,
+    pub connected: bool,
+    /// Handle to the journal so the admin handler can read stats outside the registry lock.
+    pub journal: SharedJournal,
+    /// Absolute path to the journal file (for file-size stat).
+    pub journal_path: PathBuf,
 }
 
 /// Thread-safe handle to the registry shared across all Axum handlers.
