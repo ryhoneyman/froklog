@@ -242,7 +242,8 @@ tr.player-hdr td{{background:#2a2a3d;color:#cba6f7;font-weight:600;font-size:.8r
 .pub-yes{{color:#89dceb;font-weight:600}}
 .pub-no{{color:#45475a}}
 .empty{{text-align:center;color:#6c7086;padding:2rem}}
-tr.live-row td{{background:#1e2a1e;border-left:3px solid #a6e3a1}}
+tr.live-row td{{background:#1e2a1e}}
+tr.live-row td:first-child{{border-left:3px solid #a6e3a1}}
 tr.live-row:hover td{{background:#243024}}
 a{{color:#89b4fa;text-decoration:none}}
 a:hover{{text-decoration:underline}}
