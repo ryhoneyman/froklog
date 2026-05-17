@@ -26,6 +26,8 @@ pub struct StreamEntry {
     pub player_name: String,
     /// Whether the user opted in to public streaming via the client checkbox.
     pub public_stream: bool,
+    /// True when the stream was created by froklog-replay (never goes live).
+    pub is_replay: bool,
     /// Fires `()` when `public_stream` flips to false so open public viewer
     /// WebSockets know to close themselves.
     pub public_revoke_tx: watch::Sender<()>,
@@ -49,6 +51,7 @@ impl StreamEntry {
         server: String,
         player_name: String,
         public_stream: bool,
+        is_replay: bool,
         data_dir: &std::path::Path,
     ) -> std::io::Result<Self> {
         let journal = open_shared(data_dir, &stream_id)?;
@@ -62,6 +65,7 @@ impl StreamEntry {
             server,
             player_name,
             public_stream,
+            is_replay,
             public_revoke_tx,
             journal,
             broadcast_tx,
@@ -186,6 +190,7 @@ impl StreamRegistry {
                 view_token: e.view_token.clone(),
                 connected: e.client_connected.load(Ordering::Relaxed),
                 public_stream: e.public_stream,
+                is_replay: e.is_replay,
                 journal: e.journal.clone(),
                 journal_path: self.data_dir.join(&e.stream_id).join("journal.jsonl"),
             })
@@ -202,6 +207,7 @@ pub struct AdminStreamInfo {
     pub view_token: String,
     pub connected: bool,
     pub public_stream: bool,
+    pub is_replay: bool,
     /// Handle to the journal so the admin handler can read stats outside the registry lock.
     pub journal: SharedJournal,
     /// Absolute path to the journal file (for file-size stat).
