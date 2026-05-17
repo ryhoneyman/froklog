@@ -1023,7 +1023,7 @@ function renderCards(d) {
   if (selectedMob !== null) {
     const key = String(selectedMob);
     if      (detailMode === 'damage')  { const p = (d.mob_damage  || {})[key] || []; cardsEl.innerHTML = p.length ? p.map(e => damageCard(e, elapsed)).join('') : '<div class="empty-state">No damage recorded for this mob yet</div>'; }
-    else if (detailMode === 'tanked')  { const p = (d.mob_tanking || {})[key] || []; cardsEl.innerHTML = p.length ? p.map(e => damageCard(e, elapsed, '#8a3030')).join('') : '<div class="empty-state">No tanking data recorded for this mob</div>'; }
+    else if (detailMode === 'tanked')  { const p = (d.mob_tanking || {})[key] || []; cardsEl.innerHTML = p.length ? p.map(e => damageCard(e, elapsed)).join('') : '<div class="empty-state">No tanking data recorded for this mob</div>'; }
     else if (detailMode === 'healing') { const h = (d.mob_healing || {})[key] || []; cardsEl.innerHTML = h.length ? h.map(e => healerCard(e, elapsed)).join('') : '<div class="empty-state">No healing recorded for this mob</div>'; }
     else if (detailMode === 'healed')  { const h = (d.mob_healed  || {})[key] || []; cardsEl.innerHTML = h.length ? h.map(e => healeeCard(e, elapsed)).join('') : '<div class="empty-state">No heals received recorded for this mob</div>'; }
     else                               { const a = (d.mob_avoid   || {})[key] || []; cardsEl.innerHTML = a.length ? a.map(e => avoidCard(e)).join('') : '<div class="empty-state">No avoidance recorded for this mob</div>'; }
@@ -1031,7 +1031,7 @@ function renderCards(d) {
     if      (detailMode === 'damage')  { const e = d.entities  || []; cardsEl.innerHTML = e.length ? e.map(x => damageCard(x, elapsed)).join('') : '<div class="waiting-state">Waiting for combat…</div>'; }
     else if (detailMode === 'healing') { const h = d.healers   || []; cardsEl.innerHTML = h.length ? h.map(e => healerCard(e, elapsed)).join('') : '<div class="empty-state">No healing recorded</div>'; }
     else if (detailMode === 'healed')  { const h = d.healees   || []; cardsEl.innerHTML = h.length ? h.map(e => healeeCard(e, elapsed)).join('') : '<div class="empty-state">No heals received recorded</div>'; }
-    else if (detailMode === 'tanked')  { const t = d.tanked    || []; cardsEl.innerHTML = t.length ? t.map(e => damageCard(e, elapsed, '#8a3030')).join('') : '<div class="empty-state">No tanking recorded</div>'; }
+    else if (detailMode === 'tanked')  { const t = d.tanked    || []; cardsEl.innerHTML = t.length ? t.map(e => damageCard(e, elapsed)).join('') : '<div class="empty-state">No tanking recorded</div>'; }
     else                               { const a = d.avoidance || []; cardsEl.innerHTML = a.length ? a.map(e => avoidCard(e)).join('') : '<div class="empty-state">No avoidance recorded</div>'; }
   }
 }
