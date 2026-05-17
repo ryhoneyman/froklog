@@ -291,10 +291,9 @@ impl CombatState {
             })
             .collect();
 
-        // ── Mob list (confirmed only, up to 40, most-recently-seen first) ──
+        // ── Mob list (confirmed only, most-recently-seen first) ──
         let mob_list: Vec<Value> = self.mob_list.iter()
             .filter(|m| self.confirmed_mobs.contains(&m.name))
-            .take(40)
             .map(|m| {
                 let secs_since_last = m.last_seen.elapsed().as_secs_f64();
                 let timed_out = secs_since_last >= 15.0;
