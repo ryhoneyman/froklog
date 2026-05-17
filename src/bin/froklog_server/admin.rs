@@ -91,17 +91,36 @@ pub async fn admin_panel_handler(
         streams.iter().filter_map(|s| s.last_ts).max()
     }
 
-    // Three-level grouping: game_label → server → player → streams.
+    // Three-level grouping: game_key → server_key → player_key → streams.
+    // Keys are normalized to lowercase so streams for the same player/server always
+    // merge even if the client sent different capitalizations across sessions.
+    // Separate display-name maps hold the first-seen raw string for each key.
     let mut by_game: HashMap<String, HashMap<String, HashMap<String, Vec<StreamDisplay>>>> =
         HashMap::new();
+    let mut game_display: HashMap<String, String> = HashMap::new();
+    let mut server_display: HashMap<(String, String), String> = HashMap::new();
+    let mut player_display: HashMap<(String, String, String), String> = HashMap::new();
+
     for (game_id, server, player, display) in flat {
         let game_label = game_display_name(&game_id).to_string();
+        let game_key = game_label.to_lowercase();
+        let server_key = server.to_lowercase();
+        let player_key = player.to_lowercase();
+
+        game_display.entry(game_key.clone()).or_insert(game_label);
+        server_display
+            .entry((game_key.clone(), server_key.clone()))
+            .or_insert(server);
+        player_display
+            .entry((game_key.clone(), server_key.clone(), player_key.clone()))
+            .or_insert(player);
+
         by_game
-            .entry(game_label)
+            .entry(game_key)
             .or_default()
-            .entry(server)
+            .entry(server_key)
             .or_default()
-            .entry(player)
+            .entry(player_key)
             .or_default()
             .push(display);
     }
@@ -113,19 +132,26 @@ pub async fn admin_panel_handler(
 
     let mut game_groups: GameVec = by_game
         .into_iter()
-        .map(|(game_label, by_server)| {
+        .map(|(game_key, by_server)| {
+            let game_label = game_display.remove(&game_key).unwrap_or_else(|| game_key.clone());
             let mut server_vec: ServerVec = by_server
                 .into_iter()
-                .map(|(server, by_player)| {
+                .map(|(server_key, by_player)| {
+                    let server_label = server_display
+                        .remove(&(game_key.clone(), server_key.clone()))
+                        .unwrap_or_else(|| server_key.clone());
                     let mut player_vec: PlayerVec = by_player
                         .into_iter()
-                        .map(|(player, mut streams)| {
+                        .map(|(player_key, mut streams)| {
+                            let player_label = player_display
+                                .remove(&(game_key.clone(), server_key.clone(), player_key.clone()))
+                                .unwrap_or_else(|| player_key.clone());
                             streams.sort_by_key(|s| std::cmp::Reverse(s.last_ts));
-                            (player, streams)
+                            (player_label, streams)
                         })
                         .collect();
                     player_vec.sort_by_key(|(_, streams)| std::cmp::Reverse(max_ts_of(streams)));
-                    (server, player_vec)
+                    (server_label, player_vec)
                 })
                 .collect();
             server_vec.sort_by_key(|(_, pv)| {
