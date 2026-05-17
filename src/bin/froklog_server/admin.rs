@@ -133,7 +133,9 @@ pub async fn admin_panel_handler(
     let mut game_groups: GameVec = by_game
         .into_iter()
         .map(|(game_key, by_server)| {
-            let game_label = game_display.remove(&game_key).unwrap_or_else(|| game_key.clone());
+            let game_label = game_display
+                .remove(&game_key)
+                .unwrap_or_else(|| game_key.clone());
             let mut server_vec: ServerVec = by_server
                 .into_iter()
                 .map(|(server_key, by_player)| {
@@ -204,9 +206,17 @@ pub async fn admin_panel_handler(
                 ));
                 for s in streams {
                     let (row_class, status, status_kw) = if s.connected {
-                        ("live-row", r#"<span class="live">&#9679; Live</span>"#, "live")
+                        (
+                            "live-row",
+                            r#"<span class="live">&#9679; Live</span>"#,
+                            "live",
+                        )
                     } else {
-                        ("", r#"<span class="offline">&#9679; Offline</span>"#, "offline")
+                        (
+                            "",
+                            r#"<span class="offline">&#9679; Offline</span>"#,
+                            "offline",
+                        )
                     };
                     let view_url = format!("/stream/{}?vtok={}", s.stream_id, s.view_token);
                     let (public_badge, public_kw) = if s.public_stream {
