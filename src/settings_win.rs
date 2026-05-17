@@ -392,8 +392,10 @@ mod win {
                     }
                     let _ = EnableWindow(state.btn_register, BOOL(0));
                     let password = get_text(state.edit_password);
-                    let is_public = SendMessageW(state.chk_public, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize
-                        == BST_CHECKED;
+                    let is_public =
+                        SendMessageW(state.chk_public, BM_GETCHECK, WPARAM(0), LPARAM(0)).0
+                            as usize
+                            == BST_CHECKED;
                     let hwnd_usize = hwnd.0 as usize;
                     std::thread::spawn(move || unsafe {
                         let result = do_register(&url, &player, &server, &password, is_public);
@@ -1050,7 +1052,13 @@ mod win {
             .send();
     }
 
-    fn do_register(url: &str, player: &str, server: &str, password: &str, public_stream: bool) -> RegisterResult {
+    fn do_register(
+        url: &str,
+        player: &str,
+        server: &str,
+        password: &str,
+        public_stream: bool,
+    ) -> RegisterResult {
         let endpoint = format!("{}/stream", url.trim_end_matches('/'));
         let body = serde_json::json!({ "player": player, "server": server, "public_stream": public_stream });
 
