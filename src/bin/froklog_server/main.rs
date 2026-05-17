@@ -484,12 +484,17 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
     let Ok(entries) = std::fs::read_dir(data_dir) else {
         return;
     };
-    let mut loaded = 0usize;
+
+    // Collect all valid metas with their meta.json modification time.
+    let mut metas: Vec<(std::time::SystemTime, StreamMeta)> = Vec::new();
     for entry in entries.flatten() {
         let meta_path = entry.path().join("meta.json");
         if !meta_path.exists() {
             continue;
         }
+        let mtime = std::fs::metadata(&meta_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         let Ok(raw) = std::fs::read_to_string(&meta_path) else {
             continue;
         };
@@ -497,6 +502,16 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
             tracing::warn!("Skipping malformed meta at {}", meta_path.display());
             continue;
         };
+        metas.push((mtime, meta));
+    }
+
+    // Sort private-before-public, older-before-newer so the most recently
+    // active public stream is inserted last and wins the name_to_id slot
+    // when multiple streams share the same (game, server, player) identity.
+    metas.sort_by(|(at, a), (bt, b)| a.public_stream.cmp(&b.public_stream).then(at.cmp(bt)));
+
+    let mut loaded = 0usize;
+    for (_, meta) in metas {
         match StreamEntry::new(
             meta.stream_id.clone(),
             meta.stream_token,
