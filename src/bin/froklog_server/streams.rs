@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, watch, RwLock};
 use tracing::warn;
 
 use crate::journal::{open_shared, SharedJournal};
@@ -22,6 +22,11 @@ pub struct StreamEntry {
     pub server: String,
     /// EverQuest character name reported by the client on stream creation.
     pub player_name: String,
+    /// Whether the user opted in to public streaming via the client checkbox.
+    pub public_stream: bool,
+    /// Fires `()` when `public_stream` flips to false so open public viewer
+    /// WebSockets know to close themselves.
+    pub public_revoke_tx: watch::Sender<()>,
     /// Persistent on-disk journal (append-only, seekable).
     pub journal: SharedJournal,
     /// Fan-out channel: every viewer WebSocket subscribes to this.
@@ -39,16 +44,20 @@ impl StreamEntry {
         view_token: String,
         server: String,
         player_name: String,
+        public_stream: bool,
         data_dir: &std::path::Path,
     ) -> std::io::Result<Self> {
         let journal = open_shared(data_dir, &stream_id)?;
         let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let (public_revoke_tx, _) = watch::channel(());
         Ok(Self {
             stream_id,
             stream_token,
             view_token,
             server,
             player_name,
+            public_stream,
+            public_revoke_tx,
             journal,
             broadcast_tx,
             client_connected: Arc::new(AtomicBool::new(false)),
@@ -164,6 +173,7 @@ impl StreamRegistry {
                 player_name: e.player_name.clone(),
                 view_token: e.view_token.clone(),
                 connected: e.client_connected.load(Ordering::Relaxed),
+                public_stream: e.public_stream,
                 journal: e.journal.clone(),
                 journal_path: self.data_dir.join(&e.stream_id).join("journal.jsonl"),
             })
@@ -178,6 +188,7 @@ pub struct AdminStreamInfo {
     pub player_name: String,
     pub view_token: String,
     pub connected: bool,
+    pub public_stream: bool,
     /// Handle to the journal so the admin handler can read stats outside the registry lock.
     pub journal: SharedJournal,
     /// Absolute path to the journal file (for file-size stat).

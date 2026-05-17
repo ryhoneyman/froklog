@@ -18,6 +18,7 @@ struct StreamDisplay {
     stream_id: String,
     view_token: String,
     connected: bool,
+    public_stream: bool,
     first_ts: Option<u64>,
     last_ts: Option<u64>,
     batches: usize,
@@ -66,6 +67,7 @@ pub async fn admin_panel_handler(
                 stream_id: info.stream_id,
                 view_token: info.view_token,
                 connected: info.connected,
+                public_stream: info.public_stream,
                 first_ts,
                 last_ts,
                 batches,
@@ -99,7 +101,7 @@ pub async fn admin_panel_handler(
     let mut body = String::new();
     for (player, streams) in &groups {
         body.push_str(&format!(
-            "<tr class=\"player-hdr\"><td colspan=\"8\">{}</td></tr>\n",
+            "<tr class=\"player-hdr\"><td colspan=\"9\">{}</td></tr>\n",
             html_escape(player)
         ));
         for s in streams {
@@ -109,6 +111,11 @@ pub async fn admin_panel_handler(
                 ("", r#"<span class="offline">&#9679; Offline</span>"#)
             };
             let view_url = format!("/stream/{}?vtok={}", s.stream_id, s.view_token);
+            let public_badge = if s.public_stream {
+                r#"<span class="pub-yes">&#10003; Yes</span>"#
+            } else {
+                r#"<span class="pub-no">&#8212;</span>"#
+            };
             body.push_str(&format!(
                 "<tr class=\"{row_class}\">\
                   <td class=\"mono\">{}</td>\
@@ -117,6 +124,7 @@ pub async fn admin_panel_handler(
                   <td class=\"num dur\">{}</td>\
                   <td class=\"num\">{}</td>\
                   <td class=\"num\">{}</td>\
+                  <td>{}</td>\
                   <td>{}</td>\
                   <td><a href=\"{}\" target=\"_blank\">View</a></td>\
                 </tr>\n",
@@ -127,13 +135,14 @@ pub async fn admin_panel_handler(
                 s.batches,
                 format_size(s.file_bytes),
                 status,
+                public_badge,
                 html_escape(&view_url),
             ));
         }
     }
 
     if body.is_empty() {
-        body.push_str(r#"<tr><td colspan="8" class="empty">No streams yet.</td></tr>"#);
+        body.push_str(r#"<tr><td colspan="9" class="empty">No streams yet.</td></tr>"#);
     }
 
     let html = format!(
@@ -160,6 +169,8 @@ tr.player-hdr td{{background:#2a2a3d;color:#cba6f7;font-weight:600;font-size:.85
 .dur{{color:#f9e2af}}
 .live{{color:#a6e3a1;font-weight:600}}
 .offline{{color:#6c7086}}
+.pub-yes{{color:#89dceb;font-weight:600}}
+.pub-no{{color:#45475a}}
 .empty{{text-align:center;color:#6c7086;padding:2rem}}
 tr.live-row td{{background:#1e2a1e;border-left:3px solid #a6e3a1}}
 tr.live-row:hover td{{background:#243024}}
@@ -180,6 +191,7 @@ a:hover{{text-decoration:underline}}
       <th style="text-align:right">Batches</th>
       <th style="text-align:right">Size</th>
       <th>Status</th>
+      <th>Public</th>
       <th>Actions</th>
     </tr>
   </thead>
