@@ -282,6 +282,13 @@ fn main() {
             };
         }
 
+        // ── Login boundary ─────────────────────────────────────────────────────
+        if line == "Welcome to EverQuest Legends!" {
+            event_desc = "LOGIN".to_string();
+            matched = true;
+            t!("MATCH", "Login message — new session boundary");
+        }
+
         // ── RE_HIT_BY_SPELL ────────────────────────────────────────────────────
         if let Some(caps) = RE_HIT_BY_SPELL.captures(line) {
             let src = norm(caps["src"].trim(), &args.player);

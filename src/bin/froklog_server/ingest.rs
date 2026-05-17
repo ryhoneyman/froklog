@@ -7,6 +7,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use tracing::{info, warn};
 
+use crate::session_index::{SessionEntry, RECONNECT_GAP_SECS};
 use crate::ServerState;
 
 /// Maximum EQ log-time span (seconds) allowed per journal entry.
@@ -86,12 +87,39 @@ pub async fn ingest_ws_handler(
 }
 
 async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerState) {
+    let now_secs = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    };
+
+    // Mark client connected and check for a reconnect-gap session boundary.
     let connected_flag = {
         let reg = state.registry.read().await;
         reg.get(&stream_id).map(|e| Arc::clone(&e.client_connected))
     };
     if let Some(flag) = &connected_flag {
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    // WS reconnect trigger: cut a session if the journal has content and the
+    // last batch arrived more than RECONNECT_GAP_SECS ago (player was gone).
+    {
+        let reg = state.registry.read().await;
+        if let Some(entry) = reg.get(&stream_id) {
+            let (journal_len, last_ts) = {
+                let j = entry.journal.read().await;
+                (j.len(), j.last_ts())
+            };
+            if journal_len > 0 {
+                let gap = last_ts.map(|t| now_secs().saturating_sub(t)).unwrap_or(0);
+                if gap >= RECONNECT_GAP_SECS {
+                    let wall_ts = now_secs();
+                    cut_session(entry, journal_len, wall_ts, wall_ts, &stream_id).await;
+                }
+            }
+        }
     }
 
     while let Some(result) = socket.recv().await {
@@ -106,10 +134,18 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                     }
                 };
 
-                let wall_ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
+                let wall_ts = now_secs();
+
+                // Login event trigger: a "Welcome to EverQuest Legends!" line emitted
+                // by the client parser.  Takes priority — if we already cut a session
+                // from the WS reconnect at this same journal position, deduplicate.
+                let login_ts = batch.events.iter().find_map(|e| {
+                    if let froklog::event::CombatEvent::Login { ts } = e {
+                        Some(*ts as u64)
+                    } else {
+                        None
+                    }
+                });
 
                 // Split oversized batches (e.g. from dump mode) into per-minute
                 // sub-batches so the seek index has sufficient granularity.
@@ -117,6 +153,18 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
 
                 let reg = state.registry.read().await;
                 if let Some(entry) = reg.get(&stream_id) {
+                    // Record journal position before appending so the session starts
+                    // at the batch that contains the Login event.
+                    if let Some(log_ts) = login_ts {
+                        let start_idx = entry.journal.read().await.len();
+                        let last_session_idx = entry.session_index.read().await.last_start_idx();
+                        // Deduplicate: skip if the reconnect trigger already cut at
+                        // this exact journal position.
+                        if last_session_idx != Some(start_idx) {
+                            cut_session(entry, start_idx, log_ts, wall_ts, &stream_id).await;
+                        }
+                    }
+
                     for sub in sub_batches {
                         let log_ts = sub.max_log_ts();
                         match serde_json::to_string(&sub) {
@@ -142,6 +190,32 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
     warn!("Ingest [{stream_id}]: client disconnected");
     if let Some(flag) = &connected_flag {
         flag.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Append a new entry to the stream's session index.
+async fn cut_session(
+    entry: &crate::streams::StreamEntry,
+    start_journal_idx: usize,
+    start_log_ts: u64,
+    start_wall_ts: u64,
+    stream_id: &str,
+) {
+    let mut si = entry.session_index.write().await;
+    let num = si.len() as u32 + 1;
+    let session = SessionEntry {
+        num,
+        start_journal_idx,
+        start_log_ts,
+        start_wall_ts,
+        label: crate::session_index::format_label(start_log_ts),
+    };
+    if let Err(e) = si.append(session) {
+        warn!("SessionIndex [{stream_id}]: failed to write session {num}: {e}");
+    } else {
+        info!(
+            "SessionIndex [{stream_id}]: session {num} started at journal idx {start_journal_idx}"
+        );
     }
 }
 

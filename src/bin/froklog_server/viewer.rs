@@ -14,6 +14,7 @@ use tracing::{debug, info};
 
 use crate::journal::SharedJournal;
 use crate::ServerState;
+use axum::Json;
 
 /// Number of journal batches to send per loop iteration during catch-up.
 /// Amortises per-batch async overhead without affecting replay granularity.
@@ -22,6 +23,7 @@ const CATCHUP_BURST: usize = 64;
 #[derive(Deserialize)]
 pub struct ViewQuery {
     pub vtok: Option<String>,
+    pub session: Option<u32>,
 }
 
 /// `GET /stream/:id?vtok=<view_token>` — serves the viewer HTML page.
@@ -35,19 +37,35 @@ pub async fn stream_page_handler(
     let response = if !is_valid_view_token(&stream_id, &params.vtok, &state).await {
         StatusCode::UNAUTHORIZED.into_response()
     } else {
-        let vtok = params.vtok.unwrap_or_default();
-        let player_name = {
+        let vtok = params.vtok.clone().unwrap_or_default();
+        let (player_name, session_index) = {
             let reg = state.registry.read().await;
-            reg.get(&stream_id)
-                .map(|e| e.player_name.clone())
-                .unwrap_or_default()
+            let entry = reg.get(&stream_id);
+            (
+                entry.map(|e| e.player_name.clone()).unwrap_or_default(),
+                entry.map(|e| Arc::clone(&e.session_index)),
+            )
         };
+        let (session_log_ts, session_end_log_ts): (u64, u64) =
+            if let (Some(num), Some(si_arc)) = (params.session, session_index) {
+                let si = si_arc.read().await;
+                let sessions = si.list();
+                let start = sessions.iter().find(|s| s.num == num).map(|s| s.start_log_ts).unwrap_or(0);
+                let end = sessions.iter().find(|s| s.num > num).map(|s| s.start_log_ts).unwrap_or(0);
+                (start, end)
+            } else {
+                (0, 0)
+            };
         let ws_path = format!("/stream/{stream_id}/ws?vtok={vtok}");
+        let sessions_path = format!("/stream/{stream_id}/sessions?vtok={vtok}");
         let html = include_str!("../../../static/stream.html")
             .replace("__STREAM_ID__", &stream_id)
             .replace("__VIEW_TOKEN__", &vtok)
             .replace("__PLAYER_NAME__", &player_name)
-            .replace("__WS_PATH__", &ws_path);
+            .replace("__WS_PATH__", &ws_path)
+            .replace("__SESSIONS_PATH__", &sessions_path)
+            .replace("__SESSION_LOG_TS__", &session_log_ts.to_string())
+            .replace("__SESSION_END_LOG_TS__", &session_end_log_ts.to_string());
         Html(html).into_response()
     };
     info!(
@@ -605,41 +623,58 @@ async fn handle_client_msg(
 
 // ── Public player routes (/player/{server}/{name}) ────────────────────────────
 
-/// `GET /player/:game/:server/:name` — serves the viewer page for a live public stream.
-/// Returns a simple offline page if the player has no stream or is not connected.
+#[derive(Deserialize)]
+pub struct PlayerQuery {
+    pub session: Option<u32>,
+}
+
+/// `GET /player/:game/:server/:name` — serves the viewer page for a public stream.
+/// Shows the full viewer whether the player is live or has past recorded sessions.
 pub async fn player_page_handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path((game, server, name)): Path<(String, String, String)>,
+    Query(params): Query<PlayerQuery>,
     State(state): State<ServerState>,
 ) -> Response {
     let entry_data = {
         let reg = state.registry.read().await;
         reg.find_id_by_player(&game, &server, &name).and_then(|id| {
-            reg.get(&id).map(|e| {
-                (
+            reg.get(&id).and_then(|e| {
+                if !e.public_stream {
+                    return None;
+                }
+                Some((
                     e.stream_id.clone(),
                     e.player_name.clone(),
-                    e.server.clone(),
-                    e.client_connected.load(Ordering::Relaxed),
-                    e.public_stream,
-                )
+                    Arc::clone(&e.session_index),
+                ))
             })
         })
     };
 
     let response = match entry_data {
-        None | Some((_, _, _, _, false)) => StatusCode::NOT_FOUND.into_response(),
-        Some((_, player_name, server_name, false, true)) => {
-            player_offline_page(&player_name, &server_name)
-        }
-        Some((stream_id, player_name, _, true, true)) => {
-            let ws_path = format!("/player/{}/{}/{}/ws", game, server, name);
+        None => StatusCode::NOT_FOUND.into_response(),
+        Some((stream_id, player_name, session_index)) => {
+            let (session_log_ts, session_end_log_ts): (u64, u64) = if let Some(num) = params.session {
+                let si = session_index.read().await;
+                let sessions = si.list();
+                let start = sessions.iter().find(|s| s.num == num).map(|s| s.start_log_ts).unwrap_or(0);
+                let end = sessions.iter().find(|s| s.num > num).map(|s| s.start_log_ts).unwrap_or(0);
+                (start, end)
+            } else {
+                (0, 0)
+            };
+            let ws_path = format!("/player/{game}/{server}/{name}/ws");
+            let sessions_path = format!("/player/{game}/{server}/{name}/sessions");
             let html = include_str!("../../../static/stream.html")
                 .replace("__STREAM_ID__", &stream_id)
                 .replace("__VIEW_TOKEN__", "")
                 .replace("__PLAYER_NAME__", &player_name)
-                .replace("__WS_PATH__", &ws_path);
+                .replace("__WS_PATH__", &ws_path)
+                .replace("__SESSIONS_PATH__", &sessions_path)
+                .replace("__SESSION_LOG_TS__", &session_log_ts.to_string())
+                .replace("__SESSION_END_LOG_TS__", &session_end_log_ts.to_string());
             Html(html).into_response()
         }
     };
@@ -651,8 +686,8 @@ pub async fn player_page_handler(
     response
 }
 
-/// `GET /player/:game/:server/:name/ws` — viewer WebSocket for a live public stream.
-/// Rejected with 503 if the player is not currently streaming.
+/// `GET /player/:game/:server/:name/ws` — viewer WebSocket for a public stream.
+/// Works for both live streams and completed recordings.
 pub async fn player_ws_handler(
     Path((game, server, name)): Path<(String, String, String)>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -683,10 +718,6 @@ pub async fn player_ws_handler(
         Some(h) => h,
     };
 
-    if !client_connected.load(Ordering::Relaxed) {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-
     info!(
         "Player viewer [{stream_id}] ({game}/{server}/{name}): client connected from {}",
         crate::client_ip(&headers, peer)
@@ -697,46 +728,76 @@ pub async fn player_ws_handler(
     .into_response()
 }
 
-fn player_offline_page(name: &str, server: &str) -> Response {
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{name} — Not Streaming</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:#0f1117;color:#cdd6f4;font-family:'Segoe UI',system-ui,sans-serif;
-      display:flex;align-items:center;justify-content:center;min-height:100vh}}
-.card{{background:#1e1e2e;border-radius:12px;padding:2.5rem 3rem;text-align:center;
-       border:1px solid #313244;max-width:380px}}
-.dot{{display:inline-block;width:10px;height:10px;border-radius:50%;
-      background:#45475a;margin-right:.5rem;vertical-align:middle}}
-h1{{font-size:1.4rem;margin-bottom:.4rem;color:#cdd6f4}}
-.server{{font-size:.85rem;color:#6c7086;margin-bottom:1.6rem}}
-p{{color:#a6adc8;font-size:.9rem;line-height:1.5}}
-</style>
-</head>
-<body>
-<div class="card">
-  <h1><span class="dot"></span>{name}</h1>
-  <div class="server">{server}</div>
-  <p>Not currently streaming.<br>Check back when they are live.</p>
-</div>
-</body>
-</html>"#,
-        name = html_escape(name),
-        server = html_escape(server),
-    );
-    (StatusCode::OK, Html(html)).into_response()
+/// `GET /player/:game/:server/:name/sessions` — public session list for a player's stream.
+pub async fn player_sessions_handler(
+    Path((game, server, name)): Path<(String, String, String)>,
+    State(state): State<ServerState>,
+) -> Response {
+    let session_index = {
+        let reg = state.registry.read().await;
+        reg.find_id_by_player(&game, &server, &name).and_then(|id| {
+            reg.get(&id).and_then(|e| {
+                if !e.public_stream {
+                    None
+                } else {
+                    Some(Arc::clone(&e.session_index))
+                }
+            })
+        })
+    };
+    match session_index {
+        None => StatusCode::NOT_FOUND.into_response(),
+        Some(si_arc) => {
+            let si = si_arc.read().await;
+            let sessions: Vec<serde_json::Value> = si
+                .list()
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "num": s.num,
+                        "start_log_ts": s.start_log_ts,
+                        "start_wall_ts": s.start_wall_ts,
+                        "label": s.label,
+                    })
+                })
+                .collect();
+            Json(sessions).into_response()
+        }
+    }
 }
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+// ── Session list ──────────────────────────────────────────────────────────────
+
+/// `GET /stream/:id/sessions?vtok=<view_token>` — returns the list of play sessions
+/// archived within this stream's journal.
+pub async fn stream_sessions_handler(
+    Path(stream_id): Path<String>,
+    Query(params): Query<ViewQuery>,
+    State(state): State<ServerState>,
+) -> Response {
+    if !is_valid_view_token(&stream_id, &params.vtok, &state).await {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let reg = state.registry.read().await;
+    match reg.get(&stream_id) {
+        None => StatusCode::NOT_FOUND.into_response(),
+        Some(entry) => {
+            let si = entry.session_index.read().await;
+            let sessions: Vec<serde_json::Value> = si
+                .list()
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "num": s.num,
+                        "start_log_ts": s.start_log_ts,
+                        "start_wall_ts": s.start_wall_ts,
+                        "label": s.label,
+                    })
+                })
+                .collect();
+            Json(sessions).into_response()
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

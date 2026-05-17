@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::SinkExt;
@@ -15,10 +17,14 @@ use crate::event::{CombatEvent, EventBatch};
 ///
 /// `push_url`     — WebSocket URL, e.g. `ws://server:8766/ingest/<stream_id>`
 /// `stream_token` — Bearer token issued by `POST /stream` on the server.
+/// `events_sent`  — Incremented by the number of events in each batch sent.
+/// `connected`    — Set true when WS is up, false while disconnected/retrying.
 pub async fn push_to_server(
     push_url: String,
     stream_token: String,
     mut event_rx: UnboundedReceiver<CombatEvent>,
+    events_sent: Arc<AtomicU64>,
+    connected: Arc<AtomicBool>,
 ) {
     let mut seq: u32 = 0;
 
@@ -35,10 +41,12 @@ pub async fn push_to_server(
         let ws = match connect_async(req).await {
             Ok((ws, _)) => {
                 info!("Pusher: connected");
+                connected.store(true, Ordering::Relaxed);
                 ws
             }
             Err(e) => {
                 error!("Pusher: connect failed: {e}");
+                connected.store(false, Ordering::Relaxed);
                 // Drain accumulated events to avoid unbounded memory growth during
                 // prolonged reconnect loops.
                 while event_rx.try_recv().is_ok() {}
@@ -57,6 +65,7 @@ pub async fn push_to_server(
                     if pending.is_empty() { continue; }
                     let mut failed = false;
                     for batch_events in split_by_game_second(std::mem::take(&mut pending)) {
+                        let n = batch_events.len() as u64;
                         let batch = EventBatch { seq, events: batch_events };
                         seq = seq.wrapping_add(1);
                         match serde_json::to_string(&batch) {
@@ -65,6 +74,7 @@ pub async fn push_to_server(
                                     failed = true;
                                     break;
                                 }
+                                events_sent.fetch_add(n, Ordering::Relaxed);
                             }
                             Err(e) => warn!("Pusher: serialise error: {e}"),
                         }
@@ -78,13 +88,17 @@ pub async fn push_to_server(
                             // Event channel closed (parser thread done).
                             // Flush any pending events before exiting.
                             for batch_events in split_by_game_second(std::mem::take(&mut pending)) {
+                                let n = batch_events.len() as u64;
                                 let batch = EventBatch { seq, events: batch_events };
                                 seq = seq.wrapping_add(1);
                                 if let Ok(json) = serde_json::to_string(&batch) {
-                                    let _ = sink.send(Message::Text(json)).await;
+                                    if sink.send(Message::Text(json)).await.is_ok() {
+                                        events_sent.fetch_add(n, Ordering::Relaxed);
+                                    }
                                 }
                             }
                             info!("Pusher: event channel closed, exiting");
+                            connected.store(false, Ordering::Relaxed);
                             return;
                         }
                     }
@@ -92,6 +106,7 @@ pub async fn push_to_server(
             }
         };
 
+        connected.store(false, Ordering::Relaxed);
         if disconnected {
             warn!("Pusher: send failed — reconnecting in 5s");
         }

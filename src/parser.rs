@@ -146,6 +146,11 @@ pub fn run(
 
         trace!(line, "parsing");
 
+        // Session boundary: player just logged in.
+        if line == "Welcome to EverQuest Legends!" {
+            emit(&event_tx, CombatEvent::Login { ts: current_ts });
+        }
+
         // Strip trailing `(Lucky Critical Twincast)` modifier blocks before matching.
         let (line, mods) = strip_mods(line);
 
@@ -1698,6 +1703,36 @@ mod tests {
             "active_casts should contain Rysk"
         );
         assert_eq!(casting["Rysk"]["spell"].as_str().unwrap(), "Complete Heal");
+    }
+
+    #[test]
+    fn integration_login_emits_event() {
+        let (tx, rx) = crossbeam_channel::unbounded::<String>();
+        let shared = Arc::new(ArcSwap::from_pointee(CombatState::default()));
+        let reset_flag = Arc::new(AtomicBool::new(false));
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        tx.send(format!("{TS}Welcome to EverQuest Legends!"))
+            .unwrap();
+        drop(tx);
+        run(
+            rx,
+            shared,
+            reset_flag,
+            broadcast_tx,
+            event_tx,
+            "Rysk".to_owned(),
+        );
+        let mut found_login = false;
+        while let Ok(ev) = event_rx.try_recv() {
+            if matches!(ev, CombatEvent::Login { .. }) {
+                found_login = true;
+            }
+        }
+        assert!(
+            found_login,
+            "Login event should be emitted for the welcome message"
+        );
     }
 
     #[test]

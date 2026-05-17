@@ -129,6 +129,9 @@ pub enum CombatEvent {
         name: String,
         classes: Vec<String>,
     },
+    /// Player logged in — emitted when "Welcome to EverQuest Legends!" is seen in the log.
+    /// Used by the server to cut a new session boundary in the archive.
+    Login { ts: u32 },
 }
 
 impl CombatEvent {
@@ -146,7 +149,8 @@ impl CombatEvent {
             | Self::Miss { ts, .. }
             | Self::Absorb { ts, .. }
             | Self::Resist { ts, .. }
-            | Self::Who { ts, .. } => *ts,
+            | Self::Who { ts, .. }
+            | Self::Login { ts } => *ts,
         }
     }
 }

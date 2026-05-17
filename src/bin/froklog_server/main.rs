@@ -3,6 +3,7 @@ mod config;
 mod ingest;
 mod journal;
 mod ratelimit;
+mod session_index;
 mod streams;
 mod viewer;
 
@@ -166,7 +167,11 @@ async fn main() {
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
         .route("/stream/{id}/stats", get(stream_stats_handler))
-        // Public player routes (live only, no token)
+        .route(
+            "/stream/{id}/sessions",
+            get(viewer::stream_sessions_handler),
+        )
+        // Public player routes (live and recorded, no token)
         .route(
             "/player/{game}/{server}/{name}",
             get(viewer::player_page_handler),
@@ -174,6 +179,10 @@ async fn main() {
         .route(
             "/player/{game}/{server}/{name}/ws",
             get(viewer::player_ws_handler),
+        )
+        .route(
+            "/player/{game}/{server}/{name}/sessions",
+            get(viewer::player_sessions_handler),
         )
         // Ingest route (Windows clients push here)
         .route("/ingest/{id}", get(ingest::ingest_ws_handler))
