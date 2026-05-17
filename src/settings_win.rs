@@ -419,7 +419,8 @@ mod win {
                             == BST_CHECKED;
                     let hwnd_usize = hwnd.0 as usize;
                     std::thread::spawn(move || unsafe {
-                        let result = do_register(&url, &player, &server, &game, &password, is_public);
+                        let result =
+                            do_register(&url, &player, &server, &game, &password, is_public);
                         let ptr = Box::into_raw(Box::new(result));
                         let _ = PostMessageW(
                             HWND(hwnd_usize as *mut c_void),

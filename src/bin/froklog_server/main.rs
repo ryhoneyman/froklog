@@ -1,4 +1,5 @@
 mod admin;
+mod config;
 mod ingest;
 mod journal;
 mod ratelimit;
@@ -95,30 +96,22 @@ impl ServerState {
 
 #[tokio::main]
 async fn main() {
+    let cfg_path = config::config_path();
+    let mut cfg = config::load_or_create(&cfg_path);
+    config::apply_env_overrides(&mut cfg);
+
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "froklog_server=info".into())
-                .as_str(),
-        )
+        .with_env_filter(cfg.rust_log.as_str())
         .init();
 
-    let admin_token = std::env::var("FROKLOG_ADMIN_TOKEN").unwrap_or_else(|_| {
-        let t = froklog::auth::generate_token();
-        eprintln!("⚠  FROKLOG_ADMIN_TOKEN not set — using temporary token: {t}");
-        eprintln!("   Set the env var to make this permanent.");
-        t
-    });
+    let stream_password = if cfg.stream_password.is_empty() {
+        None
+    } else {
+        Some(cfg.stream_password.clone())
+    };
 
-    let stream_password = std::env::var("FROKLOG_STREAM_PASSWORD")
-        .ok()
-        .filter(|s| !s.is_empty());
-
-    let data_dir: PathBuf = std::env::var("FROKLOG_DATA_DIR")
-        .unwrap_or_else(|_| "streams".to_string())
-        .into();
-
-    std::fs::create_dir_all(&data_dir).expect("create FROKLOG_DATA_DIR");
+    let data_dir: PathBuf = cfg.data_dir.clone().into();
+    std::fs::create_dir_all(&data_dir).expect("create data_dir");
 
     let registry = new_registry(data_dir.clone());
 
@@ -128,35 +121,23 @@ async fn main() {
     load_persisted_streams(&data_dir, &registry).await;
 
     if stream_password.is_some() {
-        info!("Stream creation: password-protected (FROKLOG_STREAM_PASSWORD is set)");
+        info!("Stream creation: password-protected");
     } else {
-        info!("Stream creation: open (set FROKLOG_STREAM_PASSWORD to require a password)");
+        info!("Stream creation: open (set stream_password in config to require a password)");
     }
 
-    let rate_max: u32 = std::env::var("FROKLOG_RATE_MAX")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100);
-    let rate_window: u64 = std::env::var("FROKLOG_RATE_WINDOW_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
-    let ban_secs: u64 = std::env::var("FROKLOG_BAN_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(300);
-
     info!(
-        "DoS protection: max {rate_max} req / {rate_window}s per IP, ban duration {ban_secs}s \
-         (override with FROKLOG_RATE_MAX / FROKLOG_RATE_WINDOW_SECS / FROKLOG_BAN_SECS)"
+        "DoS protection: max {} req / {}s per IP, ban duration {}s",
+        cfg.rate_max, cfg.rate_window_secs, cfg.ban_secs
     );
 
-    let rate_limiter = ratelimit::RateLimiter::new(rate_max, rate_window, ban_secs);
+    let rate_limiter =
+        ratelimit::RateLimiter::new(cfg.rate_max, cfg.rate_window_secs, cfg.ban_secs);
 
     let state = ServerState {
         registry,
         data_dir,
-        admin_token,
+        admin_token: cfg.admin_token.clone(),
         stream_password,
         rate_limiter: Arc::clone(&rate_limiter),
     };
@@ -186,8 +167,14 @@ async fn main() {
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
         .route("/stream/{id}/stats", get(stream_stats_handler))
         // Public player routes (live only, no token)
-        .route("/player/{game}/{server}/{name}", get(viewer::player_page_handler))
-        .route("/player/{game}/{server}/{name}/ws", get(viewer::player_ws_handler))
+        .route(
+            "/player/{game}/{server}/{name}",
+            get(viewer::player_page_handler),
+        )
+        .route(
+            "/player/{game}/{server}/{name}/ws",
+            get(viewer::player_ws_handler),
+        )
         // Ingest route (Windows clients push here)
         .route("/ingest/{id}", get(ingest::ingest_ws_handler))
         // Health check
@@ -202,10 +189,7 @@ async fn main() {
         .layer(cors)
         .with_state(state);
 
-    let addr: SocketAddr = std::env::var("FROKLOG_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:8766".to_string())
-        .parse()
-        .expect("invalid FROKLOG_BIND address");
+    let addr: SocketAddr = cfg.bind.parse().expect("invalid bind address in config");
 
     info!("froklog-server listening on http://{addr}");
     info!("Create a stream:  POST /stream  with  Authorization: Bearer <FROKLOG_ADMIN_TOKEN>");
@@ -271,7 +255,10 @@ async fn create_stream_handler(
     let ingest_path = format!("/ingest/{stream_id}");
     let view_path = format!("/stream/{stream_id}?vtok={view_token}");
     let player_path = if !body.server.is_empty() {
-        Some(format!("/player/{}/{}/{}", body.game, body.server, body.player))
+        Some(format!(
+            "/player/{}/{}/{}",
+            body.game, body.server, body.player
+        ))
     } else {
         None
     };

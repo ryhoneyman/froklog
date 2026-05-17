@@ -144,7 +144,10 @@ pub async fn admin_panel_handler(
 
     let total_streams: usize = game_groups
         .iter()
-        .flat_map(|(_, sv)| sv.iter().flat_map(|(_, pv)| pv.iter().map(|(_, v)| v.len())))
+        .flat_map(|(_, sv)| {
+            sv.iter()
+                .flat_map(|(_, pv)| pv.iter().map(|(_, v)| v.len()))
+        })
         .sum();
     let total_players: usize = game_groups
         .iter()
