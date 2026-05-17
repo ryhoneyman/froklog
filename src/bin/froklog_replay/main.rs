@@ -242,7 +242,13 @@ fn main() {
                     .enable_all()
                     .build()
                     .expect("pusher rt");
-                rt.block_on(pusher::push_to_server(url, token, event_rx));
+                rt.block_on(pusher::push_to_server(
+                    url,
+                    token,
+                    event_rx,
+                    std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                ));
             })
             .expect("spawn pusher");
     }

@@ -260,10 +260,6 @@ impl Journal {
 /// Thread-safe wrapper used from async code.
 pub type SharedJournal = Arc<RwLock<Journal>>;
 
-pub fn open_shared(data_dir: &std::path::Path, stream_id: &str) -> std::io::Result<SharedJournal> {
-    Ok(Arc::new(RwLock::new(Journal::open(data_dir, stream_id)?)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

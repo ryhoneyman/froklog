@@ -5,8 +5,9 @@
 /// co-ordinated through the `AppHandle` passed in from main.
 #[cfg(feature = "tray")]
 pub mod tray {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     use tray_icon::{
         menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -18,9 +19,12 @@ pub mod tray {
 
     // ── Menu item IDs ─────────────────────────────────────────────────────────
 
+    const ID_STATUS: &str = "status";
     const ID_TOGGLE_LOGGING: &str = "toggle_logging";
     const ID_SETTINGS: &str = "settings";
     const ID_QUIT: &str = "quit";
+
+    const TICK_SECS: u64 = 5;
 
     // ── AppHandle ─────────────────────────────────────────────────────────────
 
@@ -35,6 +39,10 @@ pub mod tray {
         pub logging_enabled: Arc<AtomicBool>,
         /// Prevents opening multiple settings windows simultaneously.
         pub settings_open: Arc<AtomicBool>,
+        /// Cumulative count of events successfully pushed to the server.
+        pub events_sent: Arc<AtomicU64>,
+        /// True while the pusher has an active WebSocket connection.
+        pub connected: Arc<AtomicBool>,
     }
 
     impl AppHandle {
@@ -46,6 +54,8 @@ pub mod tray {
                 restart: Arc::new(AtomicBool::new(false)),
                 quit: Arc::new(AtomicBool::new(false)),
                 settings_open: Arc::new(AtomicBool::new(false)),
+                events_sent: Arc::new(AtomicU64::new(0)),
+                connected: Arc::new(AtomicBool::new(false)),
             }
         }
     }
@@ -57,16 +67,22 @@ pub mod tray {
         let event_loop: EventLoop<()> = EventLoop::builder().build().expect("event loop");
 
         let logging_on = handle.logging_enabled.load(Ordering::Relaxed);
-        let (tray, toggle_item) = build_tray(&handle.config.lock().unwrap(), logging_on);
+        let (tray, toggle_item, status_item) =
+            build_tray(&handle.config.lock().unwrap(), logging_on);
         let tray = Arc::new(Mutex::new(tray));
         let toggle_item = Arc::new(Mutex::new(toggle_item));
 
         let handle_clone = Arc::clone(&handle);
 
+        // Rate-tracking state for the periodic 5-second tick.
+        let mut prev_count: u64 = 0;
+        let mut prev_sample = Instant::now();
+        let mut next_tick = Instant::now() + Duration::from_secs(TICK_SECS);
+
         #[allow(deprecated)]
         event_loop
             .run(move |event, elwt| {
-                elwt.set_control_flow(ControlFlow::Wait);
+                elwt.set_control_flow(ControlFlow::WaitUntil(next_tick));
 
                 // ── Left-click: toggle logging ────────────────────────────────
                 if let Ok(evt) = TrayIconEvent::receiver().try_recv() {
@@ -92,6 +108,32 @@ pub mod tray {
                         }
                         _ => {}
                     }
+                }
+
+                // ── Periodic status tick ──────────────────────────────────────
+                let now = Instant::now();
+                if now >= next_tick {
+                    let cur = handle_clone.events_sent.load(Ordering::Relaxed);
+                    let elapsed = now.duration_since(prev_sample).as_secs_f64().max(0.001);
+                    let rate =
+                        ((cur.saturating_sub(prev_count)) as f64 / elapsed * 60.0) as u32;
+                    prev_count = cur;
+                    prev_sample = now;
+                    next_tick = now + Duration::from_secs(TICK_SECS);
+
+                    let logging_on =
+                        handle_clone.logging_enabled.load(Ordering::Relaxed);
+                    let is_connected = handle_clone.connected.load(Ordering::Relaxed);
+                    let cfg = handle_clone.config.lock().unwrap();
+
+                    let _ = tray.lock().unwrap().set_tooltip(Some(make_tooltip_full(
+                        &cfg,
+                        logging_on,
+                        is_connected,
+                        rate,
+                    )));
+                    let _ = status_item
+                        .set_text(make_status_text(logging_on, is_connected, rate));
                 }
 
                 let _ = event;
@@ -135,9 +177,11 @@ pub mod tray {
 
     // ── Tray construction ─────────────────────────────────────────────────────
 
-    fn build_tray(cfg: &Config, logging_on: bool) -> (tray_icon::TrayIcon, MenuItem) {
+    fn build_tray(cfg: &Config, logging_on: bool) -> (tray_icon::TrayIcon, MenuItem, MenuItem) {
         let menu = Menu::new();
 
+        let status_item = MenuItem::with_id(ID_STATUS, make_status_text(logging_on, false, 0), false, None);
+        let sep_status = PredefinedMenuItem::separator();
         let toggle_label = if logging_on {
             "Disable Logging"
         } else {
@@ -148,6 +192,8 @@ pub mod tray {
         let sep = PredefinedMenuItem::separator();
         let quit_item = MenuItem::with_id(ID_QUIT, "Quit", true, None);
 
+        menu.append(&status_item).unwrap();
+        menu.append(&sep_status).unwrap();
         menu.append(&toggle_item).unwrap();
         menu.append(&settings_item).unwrap();
         menu.append(&sep).unwrap();
@@ -160,10 +206,28 @@ pub mod tray {
             .build()
             .expect("tray icon");
 
-        (tray, toggle_item)
+        (tray, toggle_item, status_item)
+    }
+
+    fn make_status_text(logging_on: bool, connected: bool, rate: u32) -> String {
+        if !logging_on {
+            return "Logging disabled".into();
+        }
+        if !connected {
+            return "Reconnecting…".into();
+        }
+        if rate == 0 {
+            "Connected — idle".into()
+        } else {
+            format!("Connected — {rate} ev/min")
+        }
     }
 
     fn make_tooltip(cfg: &Config, logging_on: bool) -> String {
+        make_tooltip_full(cfg, logging_on, false, 0)
+    }
+
+    fn make_tooltip_full(cfg: &Config, logging_on: bool, connected: bool, rate: u32) -> String {
         if !logging_on {
             return "froklog — logging disabled".into();
         }
@@ -172,13 +236,22 @@ pub mod tray {
             .as_deref()
             .and_then(|p| std::path::Path::new(p).file_name()?.to_str())
             .unwrap_or("no log");
-        if cfg.is_registered() {
-            format!("froklog ● {log}")
-        } else if cfg.log_path.is_some() {
-            format!("froklog ○ {log} — not registered")
-        } else {
-            "froklog — not configured".into()
+        if !cfg.is_registered() {
+            return if cfg.log_path.is_some() {
+                format!("froklog ○ {log} — not registered")
+            } else {
+                "froklog — not configured".into()
+            };
         }
+        if !connected {
+            return format!("froklog ○ {log} — reconnecting");
+        }
+        let activity = if rate == 0 {
+            "idle".into()
+        } else {
+            format!("{rate} ev/min")
+        };
+        format!("froklog ● {log} — {activity}")
     }
 
     fn make_icon(cfg: &Config, logging_on: bool) -> tray_icon::Icon {

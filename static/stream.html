@@ -80,6 +80,11 @@
     white-space: nowrap;
   }
   #tl-live-btn.live { color: #4f4; border-color: #3c6c3c; background: #1a2a1a; }
+  #tl-session {
+    font-size: 11px; color: #aaa; background: #252525; border: 1px solid #3a3a3a;
+    border-radius: 3px; padding: 1px 4px; cursor: pointer; font-family: monospace;
+    max-width: 160px; display: none;
+  }
   #tl-pos-label { font-size: 10px; color: #e0c060; min-width: 90px; text-align: right; flex-shrink: 0; font-weight: bold; }
   .tl-transport {
     font-size: 13px; color: #aaa; background: #202020; border: 1px solid #3a3a3a;
@@ -276,6 +281,7 @@
     <option value="32">32×</option>
   </select>
   <button id="tl-live-btn" onclick="goLive()">Go Live</button>
+  <select id="tl-session" title="Session" onchange="onSessionChange(this.value)"></select>
 </div>
 
 <div id="layout" onclick="deselectMob()">
@@ -305,9 +311,12 @@
 
 <script>
 // ── Stream credentials injected server-side ───────────────────────────────────
-const STREAM_ID  = '__STREAM_ID__';
-const VIEW_TOKEN = '__VIEW_TOKEN__';
-const WS_PATH    = '__WS_PATH__';
+const STREAM_ID      = '__STREAM_ID__';
+const VIEW_TOKEN     = '__VIEW_TOKEN__';
+const WS_PATH        = '__WS_PATH__';
+const SESSIONS_PATH  = '__SESSIONS_PATH__';
+const SESSION_LOG_TS     = __SESSION_LOG_TS__;
+const SESSION_END_LOG_TS = __SESSION_END_LOG_TS__;
 
 // ── In-memory batch cache ─────────────────────────────────────────────────────
 // Stores every EventBatch received from the server in order.
@@ -316,6 +325,14 @@ const WS_PATH    = '__WS_PATH__';
 // Each entry: { logTs: number, batch: EventBatch }
 const cachedBatches = [];
 let cacheComplete = false;  // true once the initial catch-up is done
+
+// ── Persistent mob registry ───────────────────────────────────────────────────
+// Never cleared by resetState() or seek operations.  Tracks every mob ever
+// encountered so the mob list stays stable when the user scrubs backwards.
+// New mobs are appended in first-appearance order; the list is rendered
+// newest-first so live mobs pop in at the top.
+const allMobsEver  = {};   // mob_id -> { name }
+const allMobOrderEver = []; // mob_ids in first-appearance order (oldest first)
 
 /// Replay all cached batches with logTs <= targetLogTs and return the count applied.
 /// Does NOT reset state — caller must call resetState() first if needed.
@@ -327,6 +344,22 @@ function applyBatchesUpTo(targetLogTs) {
     count++;
   }
   return count;
+}
+
+/// After session preloading completes, reset state to the session start and
+/// position the server and scrubber at SESSION_LOG_TS.  The cache must already
+/// contain only in-session batches before this is called.
+function snapSessionToStart() {
+  sessionPreloading = false;
+  resetState();
+  applyBatchesUpTo(SESSION_LOG_TS);
+  S.casts = {};
+  scrubber.value = 0;
+  updateScrubberTrack();
+  tlPosLabel.textContent = fmtTsPos(SESSION_LOG_TS);
+  sendWS({ t: 'seek_paused_log', to_log_ts: SESSION_LOG_TS });
+  updateTimelineBar();
+  scheduleRender();
 }
 
 /// Seek entirely within the cache.  Resets state, applies batches up to
@@ -458,11 +491,19 @@ function tlEntry(tl, mob, name) {
 function trackMob(mob, name, ts) {
   if (!S.mobs[mob]) S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
   else { S.mobs[mob].lastTs = ts; S.mobs[mob].name = name; }
+  if (!allMobsEver[mob]) {
+    allMobsEver[mob] = { name };
+    allMobOrderEver.push(mob);
+  } else {
+    allMobsEver[mob].name = name;
+  }
 }
 function bumpTs(ts) {
   if (ts > S.lastTs) S.lastTs = ts;
   if (!S.fightStartTs) S.fightStartTs = ts;
-  if (!logFirstTs || ts < logFirstTs) logFirstTs = ts;
+  // When a session is selected, logFirstTs is pinned to SESSION_LOG_TS.
+  // Don't let catch-up batches (which predate the session) pull it back.
+  if (SESSION_LOG_TS <= 0 && (!logFirstTs || ts < logFirstTs)) logFirstTs = ts;
   if (!logLastTs  || ts > logLastTs)  logLastTs  = ts;
 }
 
@@ -733,19 +774,23 @@ function buildRenderState() {
         .map(([spell,healed])=>({ spell, healed, hps: Math.round(healed/elapsed) })),
     }));
 
-  // Mob list — last_seen_secs shows the fight duration (log-time based), not
-  // wall-clock age, so it is correct for both live and replayed encounters.
-  const mob_list = Object.entries(S.mobs)
-    .sort((a,b)=>b[1].lastTs-a[1].lastTs)
-    .slice(0,40)
-    .map(([id,mob])=>{
-      const lastSeenAgo = Math.max(0, nowSecs - mob.lastTs);
-      const isDead  = mob.dead || lastSeenAgo >= 15;
+  // Mob list — built from the persistent registry so it never shrinks when the
+  // user seeks backwards.  Activity/death status comes from S.mobs (current
+  // seek position); mobs outside the window are shown as inactive.
+  // Rendered newest-first so live mobs pop in at the top.
+  const mob_list = [...allMobOrderEver].reverse().map(id => {
+    const current = S.mobs[id];
+    const name = current ? current.name : allMobsEver[id].name;
+    if (current) {
+      const lastSeenAgo = Math.max(0, nowSecs - current.lastTs);
+      const isDead  = current.dead || lastSeenAgo >= 15;
       const isActive = !isDead && lastSeenAgo < 5;
-      // Show fight duration (log-based) rather than wall-clock age.
-      const fightSecs = getMobElapsed(mob);
-      return { id:+id, name:mob.name, last_seen_secs: fightSecs, is_dead:isDead, is_active:isActive, first_ts: mob.firstTs, last_ts: mob.lastTs };
-    });
+      const fightSecs = getMobElapsed(current);
+      return { id:+id, name, last_seen_secs: fightSecs, is_dead:isDead, is_active:isActive, first_ts: current.firstTs, last_ts: current.lastTs };
+    } else {
+      return { id:+id, name, last_seen_secs: 0, is_dead: false, is_active: false, first_ts: null, last_ts: null };
+    }
+  });
 
   // Per-mob breakdowns — each mob uses its own fight duration for rates.
   const mob_damage  = Object.fromEntries(Object.entries(S.mobDmg).map(([id,bp])=>{
@@ -969,16 +1014,21 @@ function rerender() {
 }
 
 function renderMobList(d) {
+  const scroller = document.getElementById('mob-scroll');
+  const saved = scroller.scrollTop;
   document.getElementById('mob-rows').innerHTML = (d.mob_list || []).map(m => {
-    const dotColor  = m.is_dead ? '#464646' : m.is_active ? '#3cdc3c' : '#c8aa1e';
-    const nameColor = m.is_dead ? '#5a5a5a' : m.is_active ? '#ffffff' : '#a0a0a0';
+    const outside = !m.first_ts && m.last_seen_secs === 0 && !m.is_dead && !m.is_active;
+    const dotColor  = outside ? '#333333' : m.is_dead ? '#464646' : m.is_active ? '#3cdc3c' : '#c8aa1e';
+    const nameColor = outside ? '#444444' : m.is_dead ? '#5a5a5a' : m.is_active ? '#ffffff' : '#a0a0a0';
     const sel = selectedMob === m.id ? ' selected' : '';
+    const timeStr = m.last_seen_secs > 0 ? fmtTime(m.last_seen_secs) : '';
     return `<div class="mob-row${sel}" data-mob-id="${m.id}" onclick="event.stopPropagation();selectMob(+this.dataset.mobId)">
       <span class="mob-dot" style="color:${dotColor}">●</span>
       <span class="mob-name" style="color:${nameColor}">${truncate(m.name, 17)}</span>
-      <span class="mob-time">${fmtTime(m.last_seen_secs)}</span>
+      <span class="mob-time">${timeStr}</span>
     </div>`;
   }).join('');
+  scroller.scrollTop = saved;
 }
 
 function renderSummary(d) {
@@ -1239,6 +1289,7 @@ let tlPaused   = false; // paused during replay
 let tlCanGoLive = true; // false for completed recordings with no live ingest
 let logFirstTs = null;  // EQ log-event unix seconds (used for labels)
 let logLastTs  = null;  // EQ log-event unix seconds (used for labels)
+let sessionPreloading = false; // true while initial session cache preload is in flight
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1268,6 +1319,35 @@ function connectWS() {
         updatePlayPauseBtn();
         updateWallClock();
       }
+      // If the page was loaded with ?session=N, constrain the timeline to
+      // [session_start, session_end] and preload the full session into cache.
+      if (SESSION_LOG_TS > 0) {
+        logFirstTs = SESSION_LOG_TS;
+        if (SESSION_END_LOG_TS > 0) logLastTs = SESSION_END_LOG_TS;
+        // For the latest session (SESSION_END_LOG_TS = 0) logLastTs keeps the
+        // journal end from msg.log_last_ts, which is the correct session end.
+        cachedBatches.length = 0;
+        cacheComplete = false;
+        sessionPreloading = false;
+        resetState();
+        tlIsLive = false;
+        tlPaused = true;
+        updateLiveBtn();
+        updatePlayPauseBtn();
+        // Seek to the end of the session so the full session loads into cache.
+        // For non-last sessions use SESSION_END_LOG_TS; for the latest session
+        // use the journal end (msg.log_last_ts).  snap-back to SESSION_LOG_TS
+        // fires once preloading completes (batch past end / stream_done / now_live).
+        const preloadEndTs = SESSION_END_LOG_TS > 0 ? SESSION_END_LOG_TS
+                           : (msg.log_last_ts || null);
+        if (preloadEndTs && preloadEndTs > SESSION_LOG_TS) {
+          sessionPreloading = true;
+          sendWS({ t: 'seek_full_paused_log', to_log_ts: preloadEndTs });
+        } else {
+          // Empty session or no end known — park at session start.
+          sendWS({ t: 'seek_full_paused_log', to_log_ts: SESSION_LOG_TS });
+        }
+      }
       updateTimelineBar();
       return;
     }
@@ -1278,9 +1358,15 @@ function connectWS() {
       return;
     }
     if (msg.t === 'stream_done') {
-      // Completed recording has finished playing — treat as paused at the end.
-      // Cache is now complete (we've received everything).
       cacheComplete = true;
+      if (sessionPreloading) {
+        // Latest session preload finished — snap back to session start.
+        tlPaused = true;
+        tlIsLive = false;
+        updatePlayPauseBtn();
+        snapSessionToStart();
+        return;
+      }
       tlPaused = true;
       tlIsLive = false;
       S.casts = {};
@@ -1289,8 +1375,16 @@ function connectWS() {
       return;
     }
     if (msg.t === 'now_live') {
-      // Caught up to the live tail; cache covers history up to this point.
       cacheComplete = true;
+      if (sessionPreloading) {
+        // Session preload caught up to live edge — snap back to session start.
+        tlPaused = true;
+        tlIsLive = false;
+        updateLiveBtn();
+        updatePlayPauseBtn();
+        snapSessionToStart();
+        return;
+      }
       tlIsLive = true;
       tlPaused = false;
       document.getElementById('tl-speed').value = '1';
@@ -1300,14 +1394,36 @@ function connectWS() {
       return;
     }
     if (msg.t === 'batch') {
-      // Unwrap the envelope — apply just the EventBatch payload.
       try {
-        applyBatch(msg.batch);
-        // Cache this batch for client-side seeking.
         const batchLogTs = msg.batch.events && msg.batch.events.length
           ? Math.max(...msg.batch.events.map(e => e.ts))
           : (S.lastTs || 0);
+        // In session mode: stop at the session end boundary.
+        if (SESSION_END_LOG_TS > 0 && batchLogTs > SESSION_END_LOG_TS) {
+          cacheComplete = true;
+          if (sessionPreloading) {
+            tlPaused = true;
+            tlIsLive = false;
+            updatePlayPauseBtn();
+            snapSessionToStart();
+          } else {
+            tlPaused = true;
+            tlIsLive = false;
+            updatePlayPauseBtn();
+            scheduleRender();
+          }
+          return;
+        }
+        // In session mode: drop batches that predate the session window entirely.
+        // They are not applied to state and not cached — no cross-session leakage.
+        if (SESSION_LOG_TS > 0 && batchLogTs < SESSION_LOG_TS) return;
+        // Cache every in-session batch for client-side seeking.
         cachedBatches.push({ logTs: batchLogTs, batch: msg.batch });
+        // During preloading, only accumulate the cache; state will be rebuilt
+        // from the cache once preloading completes (snapSessionToStart).
+        // This prevents pre-seek state from contaminating the session view.
+        if (sessionPreloading) return;
+        applyBatch(msg.batch);
         // Update timeline bounds from each batch's EQ log timestamp.
         // This is the primary signal for dump-mode streams where all
         // wall-clock timestamps collapse to the same second.
@@ -1329,11 +1445,8 @@ function connectWS() {
             updateTimelineBar();
             setScrubberToEnd();
           } else {
-            // Always try to show the bar — it becomes visible once the range
-            // is known (idempotent once visible).
             updateTimelineBar();
             if (!scrubberDragging) {
-              // Update scrubber to reflect current replay position.
               const dispFirst = logFirstTs || tlFirstTs;
               const dispLast  = logLastTs  || tlLastTs;
               if (dispFirst && dispLast && dispLast > dispFirst) {
@@ -1349,7 +1462,7 @@ function connectWS() {
       } catch(_) {}
     }
   };
-  ws.onclose   = () => { ws = null; setStatus('error', '● reconnecting…'); cacheComplete = false; cachedBatches.length = 0; wsTimer = setTimeout(connectWS, 5000); };
+  ws.onclose   = () => { ws = null; setStatus('error', '● reconnecting…'); cacheComplete = false; sessionPreloading = false; cachedBatches.length = 0; wsTimer = setTimeout(connectWS, 5000); };
   ws.onerror   = () => {};
 }
 
@@ -1466,12 +1579,19 @@ scrubber.addEventListener('input', () => {
 });
 
 function commitSeek() {
+  if (sessionPreloading) return;
   const frac = scrubber.value / 1000;
   if (!tlFirstTs || !tlLastTs) return;
   const speed = parseFloat(document.getElementById('tl-speed').value) || 1.0;
-  // If scrubber is at or very near the end, go live instead.
+  // At the far right of the bar: go live in normal mode; in session mode stay
+  // within the session and seek to the session end instead of going live.
   if (frac >= 0.999) {
-    goLive();
+    if (SESSION_LOG_TS > 0) {
+      const dispLast = logLastTs || tlLastTs;
+      if (dispLast) seekToLogTs(dispLast);
+    } else {
+      goLive();
+    }
     return;
   }
   tlIsLive = false;
@@ -1524,6 +1644,7 @@ function goLive() {
 // ── Transport controls ─────────────────────────────────────────────────────
 
 function togglePlayPause() {
+  if (sessionPreloading) return;
   if (!tlFirstTs || !tlLastTs) return;
   if (tlIsLive) {
     // Pause from live: seek to the last known position and stay paused.
@@ -1592,6 +1713,7 @@ function seekToLogTs(targetLogTs) {
 }
 
 function rewind() {
+  if (sessionPreloading) return;
   const dispFirst = logFirstTs || tlFirstTs;
   const dispLast  = logLastTs  || tlLastTs;
   if (!dispFirst || !dispLast) return;
@@ -1600,13 +1722,19 @@ function rewind() {
 }
 
 function fastForward() {
+  if (sessionPreloading) return;
   const dispFirst = logFirstTs || tlFirstTs;
   const dispLast  = logLastTs  || tlLastTs;
   if (!dispFirst || !dispLast) return;
   const currentLogTs = (S.lastTs && S.lastTs >= dispFirst) ? S.lastTs : dispFirst;
   const targetLogTs = currentLogTs + 120;
-  if (targetLogTs >= dispLast * 0.999) { goLive(); return; }
-  seekToLogTs(targetLogTs);
+  if (SESSION_LOG_TS > 0) {
+    // Session mode: clamp to session end, never cross into live or next session.
+    seekToLogTs(Math.min(targetLogTs, dispLast));
+  } else {
+    if (targetLogTs >= dispLast * 0.999) { goLive(); return; }
+    seekToLogTs(targetLogTs);
+  }
 }
 
 function setStatus(cls, txt) {
@@ -1641,6 +1769,45 @@ function updateLogClock(d) {
 
 // Re-render periodically to keep mob activity timers and cast bars current.
 setInterval(() => { if (lastData) scheduleRender(); }, 1000);
+
+// ── Session picker ────────────────────────────────────────────────────────────
+const sessionSel = document.getElementById('tl-session');
+
+function onSessionChange(val) {
+  const url = new URL(location.href);
+  if (!val) {
+    url.searchParams.delete('session');
+  } else {
+    url.searchParams.set('session', val);
+  }
+  location.href = url.toString();
+}
+
+if (SESSIONS_PATH) {
+  fetch(SESSIONS_PATH)
+    .then(r => r.ok ? r.json() : [])
+    .then(sessions => {
+      if (!sessions || sessions.length === 0) return;
+      const urlSession = new URL(location.href).searchParams.get('session');
+      const currentNum = urlSession ? parseInt(urlSession, 10) : null;
+      sessionSel.innerHTML = '';
+      const latestOpt = document.createElement('option');
+      latestOpt.value = '';
+      latestOpt.textContent = 'Latest';
+      if (!currentNum) latestOpt.selected = true;
+      sessionSel.appendChild(latestOpt);
+      for (let i = sessions.length - 1; i >= 0; i--) {
+        const s = sessions[i];
+        const opt = document.createElement('option');
+        opt.value = s.num;
+        opt.textContent = `#${s.num} — ${s.label}`;
+        if (currentNum === s.num) opt.selected = true;
+        sessionSel.appendChild(opt);
+      }
+      sessionSel.style.display = 'inline-block';
+    })
+    .catch(() => {});
+}
 
 connectWS();
 </script>

@@ -6,7 +6,8 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, watch, RwLock};
 use tracing::warn;
 
-use crate::journal::{open_shared, SharedJournal};
+use crate::journal::{Journal, SharedJournal};
+use crate::session_index::{SessionIndex, SharedSessionIndex};
 
 const BROADCAST_CAPACITY: usize = 64;
 
@@ -33,6 +34,8 @@ pub struct StreamEntry {
     pub public_revoke_tx: watch::Sender<()>,
     /// Persistent on-disk journal (append-only, seekable).
     pub journal: SharedJournal,
+    /// Session boundary index — one entry per play session within this journal.
+    pub session_index: SharedSessionIndex,
     /// Fan-out channel: every viewer WebSocket subscribes to this.
     /// Carries raw EventBatch JSON strings (the same content written to disk).
     pub broadcast_tx: broadcast::Sender<Arc<String>>,
@@ -54,7 +57,17 @@ impl StreamEntry {
         is_replay: bool,
         data_dir: &std::path::Path,
     ) -> std::io::Result<Self> {
-        let journal = open_shared(data_dir, &stream_id)?;
+        // Open journal first so the retroactive session scan can read its index.
+        let journal_inner = Journal::open(data_dir, &stream_id)?;
+        let mut si_inner = SessionIndex::open(data_dir, &stream_id)?;
+        if si_inner.is_empty() && !journal_inner.is_empty() {
+            if let Err(e) = si_inner.retroactive_scan(&journal_inner.index) {
+                tracing::warn!("SessionIndex [{stream_id}]: retroactive scan failed: {e}");
+            }
+        }
+        let journal = Arc::new(tokio::sync::RwLock::new(journal_inner));
+        let session_index = Arc::new(tokio::sync::RwLock::new(si_inner));
+
         let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (public_revoke_tx, _) = watch::channel(());
         Ok(Self {
@@ -68,6 +81,7 @@ impl StreamEntry {
             is_replay,
             public_revoke_tx,
             journal,
+            session_index,
             broadcast_tx,
             client_connected: Arc::new(AtomicBool::new(false)),
         })

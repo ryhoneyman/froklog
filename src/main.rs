@@ -2,7 +2,7 @@
 // No visible window; lives in the system tray when the "tray" feature is active.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -49,7 +49,13 @@ fn main() {
         }
         let quit = Arc::new(AtomicBool::new(false));
         let restart = Arc::new(AtomicBool::new(false));
-        run_engine_once(&config, Arc::clone(&restart), Arc::clone(&quit));
+        run_engine_once(
+            &config,
+            Arc::clone(&restart),
+            Arc::clone(&quit),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(false)),
+        );
         loop {
             thread::sleep(Duration::from_secs(3600));
         }
@@ -83,6 +89,8 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
                         &config,
                         Arc::clone(&handle.restart),
                         Arc::clone(&handle.quit),
+                        Arc::clone(&handle.events_sent),
+                        Arc::clone(&handle.connected),
                     );
                     info!("Engine stopped");
                 } else {
@@ -101,7 +109,13 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 
-fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBool>) {
+fn run_engine_once(
+    config: &Config,
+    restart: Arc<AtomicBool>,
+    quit: Arc<AtomicBool>,
+    events_sent: Arc<AtomicU64>,
+    connected: Arc<AtomicBool>,
+) {
     let log_path = match config.log_path.as_ref() {
         Some(p) => p.clone(),
         None => return,
@@ -135,6 +149,8 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
         let path = log_path.clone();
         let restart2 = Arc::clone(&restart);
         let quit2 = Arc::clone(&quit);
+        let restart3 = Arc::clone(&restart);
+        let quit3 = Arc::clone(&quit);
         thread::Builder::new()
             .name("eq-tailer".into())
             .spawn(move || {
@@ -155,6 +171,11 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
                         } => {}
                     }
                 });
+                // If the tailer exited on its own (not due to a restart/quit signal),
+                // trigger a restart so the engine monitor re-opens the log file.
+                if !quit3.load(Ordering::Relaxed) {
+                    restart3.store(true, Ordering::Relaxed);
+                }
             })
             .expect("spawn tailer");
     }
@@ -178,7 +199,13 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
                     .enable_all()
                     .build()
                     .expect("pusher rt");
-                rt.block_on(pusher::push_to_server(push_url, push_token, event_rx));
+                rt.block_on(pusher::push_to_server(
+                    push_url,
+                    push_token,
+                    event_rx,
+                    events_sent,
+                    connected,
+                ));
             })
             .expect("spawn pusher");
         info!("Pushing events to remote server");
