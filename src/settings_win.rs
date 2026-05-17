@@ -392,9 +392,11 @@ mod win {
                     }
                     let _ = EnableWindow(state.btn_register, BOOL(0));
                     let password = get_text(state.edit_password);
+                    let is_public = SendMessageW(state.chk_public, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize
+                        == BST_CHECKED;
                     let hwnd_usize = hwnd.0 as usize;
                     std::thread::spawn(move || unsafe {
-                        let result = do_register(&url, &player, &server, &password);
+                        let result = do_register(&url, &player, &server, &password, is_public);
                         let ptr = Box::into_raw(Box::new(result));
                         let _ = PostMessageW(
                             HWND(hwnd_usize as *mut c_void),
@@ -440,6 +442,20 @@ mod win {
 
         let mut cfg = state.handle.config.lock().unwrap();
         let was_ready = cfg.is_ready();
+
+        // Snapshot registration credentials before mutation so we can PATCH the
+        // server if public_stream changed without requiring a re-registration.
+        let old_public = cfg.public_stream;
+        let patch_creds = if cfg.is_registered() && old_public != public {
+            cfg.stream_id
+                .as_ref()
+                .zip(cfg.stream_token.as_ref())
+                .zip(cfg.server_url.as_ref())
+                .map(|((id, tok), url)| (url.clone(), id.clone(), tok.clone()))
+        } else {
+            None
+        };
+
         cfg.log_path = if log_path.is_empty() {
             None
         } else {
@@ -471,6 +487,14 @@ mod win {
                 .restart
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        drop(cfg);
+
+        if let Some((url, id, tok)) = patch_creds {
+            std::thread::spawn(move || {
+                patch_public_stream(&url, &id, &tok, public);
+            });
+        }
+
         Ok(())
     }
 
@@ -1010,9 +1034,25 @@ mod win {
         Err(String),
     }
 
-    fn do_register(url: &str, player: &str, server: &str, password: &str) -> RegisterResult {
+    fn patch_public_stream(url: &str, stream_id: &str, stream_token: &str, public_stream: bool) {
+        let endpoint = format!("{}/stream/{}", url.trim_end_matches('/'), stream_id);
+        let body = serde_json::json!({ "public_stream": public_stream });
+        let Ok(client) = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        else {
+            return;
+        };
+        let _ = client
+            .patch(&endpoint)
+            .bearer_auth(stream_token)
+            .json(&body)
+            .send();
+    }
+
+    fn do_register(url: &str, player: &str, server: &str, password: &str, public_stream: bool) -> RegisterResult {
         let endpoint = format!("{}/stream", url.trim_end_matches('/'));
-        let body = serde_json::json!({ "player": player, "server": server });
+        let body = serde_json::json!({ "player": player, "server": server, "public_stream": public_stream });
 
         let client = match reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))

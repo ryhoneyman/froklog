@@ -83,7 +83,7 @@ pub async fn stream_ws_handler(
         "Viewer [{stream_id}]: client connected from {}",
         crate::client_ip(&headers, peer)
     );
-    ws.on_upgrade(move |socket| handle_viewer_ws(socket, rx, journal, client_connected))
+    ws.on_upgrade(move |socket| handle_viewer_ws(socket, rx, journal, client_connected, None))
         .into_response()
 }
 
@@ -187,6 +187,7 @@ async fn handle_viewer_ws(
     mut live_rx: tokio::sync::broadcast::Receiver<Arc<String>>,
     journal: SharedJournal,
     client_connected: Arc<AtomicBool>,
+    mut revoke_rx: Option<tokio::sync::watch::Receiver<()>>,
 ) {
     // Send timeline info so the client can render the seek bar.
     {
@@ -210,6 +211,13 @@ async fn handle_viewer_ws(
     let mut mode = ViewerMode::CatchUp { pos: 0 };
 
     loop {
+        // Fast non-blocking check: close immediately if public access was revoked.
+        if let Some(ref mut rx) = revoke_rx {
+            if rx.has_changed().unwrap_or(false) {
+                return;
+            }
+        }
+
         match mode {
             // ── Catch-up-to: blast stored batches until target, then transition
             ViewerMode::CatchUpTo {
@@ -358,6 +366,13 @@ async fn handle_viewer_ws(
                             mode = ViewerMode::Paused { pos };
                         }
                     }
+                    _ = async {
+                        if let Some(rx) = revoke_rx.as_mut() {
+                            rx.changed().await.ok();
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => { return; }
                 }
             }
 
@@ -400,6 +415,13 @@ async fn handle_viewer_ws(
                                         _ => {}
                                     }
                                 }
+                                _ = async {
+                                    if let Some(rx) = revoke_rx.as_mut() {
+                                        rx.changed().await.ok();
+                                    } else {
+                                        std::future::pending::<()>().await;
+                                    }
+                                } => { return; }
                             }
                         }
                     }
@@ -422,16 +444,25 @@ async fn handle_viewer_ws(
             }
 
             // ── Paused: hold position, wait for Resume / Seek ────────────────────────
-            ViewerMode::Paused { pos } => match socket.recv().await {
-                Some(Ok(Message::Text(txt))) => {
-                    if let Some(new_mode) =
-                        handle_client_msg(&txt, &journal, &mut socket, pos).await
-                    {
-                        mode = new_mode;
+            ViewerMode::Paused { pos } => tokio::select! {
+                msg = socket.recv() => match msg {
+                    Some(Ok(Message::Text(txt))) => {
+                        if let Some(new_mode) =
+                            handle_client_msg(&txt, &journal, &mut socket, pos).await
+                        {
+                            mode = new_mode;
+                        }
                     }
-                }
-                None | Some(Ok(Message::Close(_))) | Some(Err(_)) => return,
-                _ => {}
+                    None | Some(Ok(Message::Close(_))) | Some(Err(_)) => return,
+                    _ => {}
+                },
+                _ = async {
+                    if let Some(rx) = revoke_rx.as_mut() {
+                        rx.changed().await.ok();
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => { return; }
             },
         }
     }
@@ -592,17 +623,18 @@ pub async fn player_page_handler(
                     e.player_name.clone(),
                     e.server.clone(),
                     e.client_connected.load(Ordering::Relaxed),
+                    e.public_stream,
                 )
             })
         })
     };
 
     match entry_data {
-        None => player_offline_page(&name, &server),
-        Some((_, player_name, server_name, false)) => {
+        None | Some((_, _, _, _, false)) => StatusCode::NOT_FOUND.into_response(),
+        Some((_, player_name, server_name, false, true)) => {
             player_offline_page(&player_name, &server_name)
         }
-        Some((stream_id, player_name, _, true)) => {
+        Some((stream_id, player_name, _, true, true)) => {
             let ws_path = format!("/player/{}/{}/ws", server, name);
             let html = include_str!("../../../static/stream.html")
                 .replace("__STREAM_ID__", &stream_id)
@@ -626,18 +658,22 @@ pub async fn player_ws_handler(
     let handles = {
         let reg = state.registry.read().await;
         reg.find_id_by_player(&server, &name).and_then(|id| {
-            reg.get(&id).map(|e| {
-                (
+            reg.get(&id).and_then(|e| {
+                if !e.public_stream {
+                    return None;
+                }
+                Some((
                     e.stream_id.clone(),
                     e.broadcast_tx.subscribe(),
                     Arc::clone(&e.journal),
                     Arc::clone(&e.client_connected),
-                )
+                    e.public_revoke_tx.subscribe(),
+                ))
             })
         })
     };
 
-    let (stream_id, rx, journal, client_connected) = match handles {
+    let (stream_id, rx, journal, client_connected, revoke_rx) = match handles {
         None => return StatusCode::NOT_FOUND.into_response(),
         Some(h) => h,
     };
@@ -650,8 +686,10 @@ pub async fn player_ws_handler(
         "Player viewer [{stream_id}] ({server}/{name}): client connected from {}",
         crate::client_ip(&headers, peer)
     );
-    ws.on_upgrade(move |socket| handle_viewer_ws(socket, rx, journal, client_connected))
-        .into_response()
+    ws.on_upgrade(move |socket| {
+        handle_viewer_ws(socket, rx, journal, client_connected, Some(revoke_rx))
+    })
+    .into_response()
 }
 
 fn player_offline_page(name: &str, server: &str) -> Response {

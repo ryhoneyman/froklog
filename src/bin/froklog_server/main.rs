@@ -9,11 +9,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
-use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -180,6 +180,7 @@ async fn main() {
         .route("/admin", get(admin::admin_panel_handler))
         // Stream management
         .route("/stream", post(create_stream_handler))
+        .route("/stream/{id}", patch(patch_stream_handler))
         // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
@@ -227,6 +228,8 @@ async fn main() {
 struct CreateStreamBody {
     server: String,
     player: String,
+    #[serde(default)]
+    public_stream: bool,
 }
 
 #[derive(Serialize)]
@@ -277,6 +280,7 @@ async fn create_stream_handler(
         view_token.clone(),
         body.server.clone(),
         body.player.clone(),
+        body.public_stream,
         &state.data_dir,
     );
 
@@ -296,6 +300,7 @@ async fn create_stream_handler(
         "view_token": view_token,
         "server": body.server,
         "player": body.player,
+        "public_stream": body.public_stream,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         tracing::warn!("Failed to write meta for {stream_id}: {e}");
@@ -320,12 +325,81 @@ async fn create_stream_handler(
     .into_response()
 }
 
+// ── Stream metadata update ────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PatchStreamBody {
+    public_stream: Option<bool>,
+}
+
+/// `PATCH /stream/:id` — update mutable stream metadata.
+/// Authenticated with the per-stream `stream_token` (Bearer).
+async fn patch_stream_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+    Json(body): Json<PatchStreamBody>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let token = match ingest::extract_bearer(&headers) {
+        Some(t) => t,
+        None => {
+            warn!("Patch [{stream_id}] [{ip}]: missing token");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+
+    // Validate token, apply update, and snapshot fields for meta rewrite —
+    // all inside the write lock so no reader sees a half-updated entry.
+    let snapshot = {
+        let mut reg = state.registry.write().await;
+        let entry = match reg.get_mut(&stream_id) {
+            Some(e) => e,
+            None => return StatusCode::NOT_FOUND.into_response(),
+        };
+        if !froklog::auth::tokens_match(&entry.stream_token, &token) {
+            warn!("Patch [{stream_id}] [{ip}]: bad token");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        if let Some(public) = body.public_stream {
+            entry.public_stream = public;
+            if !public {
+                let _ = entry.public_revoke_tx.send(());
+            }
+        }
+        (
+            entry.stream_id.clone(),
+            entry.stream_token.clone(),
+            entry.view_token.clone(),
+            entry.server.clone(),
+            entry.player_name.clone(),
+            entry.public_stream,
+        )
+    }; // write lock released here
+
+    let meta_path = state.data_dir.join(&snapshot.0).join("meta.json");
+    let meta = serde_json::json!({
+        "stream_id":    snapshot.0,
+        "stream_token": snapshot.1,
+        "view_token":   snapshot.2,
+        "server":       snapshot.3,
+        "player":       snapshot.4,
+        "public_stream": snapshot.5,
+    });
+    if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
+        warn!("Patch [{stream_id}]: failed to rewrite meta: {e}");
+    }
+    info!("Patch [{stream_id}] [{ip}]: public_stream={}", snapshot.5);
+    StatusCode::OK.into_response()
+}
+
 // ── HTTP stats snapshot (poll fallback for viewers) ───────────────────────────
 
 async fn stream_stats_handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    axum::extract::Path(stream_id): axum::extract::Path<String>,
+    Path(stream_id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
     State(state): State<ServerState>,
 ) -> impl IntoResponse {
@@ -403,6 +477,8 @@ struct StreamMeta {
     #[serde(default)]
     server: String,
     player: String,
+    #[serde(default)]
+    public_stream: bool,
 }
 
 async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedRegistry) {
@@ -428,6 +504,7 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
             meta.view_token,
             meta.server,
             meta.player.clone(),
+            meta.public_stream,
             data_dir,
         ) {
             Ok(entry) => {
