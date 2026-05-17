@@ -119,7 +119,11 @@ impl StreamRegistry {
 
     /// Look up the stream_id for a public player identity (case-insensitive).
     pub fn find_id_by_player(&self, game: &str, server: &str, name: &str) -> Option<String> {
-        let key = (game.to_lowercase(), server.to_lowercase(), name.to_lowercase());
+        let key = (
+            game.to_lowercase(),
+            server.to_lowercase(),
+            name.to_lowercase(),
+        );
         self.name_to_id.get(&key).cloned()
     }
 
