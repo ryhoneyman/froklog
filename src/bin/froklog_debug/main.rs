@@ -119,6 +119,10 @@ struct MobInstance {
 // ── Display helpers ───────────────────────────────────────────────────────────
 
 fn update_mob_list(state: &mut DebugState, tgt: &str) -> (u64, bool) {
+    // Corpses ("X's corpse") are dead mobs and must never enter the mob list.
+    if tgt.ends_with("'s corpse") {
+        return (state.active_mob_id.unwrap_or(u64::MAX), false);
+    }
     // Use known_players (damage-dealers only) to decide if tgt is a player.
     // entities is also populated by mob healers and cannot be used here.
     if state.known_players.contains(tgt) {

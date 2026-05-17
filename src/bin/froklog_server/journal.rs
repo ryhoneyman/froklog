@@ -205,6 +205,46 @@ impl Journal {
         Some(Arc::new(serde_json::to_string(&jl.batch).ok()?))
     }
 
+    /// Read up to `count` batches sequentially from disk starting at index position `pos`.
+    /// Opens the file once and reads contiguous lines, avoiding per-batch file overhead.
+    /// Returns fewer than `count` entries only when the journal is exhausted.
+    pub fn read_burst(&self, pos: usize, count: usize) -> Vec<Arc<String>> {
+        if pos >= self.index.len() || count == 0 {
+            return Vec::new();
+        }
+        let end = (pos + count).min(self.index.len());
+        let entry = &self.index[pos];
+        let mut file = match std::fs::File::open(&self.path) {
+            Ok(f) => f,
+            Err(_) => return Vec::new(),
+        };
+        if file.seek(SeekFrom::Start(entry.byte_offset)).is_err() {
+            return Vec::new();
+        }
+        let mut reader = std::io::BufReader::new(file);
+        let mut results = Vec::with_capacity(end - pos);
+        let mut line = String::new();
+        for _ in pos..end {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                break;
+            }
+            match serde_json::from_str::<JournalLine>(trimmed) {
+                Ok(jl) => match serde_json::to_string(&jl.batch) {
+                    Ok(s) => results.push(Arc::new(s)),
+                    Err(_) => break,
+                },
+                Err(_) => break,
+            }
+        }
+        results
+    }
+
     /// Read the wall_ts for a given index position without deserialising the full line.
     pub fn ts_at(&self, pos: usize) -> Option<u64> {
         self.index.get(pos).map(|e| e.wall_ts)

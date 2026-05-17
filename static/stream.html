@@ -306,6 +306,7 @@
 // ── Stream credentials injected server-side ───────────────────────────────────
 const STREAM_ID  = '__STREAM_ID__';
 const VIEW_TOKEN = '__VIEW_TOKEN__';
+const WS_PATH    = '__WS_PATH__';
 
 // ── In-memory batch cache ─────────────────────────────────────────────────────
 // Stores every EventBatch received from the server in order.
@@ -1236,7 +1237,7 @@ let logLastTs  = null;  // EQ log-event unix seconds (used for labels)
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url   = `${proto}://${location.host}/stream/${STREAM_ID}/ws?vtok=${encodeURIComponent(VIEW_TOKEN)}`;
+  const url   = `${proto}://${location.host}${WS_PATH}`;
   ws = new WebSocket(url);
   ws.onopen    = () => { setStatus('live', '● live'); tlIsLive = true; tlPaused = false; updateLiveBtn(); updatePlayPauseBtn(); };
   ws.onmessage = e => {

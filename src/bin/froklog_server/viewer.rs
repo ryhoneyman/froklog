@@ -17,7 +17,7 @@ use crate::ServerState;
 
 /// Number of journal batches to send per loop iteration during catch-up.
 /// Amortises per-batch async overhead without affecting replay granularity.
-const CATCHUP_BURST: usize = 32;
+const CATCHUP_BURST: usize = 64;
 
 #[derive(Deserialize)]
 pub struct ViewQuery {
@@ -40,10 +40,12 @@ pub async fn stream_page_handler(
             .map(|e| e.player_name.clone())
             .unwrap_or_default()
     };
+    let ws_path = format!("/stream/{stream_id}/ws?vtok={vtok}");
     let html = include_str!("../../../static/stream.html")
         .replace("__STREAM_ID__", &stream_id)
         .replace("__VIEW_TOKEN__", &vtok)
-        .replace("__PLAYER_NAME__", &player_name);
+        .replace("__PLAYER_NAME__", &player_name)
+        .replace("__WS_PATH__", &ws_path);
     Html(html).into_response()
 }
 
@@ -221,28 +223,21 @@ async fn handle_viewer_ws(
                 }
                 // Burst-send up to CATCHUP_BURST batches before yielding for
                 // client messages, amortising per-batch async overhead.
-                let mut exhausted = false;
-                for _ in 0..CATCHUP_BURST {
-                    if *pos >= target_pos {
-                        break;
+                let count = CATCHUP_BURST.min(target_pos - *pos);
+                let batches = {
+                    let j = journal.read().await;
+                    j.read_burst(*pos, count)
+                };
+                let exhausted = batches.len() < count;
+                for json in &batches {
+                    if socket
+                        .send(Message::Text(wrap_batch(json).into()))
+                        .await
+                        .is_err()
+                    {
+                        return;
                     }
-                    let batch = {
-                        let j = journal.read().await;
-                        j.read_at(*pos)
-                    };
-                    if let Some(json) = batch {
-                        if socket
-                            .send(Message::Text(wrap_batch(&json).into()))
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                        *pos += 1;
-                    } else {
-                        exhausted = true;
-                        break;
-                    }
+                    *pos += 1;
                 }
                 if exhausted {
                     let cur = *pos;
@@ -268,25 +263,20 @@ async fn handle_viewer_ws(
             // ── Catch-up: blast stored batches, yield to client msgs ──────────
             ViewerMode::CatchUp { ref mut pos } => {
                 // Burst-send up to CATCHUP_BURST batches before yielding.
-                let mut end_of_journal = false;
-                for _ in 0..CATCHUP_BURST {
-                    let batch = {
-                        let j = journal.read().await;
-                        j.read_at(*pos)
-                    };
-                    if let Some(json) = batch {
-                        if socket
-                            .send(Message::Text(wrap_batch(&json).into()))
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                        *pos += 1;
-                    } else {
-                        end_of_journal = true;
-                        break;
+                let batches = {
+                    let j = journal.read().await;
+                    j.read_burst(*pos, CATCHUP_BURST)
+                };
+                let end_of_journal = batches.len() < CATCHUP_BURST;
+                for json in &batches {
+                    if socket
+                        .send(Message::Text(wrap_batch(json).into()))
+                        .await
+                        .is_err()
+                    {
+                        return;
                     }
+                    *pos += 1;
                 }
                 if end_of_journal {
                     // Caught up to the end of stored data.
@@ -572,6 +562,129 @@ async fn handle_client_msg(
         ClientMsg::Live => Some(ViewerMode::Live),
     }
 }
+
+// ── Public player routes (/player/{server}/{name}) ────────────────────────────
+
+/// `GET /player/:server/:name` — serves the viewer page for a live public stream.
+/// Returns a simple offline page if the player has no stream or is not connected.
+pub async fn player_page_handler(
+    Path((server, name)): Path<(String, String)>,
+    State(state): State<ServerState>,
+) -> Response {
+    let entry_data = {
+        let reg = state.registry.read().await;
+        reg.find_id_by_player(&server, &name).and_then(|id| {
+            reg.get(&id).map(|e| {
+                (
+                    e.stream_id.clone(),
+                    e.player_name.clone(),
+                    e.server.clone(),
+                    e.client_connected.load(Ordering::Relaxed),
+                )
+            })
+        })
+    };
+
+    match entry_data {
+        None => player_offline_page(&name, &server),
+        Some((_, player_name, server_name, false)) => {
+            player_offline_page(&player_name, &server_name)
+        }
+        Some((stream_id, player_name, _, true)) => {
+            let ws_path = format!("/player/{}/{}/ws", server, name);
+            let html = include_str!("../../../static/stream.html")
+                .replace("__STREAM_ID__", &stream_id)
+                .replace("__VIEW_TOKEN__", "")
+                .replace("__PLAYER_NAME__", &player_name)
+                .replace("__WS_PATH__", &ws_path);
+            Html(html).into_response()
+        }
+    }
+}
+
+/// `GET /player/:server/:name/ws` — viewer WebSocket for a live public stream.
+/// Rejected with 503 if the player is not currently streaming.
+pub async fn player_ws_handler(
+    Path((server, name)): Path<(String, String)>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    State(state): State<ServerState>,
+) -> Response {
+    let handles = {
+        let reg = state.registry.read().await;
+        reg.find_id_by_player(&server, &name).and_then(|id| {
+            reg.get(&id).map(|e| {
+                (
+                    e.stream_id.clone(),
+                    e.broadcast_tx.subscribe(),
+                    Arc::clone(&e.journal),
+                    Arc::clone(&e.client_connected),
+                )
+            })
+        })
+    };
+
+    let (stream_id, rx, journal, client_connected) = match handles {
+        None => return StatusCode::NOT_FOUND.into_response(),
+        Some(h) => h,
+    };
+
+    if !client_connected.load(Ordering::Relaxed) {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+
+    info!(
+        "Player viewer [{stream_id}] ({server}/{name}): client connected from {}",
+        crate::client_ip(&headers, peer)
+    );
+    ws.on_upgrade(move |socket| handle_viewer_ws(socket, rx, journal, client_connected))
+        .into_response()
+}
+
+fn player_offline_page(name: &str, server: &str) -> Response {
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{name} — Not Streaming</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0f1117;color:#cdd6f4;font-family:'Segoe UI',system-ui,sans-serif;
+      display:flex;align-items:center;justify-content:center;min-height:100vh}}
+.card{{background:#1e1e2e;border-radius:12px;padding:2.5rem 3rem;text-align:center;
+       border:1px solid #313244;max-width:380px}}
+.dot{{display:inline-block;width:10px;height:10px;border-radius:50%;
+      background:#45475a;margin-right:.5rem;vertical-align:middle}}
+h1{{font-size:1.4rem;margin-bottom:.4rem;color:#cdd6f4}}
+.server{{font-size:.85rem;color:#6c7086;margin-bottom:1.6rem}}
+p{{color:#a6adc8;font-size:.9rem;line-height:1.5}}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1><span class="dot"></span>{name}</h1>
+  <div class="server">{server}</div>
+  <p>Not currently streaming.<br>Check back when they are live.</p>
+</div>
+</body>
+</html>"#,
+        name = html_escape(name),
+        server = html_escape(server),
+    );
+    (StatusCode::OK, Html(html)).into_response()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 async fn is_valid_view_token(stream_id: &str, vtok: &Option<String>, state: &ServerState) -> bool {
     let reg = state.registry.read().await;

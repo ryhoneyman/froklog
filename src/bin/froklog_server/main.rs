@@ -1,3 +1,4 @@
+mod admin;
 mod ingest;
 mod journal;
 mod streams;
@@ -56,8 +57,33 @@ pub struct ServerState {
     pub registry: SharedRegistry,
     /// Root directory for on-disk journals.
     pub data_dir: PathBuf,
-    /// Secret that authorises `POST /stream` (stream creation).
+    /// Secret that authorises `GET /admin`.
     admin_token: String,
+    /// Optional password required to create streams via `POST /stream`.
+    /// When `None`, stream creation is open to anyone.
+    stream_password: Option<String>,
+}
+
+impl ServerState {
+    pub fn is_admin_token(&self, token: &str) -> bool {
+        froklog::auth::tokens_match(&self.admin_token, token)
+    }
+
+    /// Returns `true` when the supplied password satisfies the stream-creation
+    /// policy: open servers always return `true`; password-protected servers
+    /// require a non-empty match.
+    pub fn stream_auth_ok(&self, supplied: Option<&str>) -> bool {
+        match &self.stream_password {
+            None => true,
+            Some(required) => supplied
+                .map(|s| froklog::auth::tokens_match(required, s))
+                .unwrap_or(false),
+        }
+    }
+
+    pub fn requires_stream_password(&self) -> bool {
+        self.stream_password.is_some()
+    }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -79,6 +105,8 @@ async fn main() {
         t
     });
 
+    let stream_password = std::env::var("FROKLOG_STREAM_PASSWORD").ok().filter(|s| !s.is_empty());
+
     let data_dir: PathBuf = std::env::var("FROKLOG_DATA_DIR")
         .unwrap_or_else(|_| "streams".to_string())
         .into();
@@ -92,24 +120,38 @@ async fn main() {
     // previously-created stream we can restore (journal already on disk).
     load_persisted_streams(&data_dir, &registry).await;
 
+    if stream_password.is_some() {
+        info!("Stream creation: password-protected (FROKLOG_STREAM_PASSWORD is set)");
+    } else {
+        info!("Stream creation: open (set FROKLOG_STREAM_PASSWORD to require a password)");
+    }
+
     let state = ServerState {
         registry,
         data_dir,
         admin_token,
+        stream_password,
     };
 
     let cors = CorsLayer::new().allow_origin(Any);
 
     let app = Router::new()
+        // Admin panel
+        .route("/admin", get(admin::admin_panel_handler))
         // Stream management
         .route("/stream", post(create_stream_handler))
-        // Viewer routes
+        // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
         .route("/stream/{id}/stats", get(stream_stats_handler))
+        // Public player routes (live only, no token)
+        .route("/player/{server}/{name}", get(viewer::player_page_handler))
+        .route("/player/{server}/{name}/ws", get(viewer::player_ws_handler))
         // Ingest route (Windows clients push here)
         .route("/ingest/{id}", get(ingest::ingest_ws_handler))
-        // Health / stream list
+        // Health check
+        .route("/health", get(health_handler))
+        // Stream list / index
         .route("/", get(index_handler))
         .layer(cors)
         .with_state(state);
@@ -138,6 +180,7 @@ async fn main() {
 
 #[derive(Deserialize)]
 struct CreateStreamBody {
+    server: String,
     player: String,
 }
 
@@ -146,8 +189,11 @@ struct CreateStreamResponse {
     stream_id: String,
     stream_token: String,
     view_token: String,
+    server: String,
+    player: String,
     ingest_ws_path: String,
     view_path: String,
+    player_path: Option<String>,
 }
 
 async fn create_stream_handler(
@@ -155,11 +201,8 @@ async fn create_stream_handler(
     headers: HeaderMap,
     Json(body): Json<CreateStreamBody>,
 ) -> impl IntoResponse {
-    let token = match ingest::extract_bearer(&headers) {
-        Some(t) => t,
-        None => return StatusCode::UNAUTHORIZED.into_response(),
-    };
-    if !froklog::auth::tokens_match(&state.admin_token, &token) {
+    let supplied = ingest::extract_bearer(&headers);
+    if !state.stream_auth_ok(supplied.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -170,11 +213,17 @@ async fn create_stream_handler(
 
     let ingest_path = format!("/ingest/{stream_id}");
     let view_path = format!("/stream/{stream_id}?vtok={view_token}");
+    let player_path = if !body.server.is_empty() {
+        Some(format!("/player/{}/{}", body.server, body.player))
+    } else {
+        None
+    };
 
     let entry = StreamEntry::new(
         stream_id.clone(),
         stream_token.clone(),
         view_token.clone(),
+        body.server.clone(),
         body.player.clone(),
         &state.data_dir,
     );
@@ -193,21 +242,28 @@ async fn create_stream_handler(
         "stream_id": stream_id,
         "stream_token": stream_token,
         "view_token": view_token,
+        "server": body.server,
         "player": body.player,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         tracing::warn!("Failed to write meta for {stream_id}: {e}");
     }
 
-    info!("Created stream {stream_id} for player '{}'", body.player);
+    info!(
+        "Created stream {stream_id} for player '{}' on '{}'",
+        body.player, body.server
+    );
     state.registry.write().await.insert(entry);
 
     Json(CreateStreamResponse {
         stream_id,
         stream_token,
         view_token,
+        server: body.server,
+        player: body.player,
         ingest_ws_path: ingest_path,
         view_path,
+        player_path,
     })
     .into_response()
 }
@@ -243,6 +299,15 @@ async fn stream_stats_handler(
     }
 }
 
+// ── Health check ──────────────────────────────────────────────────────────────
+
+async fn health_handler(State(state): State<ServerState>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "ok": true,
+        "requires_password": state.requires_stream_password(),
+    }))
+}
+
 // ── Server index ──────────────────────────────────────────────────────────────
 
 async fn index_handler() -> impl IntoResponse {
@@ -256,6 +321,8 @@ struct StreamMeta {
     stream_id: String,
     stream_token: String,
     view_token: String,
+    #[serde(default)]
+    server: String,
     player: String,
 }
 
@@ -280,6 +347,7 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
             meta.stream_id.clone(),
             meta.stream_token,
             meta.view_token,
+            meta.server,
             meta.player.clone(),
             data_dir,
         ) {

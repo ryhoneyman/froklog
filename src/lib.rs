@@ -7,3 +7,6 @@ pub mod pusher;
 pub mod state;
 pub mod tailer;
 pub mod tray;
+
+#[cfg(feature = "tray")]
+pub mod settings_win;

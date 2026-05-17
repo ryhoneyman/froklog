@@ -4,6 +4,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Path to the EverQuest log file being tailed.
@@ -16,15 +20,41 @@ pub struct Config {
     pub stream_id: Option<String>,
     /// Viewer token embedded in the shareable URL.
     pub view_token: Option<String>,
+
+    /// Game selection, e.g. "Everquest Legends".
+    #[serde(default)]
+    pub game: Option<String>,
+    /// EQ server name extracted from / matching the log filename, e.g. "Test".
+    #[serde(default)]
+    pub server_name: Option<String>,
+    /// Explicit player name (A-Z only); overrides filename extraction.
+    #[serde(default)]
+    pub player_name: Option<String>,
+    /// Optional password required by the froklog-server to create streams.
+    /// Left empty for public servers; set by the server operator via FROKLOG_STREAM_PASSWORD.
+    #[serde(default)]
+    pub stream_password: Option<String>,
+    /// Whether to expose a public /player/{server}/{name} URL for this stream.
+    #[serde(default)]
+    pub public_stream: bool,
+    /// Whether the log-tail engine is enabled. Defaults to true.
+    #[serde(default = "default_true")]
+    pub logging_enabled: bool,
 }
 
 impl Config {
     pub fn load() -> Self {
         let path = config_path();
         let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
+            return Self {
+                logging_enabled: true,
+                ..Default::default()
+            };
         };
-        toml::from_str(&text).unwrap_or_default()
+        toml::from_str(&text).unwrap_or_else(|_| Self {
+            logging_enabled: true,
+            ..Default::default()
+        })
     }
 
     pub fn save(&self) {
@@ -41,7 +71,6 @@ impl Config {
     pub fn ingest_ws_url(&self) -> Option<String> {
         let base = self.server_url.as_deref()?;
         let id = self.stream_id.as_deref()?;
-        // Convert http(s):// to ws(s)://
         let ws_base = base
             .replacen("https://", "wss://", 1)
             .replacen("http://", "ws://", 1);
@@ -61,10 +90,43 @@ impl Config {
         self.log_path.is_some() && self.ingest_ws_url().is_some() && self.stream_token.is_some()
     }
 
-    /// Returns true when stream credentials have been obtained from a server
-    /// (stream_id, stream_token, and view_token are all present).
+    /// Returns true when stream credentials have been obtained from a server.
     pub fn is_registered(&self) -> bool {
         self.stream_id.is_some() && self.stream_token.is_some() && self.view_token.is_some()
+    }
+
+    /// Best-effort player name: explicit field first, then derived from log filename.
+    pub fn effective_player_name(&self) -> String {
+        if let Some(ref name) = self.player_name {
+            if !name.is_empty() {
+                return name.clone();
+            }
+        }
+        self.log_path
+            .as_deref()
+            .and_then(|p| {
+                let stem = std::path::Path::new(p).file_stem()?.to_str()?;
+                let parts: Vec<&str> = stem.split('_').collect();
+                if parts.len() >= 3 {
+                    Some(parts[1].to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    /// Server name derived from log filename (e.g. "Test" from eqlog_Name_Test.txt).
+    pub fn server_name_from_log(&self) -> Option<String> {
+        let p = self.log_path.as_deref()?;
+        let stem = std::path::Path::new(p).file_stem()?.to_str()?;
+        // eqlog_{player}_{server}.txt  →  parts[2] is the server
+        let parts: Vec<&str> = stem.split('_').collect();
+        if parts.len() >= 3 {
+            Some(parts[2..].join("_"))
+        } else {
+            None
+        }
     }
 }
 

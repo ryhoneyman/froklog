@@ -33,18 +33,18 @@ fn main() {
         let config = Config::load();
         let handle = Arc::new(AppHandle::new(config));
 
-        // Engine monitor runs on a background thread; tray must be on main thread.
         spawn_engine(Arc::clone(&handle));
         tray_run(handle);
     }
 
-    // Headless fallback when built without the tray feature (e.g. --no-default-features).
     #[cfg(not(feature = "tray"))]
     {
         let config = Config::load();
         if !config.is_ready() {
-            eprintln!("Config not ready. Edit {:?} and set log_path, server_url, stream_id, stream_token.",
-                config_path_display());
+            eprintln!(
+                "Config not ready. Edit {:?} and set log_path, server_url, stream_id, stream_token.",
+                config_path_display()
+            );
             std::process::exit(1);
         }
         let quit = Arc::new(AtomicBool::new(false));
@@ -58,8 +58,6 @@ fn main() {
 
 // ── Engine monitor ────────────────────────────────────────────────────────────
 
-/// Spawns a background thread that (re)starts the engine whenever `handle.restart`
-/// is set — e.g. after the user picks a new log file or registers with a server.
 #[cfg(feature = "tray")]
 fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
     thread::Builder::new()
@@ -68,6 +66,12 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
             loop {
                 if handle.quit.load(Ordering::Relaxed) {
                     break;
+                }
+
+                // Respect the user's enable/disable toggle.
+                if !handle.logging_enabled.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
                 }
 
                 let config = handle.config.lock().unwrap().clone();
@@ -82,7 +86,6 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
                     );
                     info!("Engine stopped");
                 } else {
-                    // Not configured yet — wait quietly.
                     thread::sleep(Duration::from_secs(1));
                     continue;
                 }
@@ -90,7 +93,6 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
                 if handle.quit.load(Ordering::Relaxed) {
                     break;
                 }
-                // Brief pause before potential restart.
                 thread::sleep(Duration::from_millis(500));
             }
         })
@@ -99,7 +101,6 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 
-/// Runs the tailer → parser → pusher pipeline until `restart` or `quit` is set.
 fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBool>) {
     let log_path = match config.log_path.as_ref() {
         Some(p) => p.clone(),
@@ -114,13 +115,14 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
         None => return,
     };
 
-    let shared: Arc<ArcSwap<CombatState>> = Arc::new(ArcSwap::from_pointee(CombatState::default()));
+    let shared: Arc<ArcSwap<CombatState>> =
+        Arc::new(ArcSwap::from_pointee(CombatState::default()));
     let reset_flag = Arc::new(AtomicBool::new(false));
     let (broadcast_tx, _) = broadcast::channel::<Arc<CombatState>>(64);
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
     let (line_tx, line_rx) = bounded::<String>(4096);
 
-    let player_name = extract_player_name(&log_path);
+    let player_name = config.effective_player_name();
     info!("Watching: {log_path}  player: {player_name}");
 
     let tail_config = TailConfig {
@@ -130,7 +132,6 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
         dump: false,
     };
 
-    // Tailer — sends raw log lines into the channel; exits when the channel closes.
     {
         let path = log_path.clone();
         let restart2 = Arc::clone(&restart);
@@ -143,23 +144,22 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
                     .build()
                     .expect("tailer rt");
                 rt.block_on(async move {
-                tokio::select! {
-                    _ = tailer::tail(path, tail_config, line_tx) => {}
-                    _ = async {
-                        loop {
-                            tokio::time::sleep(Duration::from_millis(200)).await;
-                            if restart2.load(Ordering::Relaxed) || quit2.load(Ordering::Relaxed) {
-                                break;
+                    tokio::select! {
+                        _ = tailer::tail(path, tail_config, line_tx) => {}
+                        _ = async {
+                            loop {
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                                if restart2.load(Ordering::Relaxed) || quit2.load(Ordering::Relaxed) {
+                                    break;
+                                }
                             }
-                        }
-                    } => {}
-                }
-            });
+                        } => {}
+                    }
+                });
             })
             .expect("spawn tailer");
     }
 
-    // Parser — reads lines, updates shared CombatState, broadcasts snapshots, emits events.
     {
         let shared2 = Arc::clone(&shared);
         let reset2 = Arc::clone(&reset_flag);
@@ -171,7 +171,6 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
             .expect("spawn parser");
     }
 
-    // Pusher — batches CombatEvents every 1 second and sends them to the remote server.
     {
         thread::Builder::new()
             .name("eq-pusher".into())
@@ -186,7 +185,6 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
         info!("Pushing events to remote server");
     }
 
-    // Block the monitor thread until a restart or quit is requested.
     loop {
         thread::sleep(Duration::from_millis(200));
         if restart.load(Ordering::Relaxed) || quit.load(Ordering::Relaxed) {
@@ -196,23 +194,6 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn extract_player_name(path: &str) -> String {
-    let filename = std::path::Path::new(path)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or(path);
-    if let Some(rest) = filename.strip_prefix("eqlog_") {
-        let without_ext = rest.trim_end_matches(".txt");
-        if let Some(idx) = without_ext.rfind('_') {
-            let name = &without_ext[..idx];
-            if !name.is_empty() {
-                return name.to_owned();
-            }
-        }
-    }
-    String::new()
-}
 
 #[cfg(not(feature = "tray"))]
 fn config_path_display() -> String {
