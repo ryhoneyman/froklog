@@ -181,35 +181,50 @@ pub async fn admin_panel_handler(
         .sum();
 
     let mut body = String::new();
-    for (game_label, server_groups) in &game_groups {
+    for (gi, (game_label, server_groups)) in game_groups.iter().enumerate() {
         body.push_str(&format!(
-            "<tr class=\"game-hdr\"><td colspan=\"9\">{}</td></tr>\n",
+            "<tr class=\"game-hdr\" data-gid=\"{gi}\" onclick=\"toggleGame({gi})\">\
+              <td colspan=\"9\"><span class=\"chevron\">&#9660;</span>{}</td>\
+            </tr>\n",
             html_escape(game_label)
         ));
-        for (server, player_groups) in server_groups {
+        for (si, (server, player_groups)) in server_groups.iter().enumerate() {
             body.push_str(&format!(
-                "<tr class=\"server-hdr\"><td colspan=\"9\">{}</td></tr>\n",
+                "<tr class=\"server-hdr\" data-gid=\"{gi}\" data-sid=\"{si}\" onclick=\"toggleServer({gi},{si})\">\
+                  <td colspan=\"9\"><span class=\"chevron\">&#9660;</span>{}</td>\
+                </tr>\n",
                 html_escape(server)
             ));
-            for (player, streams) in player_groups {
+            for (pi, (player, streams)) in player_groups.iter().enumerate() {
                 body.push_str(&format!(
-                    "<tr class=\"player-hdr\"><td colspan=\"9\">{}</td></tr>\n",
+                    "<tr class=\"player-hdr\" data-gid=\"{gi}\" data-sid=\"{si}\" data-pid=\"{pi}\" onclick=\"togglePlayer({gi},{si},{pi})\">\
+                      <td colspan=\"9\"><span class=\"chevron\">&#9660;</span>{}</td>\
+                    </tr>\n",
                     html_escape(player)
                 ));
                 for s in streams {
-                    let (row_class, status) = if s.connected {
-                        ("live-row", r#"<span class="live">&#9679; Live</span>"#)
+                    let (row_class, status, status_kw) = if s.connected {
+                        ("live-row", r#"<span class="live">&#9679; Live</span>"#, "live")
                     } else {
-                        ("", r#"<span class="offline">&#9679; Offline</span>"#)
+                        ("", r#"<span class="offline">&#9679; Offline</span>"#, "offline")
                     };
                     let view_url = format!("/stream/{}?vtok={}", s.stream_id, s.view_token);
-                    let public_badge = if s.public_stream {
-                        r#"<span class="pub-yes">&#10003; Yes</span>"#
+                    let (public_badge, public_kw) = if s.public_stream {
+                        (r#"<span class="pub-yes">&#10003; Yes</span>"#, "public")
                     } else {
-                        r#"<span class="pub-no">&#8212;</span>"#
+                        (r#"<span class="pub-no">&#8212;</span>"#, "private")
                     };
+                    let search_data = format!(
+                        "{} {} {} {} {} {}",
+                        s.stream_id.to_lowercase(),
+                        player.to_lowercase(),
+                        server.to_lowercase(),
+                        game_label.to_lowercase(),
+                        status_kw,
+                        public_kw,
+                    );
                     body.push_str(&format!(
-                        "<tr class=\"{row_class}\">\
+                        "<tr class=\"stream-row {row_class}\" data-gid=\"{gi}\" data-sid=\"{si}\" data-pid=\"{pi}\" data-search=\"{}\">\
                           <td class=\"mono\">{}</td>\
                           <td class=\"ts\">{}</td>\
                           <td class=\"ts\">{}</td>\
@@ -220,6 +235,7 @@ pub async fn admin_panel_handler(
                           <td>{}</td>\
                           <td><a href=\"{}\" target=\"_blank\">View</a></td>\
                         </tr>\n",
+                        html_escape(&search_data),
                         s.stream_id,
                         format_ts(s.first_ts),
                         format_ts(s.last_ts),
@@ -239,6 +255,68 @@ pub async fn admin_panel_handler(
         body.push_str(r#"<tr><td colspan="9" class="empty">No streams yet.</td></tr>"#);
     }
 
+    // Script lives outside the format! template to avoid escaping every brace.
+    let script = r#"<script>
+const collapsed = {};
+function updateVisibility() {
+    const q = document.getElementById('search').value.toLowerCase().trim();
+    const searching = q.length > 0;
+    const streamRows = [...document.querySelectorAll('tr.stream-row')];
+
+    streamRows.forEach(row => {
+        const {gid, sid, pid} = row.dataset;
+        row.hidden = searching
+            ? !row.dataset.search.includes(q)
+            : !!(collapsed['g'+gid] || collapsed['s'+gid+'.'+sid] || collapsed['p'+gid+'.'+sid+'.'+pid]);
+    });
+
+    document.querySelectorAll('tr.player-hdr').forEach(row => {
+        const {gid, sid, pid} = row.dataset;
+        if (searching) {
+            row.hidden = !streamRows.some(r => !r.hidden && r.dataset.gid===gid && r.dataset.sid===sid && r.dataset.pid===pid);
+        } else {
+            row.hidden = !!(collapsed['g'+gid] || collapsed['s'+gid+'.'+sid]);
+        }
+        row.querySelector('.chevron').textContent = collapsed['p'+gid+'.'+sid+'.'+pid] ? '▶' : '▼';
+    });
+
+    document.querySelectorAll('tr.server-hdr').forEach(row => {
+        const {gid, sid} = row.dataset;
+        if (searching) {
+            row.hidden = !streamRows.some(r => !r.hidden && r.dataset.gid===gid && r.dataset.sid===sid);
+        } else {
+            row.hidden = !!collapsed['g'+gid];
+        }
+        row.querySelector('.chevron').textContent = collapsed['s'+gid+'.'+sid] ? '▶' : '▼';
+    });
+
+    document.querySelectorAll('tr.game-hdr').forEach(row => {
+        const {gid} = row.dataset;
+        if (searching) {
+            row.hidden = !streamRows.some(r => !r.hidden && r.dataset.gid===gid);
+        } else {
+            row.hidden = false;
+        }
+        row.querySelector('.chevron').textContent = collapsed['g'+gid] ? '▶' : '▼';
+    });
+
+    const vis = streamRows.filter(r => !r.hidden).length;
+    const tot = streamRows.length;
+    const countEl = document.getElementById('count-line');
+    if (searching) {
+        countEl.textContent = vis + ' of ' + tot + ' stream(s) matching';
+    } else {
+        countEl.textContent = countEl.dataset.full;
+    }
+}
+function toggleGame(gi) { collapsed['g'+gi] = !collapsed['g'+gi]; updateVisibility(); }
+function toggleServer(gi,si) { const k='s'+gi+'.'+si; collapsed[k]=!collapsed[k]; updateVisibility(); }
+function togglePlayer(gi,si,pi) { const k='p'+gi+'.'+si+'.'+pi; collapsed[k]=!collapsed[k]; updateVisibility(); }
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('search').addEventListener('input', updateVisibility);
+});
+</script>"#;
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -249,16 +327,25 @@ pub async fn admin_panel_handler(
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0f1117;color:#cdd6f4;font-family:'Segoe UI',system-ui,sans-serif;padding:2rem}}
-h1{{font-size:1.4rem;margin-bottom:1rem;color:#89b4fa}}
+.top-bar{{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:1rem}}
+h1{{font-size:1.4rem;color:#89b4fa}}
 h1 span{{color:#6c7086;font-weight:400;font-size:1rem;margin-left:.5rem}}
-.count{{font-size:.85rem;color:#6c7086;margin-bottom:1rem}}
+.count{{font-size:.85rem;color:#6c7086;margin-top:.3rem}}
+#search{{background:#1e1e2e;color:#cdd6f4;border:1px solid #45475a;border-radius:6px;padding:.45rem .8rem;font-size:.85rem;width:280px;outline:none;margin-top:.1rem}}
+#search:focus{{border-color:#89b4fa}}
+#search::placeholder{{color:#6c7086}}
+[hidden]{{display:none!important}}
 table{{width:100%;border-collapse:collapse;background:#1e1e2e;border-radius:8px;overflow:hidden}}
 th{{background:#313244;color:#a6adc8;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;padding:.6rem 1rem;text-align:left}}
 td{{padding:.6rem 1rem;border-top:1px solid #313244;vertical-align:middle;white-space:nowrap}}
 tr:hover td{{background:#262637}}
-tr.game-hdr td{{background:#1a1a2e;color:#f38ba8;font-weight:700;font-size:.9rem;letter-spacing:.06em;text-transform:uppercase;border-top:3px solid #313244;padding:.55rem 1rem}}
-tr.server-hdr td{{background:#222233;color:#89dceb;font-weight:600;font-size:.82rem;letter-spacing:.05em;text-transform:uppercase;border-top:1px solid #313244;padding:.45rem 1rem .45rem 2rem}}
-tr.player-hdr td{{background:#2a2a3d;color:#cba6f7;font-weight:600;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase;border-top:1px solid #45475a;padding:.4rem 1rem .4rem 3rem}}
+tr.game-hdr td{{background:#1a1a2e;color:#f38ba8;font-weight:700;font-size:.9rem;letter-spacing:.06em;text-transform:uppercase;border-top:3px solid #313244;padding:.55rem 1rem;cursor:pointer;user-select:none}}
+tr.game-hdr:hover td{{background:#23233e}}
+tr.server-hdr td{{background:#222233;color:#89dceb;font-weight:600;font-size:.82rem;letter-spacing:.05em;text-transform:uppercase;border-top:1px solid #313244;padding:.45rem 1rem .45rem 2rem;cursor:pointer;user-select:none}}
+tr.server-hdr:hover td{{background:#2a2a3f}}
+tr.player-hdr td{{background:#2a2a3d;color:#cba6f7;font-weight:600;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase;border-top:1px solid #45475a;padding:.4rem 1rem .4rem 3rem;cursor:pointer;user-select:none}}
+tr.player-hdr:hover td{{background:#333348}}
+.chevron{{display:inline-block;font-size:.65rem;margin-right:.45rem;opacity:.6;vertical-align:middle}}
 .mono{{font-family:monospace;font-size:.85rem;color:#a6e3a1}}
 .ts{{font-size:.82rem;color:#a6adc8}}
 .num{{font-size:.85rem;text-align:right}}
@@ -276,8 +363,15 @@ a:hover{{text-decoration:underline}}
 </style>
 </head>
 <body>
-<h1>froklog <span>admin</span></h1>
-<p class="count">{total_streams} stream(s) across {total_players} player(s)</p>
+<div class="top-bar">
+  <div>
+    <h1>froklog <span>admin</span></h1>
+    <p class="count" id="count-line" data-full="{total_streams} stream(s) across {total_players} player(s)">{total_streams} stream(s) across {total_players} player(s)</p>
+  </div>
+  <div>
+    <input type="search" id="search" placeholder="Filter by player, server, stream ID, live, public&#8230;" autocomplete="off" spellcheck="false">
+  </div>
+</div>
 <table>
   <thead>
     <tr>
@@ -295,6 +389,7 @@ a:hover{{text-decoration:underline}}
   <tbody>
 {body}  </tbody>
 </table>
+{script}
 </body>
 </html>"#
     );
