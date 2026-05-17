@@ -105,7 +105,9 @@ async fn main() {
         t
     });
 
-    let stream_password = std::env::var("FROKLOG_STREAM_PASSWORD").ok().filter(|s| !s.is_empty());
+    let stream_password = std::env::var("FROKLOG_STREAM_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     let data_dir: PathBuf = std::env::var("FROKLOG_DATA_DIR")
         .unwrap_or_else(|_| "streams".to_string())

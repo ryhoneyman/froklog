@@ -115,8 +115,7 @@ fn run_engine_once(config: &Config, restart: Arc<AtomicBool>, quit: Arc<AtomicBo
         None => return,
     };
 
-    let shared: Arc<ArcSwap<CombatState>> =
-        Arc::new(ArcSwap::from_pointee(CombatState::default()));
+    let shared: Arc<ArcSwap<CombatState>> = Arc::new(ArcSwap::from_pointee(CombatState::default()));
     let reset_flag = Arc::new(AtomicBool::new(false));
     let (broadcast_tx, _) = broadcast::channel::<Arc<CombatState>>(64);
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();

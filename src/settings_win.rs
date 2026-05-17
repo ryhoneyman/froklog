@@ -12,9 +12,10 @@ mod win {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
+    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{BOOL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::Graphics::Gdi::{
-        COLOR_BTNFACE, DEFAULT_GUI_FONT, GetStockObject, HBRUSH, HGDIOBJ,
+        GetStockObject, COLOR_BTNFACE, DEFAULT_GUI_FONT, HBRUSH, HGDIOBJ,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Controls::Dialogs::{
@@ -22,19 +23,16 @@ mod win {
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-        GetDlgItem, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW,
-        GetWindowTextW, LoadCursorW, MessageBoxW, PostMessageW, PostQuitMessage,
-        RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, TranslateMessage,
-        CB_ADDSTRING, CB_FINDSTRINGEXACT, CB_GETCURSEL, CB_GETLBTEXT, CB_GETLBTEXTLEN,
-        CB_SETCURSEL, CREATESTRUCTW, GWLP_USERDATA, HMENU, IDC_ARROW,
-        MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG,
-        SM_CXSCREEN, SM_CYSCREEN, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-        WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW,
-        WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
-        WINDOW_EX_STYLE, WINDOW_STYLE,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetDlgItem, GetMessageW,
+        GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, LoadCursorW,
+        MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
+        SetWindowLongPtrW, SetWindowTextW, TranslateMessage, CB_ADDSTRING, CB_FINDSTRINGEXACT,
+        CB_GETCURSEL, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CREATESTRUCTW, GWLP_USERDATA,
+        HMENU, IDC_ARROW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG,
+        SM_CXSCREEN, SM_CYSCREEN, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
+        WM_CREATE, WM_DESTROY, WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
+        WS_EX_APPWINDOW, WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
     };
-    use windows::core::PCWSTR;
 
     use crate::tray::tray::AppHandle;
 
@@ -144,10 +142,7 @@ mod win {
                 .clone()
                 .or_else(|| cfg.server_name_from_log())
                 .unwrap_or_else(|| SERVERS[0].to_string()),
-            draft_game: cfg
-                .game
-                .clone()
-                .unwrap_or_else(|| GAMES[0].to_string()),
+            draft_game: cfg.game.clone().unwrap_or_else(|| GAMES[0].to_string()),
             draft_password: cfg.stream_password.clone().unwrap_or_default(),
             draft_public: cfg.public_stream,
             is_registered: cfg.is_registered(),
@@ -190,8 +185,13 @@ mod win {
                 PCWSTR(class_w.as_ptr()),
                 PCWSTR(title.as_ptr()),
                 WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-                x, y, w, h,
-                None, None, hinstance,
+                x,
+                y,
+                w,
+                h,
+                None,
+                None,
+                hinstance,
                 Some(state_ptr as *const c_void),
             )
             .expect("CreateWindowExW settings");
@@ -238,12 +238,12 @@ mod win {
             WM_URL_TEST_DONE => {
                 let result = *Box::from_raw(lparam.0 as *mut UrlTestResult);
                 let text = match result {
-                    UrlTestResult::Connected { requires_password: false } => {
-                        "Connected — open registration".to_string()
-                    }
-                    UrlTestResult::Connected { requires_password: true } => {
-                        "Connected — password required".to_string()
-                    }
+                    UrlTestResult::Connected {
+                        requires_password: false,
+                    } => "Connected — open registration".to_string(),
+                    UrlTestResult::Connected {
+                        requires_password: true,
+                    } => "Connected — password required".to_string(),
                     UrlTestResult::Failed(e) => format!("Could not reach server: {e}"),
                 };
                 set_wnd_text(state.lbl_url_status, &text);
@@ -255,7 +255,11 @@ mod win {
             WM_REGISTER_DONE => {
                 let result = *Box::from_raw(lparam.0 as *mut RegisterResult);
                 match result {
-                    RegisterResult::Ok { stream_id, stream_token, view_token } => {
+                    RegisterResult::Ok {
+                        stream_id,
+                        stream_token,
+                        view_token,
+                    } => {
                         state.is_registered = true;
                         state.stream_id_text = stream_id.clone();
                         set_wnd_text(state.lbl_streamid, &stream_id);
@@ -431,22 +435,41 @@ mod win {
         let password = get_text(state.edit_password);
         let game = combo_text(state.combo_game);
         let server = combo_text(state.combo_server);
-        let public = SendMessageW(state.chk_public, BM_GETCHECK, WPARAM(0), LPARAM(0)).0
-            as usize == BST_CHECKED;
+        let public = SendMessageW(state.chk_public, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize
+            == BST_CHECKED;
 
         let mut cfg = state.handle.config.lock().unwrap();
         let was_ready = cfg.is_ready();
-        cfg.log_path = if log_path.is_empty() { None } else { Some(log_path) };
-        cfg.server_url = if server_url.is_empty() { None } else { Some(server_url) };
-        cfg.player_name = if player.is_empty() { None } else { Some(player) };
+        cfg.log_path = if log_path.is_empty() {
+            None
+        } else {
+            Some(log_path)
+        };
+        cfg.server_url = if server_url.is_empty() {
+            None
+        } else {
+            Some(server_url)
+        };
+        cfg.player_name = if player.is_empty() {
+            None
+        } else {
+            Some(player)
+        };
         cfg.server_name = Some(server);
         cfg.game = Some(game);
-        cfg.stream_password = if password.is_empty() { None } else { Some(password) };
+        cfg.stream_password = if password.is_empty() {
+            None
+        } else {
+            Some(password)
+        };
         cfg.public_stream = public;
         cfg.save();
 
         if cfg.is_ready() || was_ready {
-            state.handle.restart.store(true, std::sync::atomic::Ordering::Relaxed);
+            state
+                .handle
+                .restart
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
     }
@@ -459,14 +482,14 @@ mod win {
         let font = GetStockObject(DEFAULT_GUI_FONT);
 
         // Layout constants.
-        let lx = 12i32;  // label left
-        let lw = 86i32;  // label width
+        let lx = 12i32; // label left
+        let lw = 86i32; // label width
         let cx = 104i32; // control left
         let cw = 264i32; // control width (full, no side button)
         let cw2 = 188i32; // control width when a side button follows
         let bx = 298i32; // side button left
-        let bw = 78i32;  // side button width
-        let ch = 22i32;  // control height
+        let bw = 78i32; // side button width
+        let ch = 22i32; // control height
         let row = 32i32; // row stride
         let mut y = 12i32;
 
@@ -476,7 +499,13 @@ mod win {
         for g in GAMES {
             cb_add(state.combo_game, g);
         }
-        cb_sel(state.combo_game, GAMES.iter().position(|&g| g == state.draft_game).unwrap_or(0));
+        cb_sel(
+            state.combo_game,
+            GAMES
+                .iter()
+                .position(|&g| g == state.draft_game)
+                .unwrap_or(0),
+        );
         y += row;
 
         // ── Server ───────────────────────────────────────────────────────────
@@ -485,57 +514,168 @@ mod win {
         for s in SERVERS {
             cb_add(state.combo_server, s);
         }
-        cb_sel(state.combo_server, SERVERS.iter().position(|&s| s == state.draft_server).unwrap_or(0));
+        cb_sel(
+            state.combo_server,
+            SERVERS
+                .iter()
+                .position(|&s| s == state.draft_server)
+                .unwrap_or(0),
+        );
         y += row;
 
         // ── Player ───────────────────────────────────────────────────────────
         mk_label(hwnd, hi, font, "Player:", lx, y, lw, ch);
-        state.edit_player = mk_edit(hwnd, hi, font, &state.draft_player.clone(), cx, y, cw, ch, IDC_PLAYER_EDIT, 0);
+        state.edit_player = mk_edit(
+            hwnd,
+            hi,
+            font,
+            &state.draft_player.clone(),
+            cx,
+            y,
+            cw,
+            ch,
+            IDC_PLAYER_EDIT,
+            0,
+        );
         y += row;
 
         // ── Log File ─────────────────────────────────────────────────────────
         mk_label(hwnd, hi, font, "Log File:", lx, y, lw, ch);
-        state.edit_logfile = mk_edit(hwnd, hi, font, &state.draft_log_path.clone(), cx, y, cw2, ch, IDC_LOGFILE_EDIT, ES_READONLY);
+        state.edit_logfile = mk_edit(
+            hwnd,
+            hi,
+            font,
+            &state.draft_log_path.clone(),
+            cx,
+            y,
+            cw2,
+            ch,
+            IDC_LOGFILE_EDIT,
+            ES_READONLY,
+        );
         mk_button(hwnd, hi, font, "Browse…", bx, y, bw, ch, IDC_LOGFILE_BROWSE);
         y += row;
 
         // ── Server URL ───────────────────────────────────────────────────────
         mk_label(hwnd, hi, font, "Server URL:", lx, y, lw, ch);
-        state.edit_url = mk_edit(hwnd, hi, font, &state.draft_server_url.clone(), cx, y, cw2, ch, IDC_URL_EDIT, 0);
+        state.edit_url = mk_edit(
+            hwnd,
+            hi,
+            font,
+            &state.draft_server_url.clone(),
+            cx,
+            y,
+            cw2,
+            ch,
+            IDC_URL_EDIT,
+            0,
+        );
         mk_button(hwnd, hi, font, "Test", bx, y, bw, ch, IDC_URL_TEST);
         y += row;
 
         // ── URL status ───────────────────────────────────────────────────────
-        state.lbl_url_status = mk_static(hwnd, hi, font, "", cx, y, cw + bw + (bx - cx - cw2), ch, IDC_URL_STATUS, SS_LEFT);
+        state.lbl_url_status = mk_static(
+            hwnd,
+            hi,
+            font,
+            "",
+            cx,
+            y,
+            cw + bw + (bx - cx - cw2),
+            ch,
+            IDC_URL_STATUS,
+            SS_LEFT,
+        );
         y += 28i32;
 
         // ── Stream ID ────────────────────────────────────────────────────────
         mk_label(hwnd, hi, font, "Stream ID:", lx, y, lw, ch);
-        state.lbl_streamid = mk_static(hwnd, hi, font, &state.stream_id_text.clone(), cx, y, cw, ch, IDC_STREAMID_VALUE, SS_LEFT);
+        state.lbl_streamid = mk_static(
+            hwnd,
+            hi,
+            font,
+            &state.stream_id_text.clone(),
+            cx,
+            y,
+            cw,
+            ch,
+            IDC_STREAMID_VALUE,
+            SS_LEFT,
+        );
         y += row;
 
         // ── Server Password ──────────────────────────────────────────────────
         mk_label(hwnd, hi, font, "Password:", lx, y, lw, ch);
-        state.edit_password = mk_edit(hwnd, hi, font, &state.draft_password.clone(), cx, y, cw, ch, IDC_PASSWORD_EDIT, 0);
+        state.edit_password = mk_edit(
+            hwnd,
+            hi,
+            font,
+            &state.draft_password.clone(),
+            cx,
+            y,
+            cw,
+            ch,
+            IDC_PASSWORD_EDIT,
+            0,
+        );
         y += row;
 
         // ── Register / Unregister ────────────────────────────────────────────
-        let reg_label = if state.is_registered { "Unregister" } else { "Register" };
+        let reg_label = if state.is_registered {
+            "Unregister"
+        } else {
+            "Register"
+        };
         state.btn_register = mk_button(hwnd, hi, font, reg_label, cx, y, 110, ch, IDC_REGISTER_BTN);
         y += row + 4;
 
         // ── Public streaming ─────────────────────────────────────────────────
-        state.chk_public = mk_checkbox(hwnd, hi, font, "Allow public streaming", cx, y, cw, ch, IDC_PUBLIC_CHECK);
+        state.chk_public = mk_checkbox(
+            hwnd,
+            hi,
+            font,
+            "Allow public streaming",
+            cx,
+            y,
+            cw,
+            ch,
+            IDC_PUBLIC_CHECK,
+        );
         if state.draft_public {
-            SendMessageW(state.chk_public, BM_SETCHECK, WPARAM(BST_CHECKED), LPARAM(0));
+            SendMessageW(
+                state.chk_public,
+                BM_SETCHECK,
+                WPARAM(BST_CHECKED),
+                LPARAM(0),
+            );
         }
         y += row + 8;
 
         // ── Save / Cancel ────────────────────────────────────────────────────
         let right = bx + bw; // right edge of all controls
         let bw2 = 80i32;
-        mk_button(hwnd, hi, font, "Cancel", right - bw2, y, bw2, ch, IDC_CANCEL_BTN);
-        mk_button(hwnd, hi, font, "Save",   right - bw2 * 2 - 8, y, bw2, ch, IDC_SAVE_BTN);
+        mk_button(
+            hwnd,
+            hi,
+            font,
+            "Cancel",
+            right - bw2,
+            y,
+            bw2,
+            ch,
+            IDC_CANCEL_BTN,
+        );
+        mk_button(
+            hwnd,
+            hi,
+            font,
+            "Save",
+            right - bw2 * 2 - 8,
+            y,
+            bw2,
+            ch,
+            IDC_SAVE_BTN,
+        );
     }
 
     // ── Control factories ─────────────────────────────────────────────────────
@@ -546,7 +686,10 @@ mod win {
         font: HGDIOBJ,
         class: &str,
         text: &str,
-        x: i32, y: i32, w: i32, h: i32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
         id: i32,
         extra: u32,
     ) -> HWND {
@@ -557,7 +700,10 @@ mod win {
             PCWSTR(cw.as_ptr()),
             PCWSTR(tw.as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(extra),
-            x, y, w, h,
+            x,
+            y,
+            w,
+            h,
             parent,
             HMENU(id as isize as *mut c_void),
             hi,
@@ -568,32 +714,135 @@ mod win {
         hwnd
     }
 
-    unsafe fn mk_label(parent: HWND, hi: HINSTANCE, font: HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32) -> HWND {
+    unsafe fn mk_label(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> HWND {
         mk_child(parent, hi, font, "STATIC", text, x, y, w, h, 0, SS_RIGHT)
     }
 
-    unsafe fn mk_static(parent: HWND, hi: HINSTANCE, font: HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32, style: u32) -> HWND {
+    unsafe fn mk_static(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+        style: u32,
+    ) -> HWND {
         mk_child(parent, hi, font, "STATIC", text, x, y, w, h, id, style)
     }
 
-    unsafe fn mk_edit(parent: HWND, hi: HINSTANCE, font: HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32, extra: u32) -> HWND {
-        mk_child(parent, hi, font, "EDIT", text, x, y, w, h, id,
-            ES_AUTOHSCROLL | WS_BORDER.0 | WS_TABSTOP.0 | extra)
+    unsafe fn mk_edit(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+        extra: u32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "EDIT",
+            text,
+            x,
+            y,
+            w,
+            h,
+            id,
+            ES_AUTOHSCROLL | WS_BORDER.0 | WS_TABSTOP.0 | extra,
+        )
     }
 
-    unsafe fn mk_combo(parent: HWND, hi: HINSTANCE, font: HGDIOBJ, x: i32, y: i32, w: i32, id: i32) -> HWND {
-        mk_child(parent, hi, font, "COMBOBOX", "", x, y, w, 200, id,
-            CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_TABSTOP.0)
+    unsafe fn mk_combo(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: HGDIOBJ,
+        x: i32,
+        y: i32,
+        w: i32,
+        id: i32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "COMBOBOX",
+            "",
+            x,
+            y,
+            w,
+            200,
+            id,
+            CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_TABSTOP.0,
+        )
     }
 
-    unsafe fn mk_button(parent: HWND, hi: HINSTANCE, font: HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32) -> HWND {
-        mk_child(parent, hi, font, "BUTTON", text, x, y, w, h, id,
-            BS_PUSHBUTTON | WS_TABSTOP.0)
+    unsafe fn mk_button(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "BUTTON",
+            text,
+            x,
+            y,
+            w,
+            h,
+            id,
+            BS_PUSHBUTTON | WS_TABSTOP.0,
+        )
     }
 
-    unsafe fn mk_checkbox(parent: HWND, hi: HINSTANCE, font: HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32) -> HWND {
-        mk_child(parent, hi, font, "BUTTON", text, x, y, w, h, id,
-            BS_AUTOCHECKBOX | WS_TABSTOP.0)
+    unsafe fn mk_checkbox(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "BUTTON",
+            text,
+            x,
+            y,
+            w,
+            h,
+            id,
+            BS_AUTOCHECKBOX | WS_TABSTOP.0,
+        )
     }
 
     // ── Combo helpers ─────────────────────────────────────────────────────────
@@ -609,23 +858,38 @@ mod win {
 
     unsafe fn combo_text(hwnd: HWND) -> String {
         let idx = SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
-        if idx < 0 { return String::new(); }
+        if idx < 0 {
+            return String::new();
+        }
         let len = SendMessageW(hwnd, CB_GETLBTEXTLEN, WPARAM(idx as usize), LPARAM(0)).0 as usize;
         let mut buf = vec![0u16; len + 1];
-        SendMessageW(hwnd, CB_GETLBTEXT, WPARAM(idx as usize), LPARAM(buf.as_mut_ptr() as isize));
+        SendMessageW(
+            hwnd,
+            CB_GETLBTEXT,
+            WPARAM(idx as usize),
+            LPARAM(buf.as_mut_ptr() as isize),
+        );
         String::from_utf16_lossy(&buf[..len])
     }
 
     unsafe fn combo_find(hwnd: HWND, text: &str) -> i32 {
         let w = wide(text);
-        SendMessageW(hwnd, CB_FINDSTRINGEXACT, WPARAM(usize::MAX), LPARAM(w.as_ptr() as isize)).0 as i32
+        SendMessageW(
+            hwnd,
+            CB_FINDSTRINGEXACT,
+            WPARAM(usize::MAX),
+            LPARAM(w.as_ptr() as isize),
+        )
+        .0 as i32
     }
 
     // ── Text helpers ──────────────────────────────────────────────────────────
 
     unsafe fn get_text(hwnd: HWND) -> String {
         let len = GetWindowTextLengthW(hwnd) as usize;
-        if len == 0 { return String::new(); }
+        if len == 0 {
+            return String::new();
+        }
         let mut buf = vec![0u16; len + 1];
         GetWindowTextW(hwnd, &mut buf);
         String::from_utf16_lossy(&buf[..len])
@@ -640,8 +904,12 @@ mod win {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    fn loword(x: usize) -> usize { x & 0xffff }
-    fn hiword(x: usize) -> usize { (x >> 16) & 0xffff }
+    fn loword(x: usize) -> usize {
+        x & 0xffff
+    }
+    fn hiword(x: usize) -> usize {
+        (x >> 16) & 0xffff
+    }
 
     // ── Message box ───────────────────────────────────────────────────────────
 
@@ -678,13 +946,21 @@ mod win {
     fn player_from_path(path: &str) -> Option<String> {
         let stem = std::path::Path::new(path).file_stem()?.to_str()?;
         let parts: Vec<&str> = stem.split('_').collect();
-        if parts.len() >= 3 { Some(parts[1].to_string()) } else { None }
+        if parts.len() >= 3 {
+            Some(parts[1].to_string())
+        } else {
+            None
+        }
     }
 
     fn server_from_path(path: &str) -> Option<String> {
         let stem = std::path::Path::new(path).file_stem()?.to_str()?;
         let parts: Vec<&str> = stem.split('_').collect();
-        if parts.len() >= 3 { Some(parts[2..].join("_")) } else { None }
+        if parts.len() >= 3 {
+            Some(parts[2..].join("_"))
+        } else {
+            None
+        }
     }
 
     // ── Background: URL test ──────────────────────────────────────────────────
@@ -707,7 +983,9 @@ mod win {
                     .ok()
                     .and_then(|v| v.get("requires_password")?.as_bool())
                     .unwrap_or(false);
-                UrlTestResult::Connected { requires_password: requires }
+                UrlTestResult::Connected {
+                    requires_password: requires,
+                }
             }
             Err(e) => UrlTestResult::Failed(e.to_string()),
         }
@@ -716,7 +994,11 @@ mod win {
     // ── Background: register ──────────────────────────────────────────────────
 
     enum RegisterResult {
-        Ok { stream_id: String, stream_token: String, view_token: String },
+        Ok {
+            stream_id: String,
+            stream_token: String,
+            view_token: String,
+        },
         Err(String),
     }
 
@@ -762,11 +1044,17 @@ mod win {
         }
 
         let field = |k: &str| -> Result<String, String> {
-            json[k].as_str().map(|s| s.to_string())
+            json[k]
+                .as_str()
+                .map(|s| s.to_string())
                 .ok_or_else(|| format!("missing {k} in server response"))
         };
 
-        match (field("stream_id"), field("stream_token"), field("view_token")) {
+        match (
+            field("stream_id"),
+            field("stream_token"),
+            field("view_token"),
+        ) {
             (Ok(id), Ok(tok), Ok(vtok)) => RegisterResult::Ok {
                 stream_id: id,
                 stream_token: tok,
@@ -781,8 +1069,8 @@ mod win {
 
 #[cfg(not(target_os = "windows"))]
 mod win {
-    use std::sync::Arc;
     use crate::tray::tray::AppHandle;
+    use std::sync::Arc;
     pub fn open_settings(_handle: Arc<AppHandle>) {}
 }
 
