@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
+use tracing::{info, warn};
 
 use crate::ServerState;
 
@@ -25,16 +27,24 @@ struct StreamDisplay {
 
 /// `GET /admin?atok=<admin_token>` — lists all streams grouped by player.
 pub async fn admin_panel_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(params): Query<AdminQuery>,
     State(state): State<ServerState>,
 ) -> Response {
+    let ip = crate::client_ip(&headers, peer);
     let token = match params.atok.as_deref() {
         Some(t) if !t.is_empty() => t,
-        _ => return StatusCode::UNAUTHORIZED.into_response(),
+        _ => {
+            warn!("Admin [{ip}]: rejected — missing token");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     };
     if !state.is_admin_token(token) {
+        warn!("Admin [{ip}]: rejected — bad token");
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    info!("Admin [{ip}]: access granted");
 
     // Release registry lock before acquiring any journal locks.
     let raw = state.registry.read().await.list_admin();
