@@ -142,7 +142,13 @@ fn main() {
                 .eq_server
                 .clone()
                 .unwrap_or_else(|| extract_eq_server(&args.log));
-            register_stream(&args.server, admin_token, &args.game, &eq_server, &player_name)
+            register_stream(
+                &args.server,
+                admin_token,
+                &args.game,
+                &eq_server,
+                &player_name,
+            )
         }
         None => {
             let id = args.stream_id.as_deref().unwrap_or_else(|| {
@@ -257,7 +263,13 @@ fn main() {
 
 /// Call `POST /stream` on the server and return `(stream_id, stream_token)`.
 /// Prints viewer URL and tokens to stdout so the user can bookmark the stream.
-fn register_stream(server: &str, admin_token: &str, game: &str, eq_server: &str, player: &str) -> (String, String) {
+fn register_stream(
+    server: &str,
+    admin_token: &str,
+    game: &str,
+    eq_server: &str,
+    player: &str,
+) -> (String, String) {
     let url = format!("{}/stream", server.trim_end_matches('/'));
     let client = reqwest::blocking::Client::new();
     let resp = client
