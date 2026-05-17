@@ -26,6 +26,13 @@ struct StreamDisplay {
     duration_secs: Option<u64>,
 }
 
+fn game_display_name(id: &str) -> &str {
+    match id {
+        "eql" => "Everquest Legends",
+        other => other,
+    }
+}
+
 /// `GET /admin?atok=<admin_token>` — lists all streams grouped by player.
 pub async fn admin_panel_handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -50,7 +57,8 @@ pub async fn admin_panel_handler(
     // Release registry lock before acquiring any journal locks.
     let raw = state.registry.read().await.list_admin();
 
-    let mut displays: Vec<(String, StreamDisplay)> = Vec::with_capacity(raw.len());
+    // (game_id, server, player_name, StreamDisplay)
+    let mut flat: Vec<(String, String, String, StreamDisplay)> = Vec::with_capacity(raw.len());
     for info in raw {
         let journal = info.journal.read().await;
         let batches = journal.len();
@@ -61,7 +69,9 @@ pub async fn admin_panel_handler(
             .map(|m| m.len())
             .unwrap_or(0);
         let duration_secs = first_ts.zip(last_ts).map(|(f, l)| l.saturating_sub(f));
-        displays.push((
+        flat.push((
+            info.game,
+            info.server,
             info.player_name,
             StreamDisplay {
                 stream_id: info.stream_id,
@@ -77,67 +87,122 @@ pub async fn admin_panel_handler(
         ));
     }
 
-    // Group by player name.
-    let mut by_player: HashMap<String, Vec<StreamDisplay>> = HashMap::new();
-    for (player, display) in displays {
-        by_player.entry(player).or_default().push(display);
+    fn max_ts_of(streams: &[StreamDisplay]) -> Option<u64> {
+        streams.iter().filter_map(|s| s.last_ts).max()
     }
 
-    // Sort each group's streams by last_ts descending (no data → bottom).
-    for streams in by_player.values_mut() {
-        streams.sort_by_key(|b| std::cmp::Reverse(b.last_ts));
+    // Three-level grouping: game_label → server → player → streams.
+    let mut by_game: HashMap<String, HashMap<String, HashMap<String, Vec<StreamDisplay>>>> =
+        HashMap::new();
+    for (game_id, server, player, display) in flat {
+        let game_label = game_display_name(&game_id).to_string();
+        by_game
+            .entry(game_label)
+            .or_default()
+            .entry(server)
+            .or_default()
+            .entry(player)
+            .or_default()
+            .push(display);
     }
 
-    // Sort player groups by their most recent last_ts descending.
-    let mut groups: Vec<(String, Vec<StreamDisplay>)> = by_player.into_iter().collect();
-    groups.sort_by(|a, b| {
-        let a_ts = a.1.iter().filter_map(|s| s.last_ts).max();
-        let b_ts = b.1.iter().filter_map(|s| s.last_ts).max();
-        b_ts.cmp(&a_ts)
+    // Convert to sorted Vec structure, each level sorted by max last_ts descending.
+    type PlayerVec = Vec<(String, Vec<StreamDisplay>)>;
+    type ServerVec = Vec<(String, PlayerVec)>;
+    type GameVec = Vec<(String, ServerVec)>;
+
+    let mut game_groups: GameVec = by_game
+        .into_iter()
+        .map(|(game_label, by_server)| {
+            let mut server_vec: ServerVec = by_server
+                .into_iter()
+                .map(|(server, by_player)| {
+                    let mut player_vec: PlayerVec = by_player
+                        .into_iter()
+                        .map(|(player, mut streams)| {
+                            streams.sort_by_key(|s| std::cmp::Reverse(s.last_ts));
+                            (player, streams)
+                        })
+                        .collect();
+                    player_vec.sort_by_key(|(_, streams)| std::cmp::Reverse(max_ts_of(streams)));
+                    (server, player_vec)
+                })
+                .collect();
+            server_vec.sort_by_key(|(_, pv)| {
+                std::cmp::Reverse(pv.iter().filter_map(|(_, v)| max_ts_of(v)).max())
+            });
+            (game_label, server_vec)
+        })
+        .collect();
+    game_groups.sort_by_key(|(_, sv)| {
+        std::cmp::Reverse(
+            sv.iter()
+                .flat_map(|(_, pv)| pv.iter().filter_map(|(_, v)| max_ts_of(v)))
+                .max(),
+        )
     });
 
-    let total_streams: usize = groups.iter().map(|(_, v)| v.len()).sum();
+    let total_streams: usize = game_groups
+        .iter()
+        .flat_map(|(_, sv)| sv.iter().flat_map(|(_, pv)| pv.iter().map(|(_, v)| v.len())))
+        .sum();
+    let total_players: usize = game_groups
+        .iter()
+        .flat_map(|(_, sv)| sv.iter().map(|(_, pv)| pv.len()))
+        .sum();
 
     let mut body = String::new();
-    for (player, streams) in &groups {
+    for (game_label, server_groups) in &game_groups {
         body.push_str(&format!(
-            "<tr class=\"player-hdr\"><td colspan=\"9\">{}</td></tr>\n",
-            html_escape(player)
+            "<tr class=\"game-hdr\"><td colspan=\"9\">{}</td></tr>\n",
+            html_escape(game_label)
         ));
-        for s in streams {
-            let (row_class, status) = if s.connected {
-                ("live-row", r#"<span class="live">&#9679; Live</span>"#)
-            } else {
-                ("", r#"<span class="offline">&#9679; Offline</span>"#)
-            };
-            let view_url = format!("/stream/{}?vtok={}", s.stream_id, s.view_token);
-            let public_badge = if s.public_stream {
-                r#"<span class="pub-yes">&#10003; Yes</span>"#
-            } else {
-                r#"<span class="pub-no">&#8212;</span>"#
-            };
+        for (server, player_groups) in server_groups {
             body.push_str(&format!(
-                "<tr class=\"{row_class}\">\
-                  <td class=\"mono\">{}</td>\
-                  <td class=\"ts\">{}</td>\
-                  <td class=\"ts\">{}</td>\
-                  <td class=\"num dur\">{}</td>\
-                  <td class=\"num\">{}</td>\
-                  <td class=\"num\">{}</td>\
-                  <td>{}</td>\
-                  <td>{}</td>\
-                  <td><a href=\"{}\" target=\"_blank\">View</a></td>\
-                </tr>\n",
-                s.stream_id,
-                format_ts(s.first_ts),
-                format_ts(s.last_ts),
-                format_duration(s.duration_secs),
-                s.batches,
-                format_size(s.file_bytes),
-                status,
-                public_badge,
-                html_escape(&view_url),
+                "<tr class=\"server-hdr\"><td colspan=\"9\">{}</td></tr>\n",
+                html_escape(server)
             ));
+            for (player, streams) in player_groups {
+                body.push_str(&format!(
+                    "<tr class=\"player-hdr\"><td colspan=\"9\">{}</td></tr>\n",
+                    html_escape(player)
+                ));
+                for s in streams {
+                    let (row_class, status) = if s.connected {
+                        ("live-row", r#"<span class="live">&#9679; Live</span>"#)
+                    } else {
+                        ("", r#"<span class="offline">&#9679; Offline</span>"#)
+                    };
+                    let view_url = format!("/stream/{}?vtok={}", s.stream_id, s.view_token);
+                    let public_badge = if s.public_stream {
+                        r#"<span class="pub-yes">&#10003; Yes</span>"#
+                    } else {
+                        r#"<span class="pub-no">&#8212;</span>"#
+                    };
+                    body.push_str(&format!(
+                        "<tr class=\"{row_class}\">\
+                          <td class=\"mono\">{}</td>\
+                          <td class=\"ts\">{}</td>\
+                          <td class=\"ts\">{}</td>\
+                          <td class=\"num dur\">{}</td>\
+                          <td class=\"num\">{}</td>\
+                          <td class=\"num\">{}</td>\
+                          <td>{}</td>\
+                          <td>{}</td>\
+                          <td><a href=\"{}\" target=\"_blank\">View</a></td>\
+                        </tr>\n",
+                        s.stream_id,
+                        format_ts(s.first_ts),
+                        format_ts(s.last_ts),
+                        format_duration(s.duration_secs),
+                        s.batches,
+                        format_size(s.file_bytes),
+                        status,
+                        public_badge,
+                        html_escape(&view_url),
+                    ));
+                }
+            }
         }
     }
 
@@ -162,7 +227,9 @@ table{{width:100%;border-collapse:collapse;background:#1e1e2e;border-radius:8px;
 th{{background:#313244;color:#a6adc8;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;padding:.6rem 1rem;text-align:left}}
 td{{padding:.6rem 1rem;border-top:1px solid #313244;vertical-align:middle;white-space:nowrap}}
 tr:hover td{{background:#262637}}
-tr.player-hdr td{{background:#2a2a3d;color:#cba6f7;font-weight:600;font-size:.85rem;letter-spacing:.04em;text-transform:uppercase;border-top:2px solid #45475a;padding:.5rem 1rem}}
+tr.game-hdr td{{background:#1a1a2e;color:#f38ba8;font-weight:700;font-size:.9rem;letter-spacing:.06em;text-transform:uppercase;border-top:3px solid #313244;padding:.55rem 1rem}}
+tr.server-hdr td{{background:#222233;color:#89dceb;font-weight:600;font-size:.82rem;letter-spacing:.05em;text-transform:uppercase;border-top:1px solid #313244;padding:.45rem 1rem .45rem 2rem}}
+tr.player-hdr td{{background:#2a2a3d;color:#cba6f7;font-weight:600;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase;border-top:1px solid #45475a;padding:.4rem 1rem .4rem 3rem}}
 .mono{{font-family:monospace;font-size:.85rem;color:#a6e3a1}}
 .ts{{font-size:.82rem;color:#a6adc8}}
 .num{{font-size:.85rem;text-align:right}}
@@ -180,7 +247,7 @@ a:hover{{text-decoration:underline}}
 </head>
 <body>
 <h1>froklog <span>admin</span></h1>
-<p class="count">{total_streams} stream(s) across {} player(s)</p>
+<p class="count">{total_streams} stream(s) across {total_players} player(s)</p>
 <table>
   <thead>
     <tr>
@@ -199,8 +266,7 @@ a:hover{{text-decoration:underline}}
 {body}  </tbody>
 </table>
 </body>
-</html>"#,
-        groups.len()
+</html>"#
     );
 
     Html(html).into_response()

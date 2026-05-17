@@ -602,21 +602,21 @@ async fn handle_client_msg(
 
 // ── Public player routes (/player/{server}/{name}) ────────────────────────────
 
-/// `GET /player/:server/:name` — serves the viewer page for a live public stream.
+/// `GET /player/:game/:server/:name` — serves the viewer page for a live public stream.
 /// Returns a simple offline page if the player has no stream or is not connected.
 pub async fn player_page_handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Path((server, name)): Path<(String, String)>,
+    Path((game, server, name)): Path<(String, String, String)>,
     State(state): State<ServerState>,
 ) -> Response {
     info!(
-        "Player page [{server}/{name}] from {}",
+        "Player page [{game}/{server}/{name}] from {}",
         crate::client_ip(&headers, peer)
     );
     let entry_data = {
         let reg = state.registry.read().await;
-        reg.find_id_by_player(&server, &name).and_then(|id| {
+        reg.find_id_by_player(&game, &server, &name).and_then(|id| {
             reg.get(&id).map(|e| {
                 (
                     e.stream_id.clone(),
@@ -635,7 +635,7 @@ pub async fn player_page_handler(
             player_offline_page(&player_name, &server_name)
         }
         Some((stream_id, player_name, _, true, true)) => {
-            let ws_path = format!("/player/{}/{}/ws", server, name);
+            let ws_path = format!("/player/{}/{}/{}/ws", game, server, name);
             let html = include_str!("../../../static/stream.html")
                 .replace("__STREAM_ID__", &stream_id)
                 .replace("__VIEW_TOKEN__", "")
@@ -646,10 +646,10 @@ pub async fn player_page_handler(
     }
 }
 
-/// `GET /player/:server/:name/ws` — viewer WebSocket for a live public stream.
+/// `GET /player/:game/:server/:name/ws` — viewer WebSocket for a live public stream.
 /// Rejected with 503 if the player is not currently streaming.
 pub async fn player_ws_handler(
-    Path((server, name)): Path<(String, String)>,
+    Path((game, server, name)): Path<(String, String, String)>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
@@ -657,7 +657,7 @@ pub async fn player_ws_handler(
 ) -> Response {
     let handles = {
         let reg = state.registry.read().await;
-        reg.find_id_by_player(&server, &name).and_then(|id| {
+        reg.find_id_by_player(&game, &server, &name).and_then(|id| {
             reg.get(&id).and_then(|e| {
                 if !e.public_stream {
                     return None;
@@ -683,7 +683,7 @@ pub async fn player_ws_handler(
     }
 
     info!(
-        "Player viewer [{stream_id}] ({server}/{name}): client connected from {}",
+        "Player viewer [{stream_id}] ({game}/{server}/{name}): client connected from {}",
         crate::client_ip(&headers, peer)
     );
     ws.on_upgrade(move |socket| {
