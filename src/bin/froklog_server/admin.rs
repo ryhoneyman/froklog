@@ -94,10 +94,7 @@ pub async fn admin_panel_handler(
         ));
         for s in streams {
             let (row_class, status) = if s.connected {
-                (
-                    "live-row",
-                    r#"<span class="live">&#9679; Live</span>"#,
-                )
+                ("live-row", r#"<span class="live">&#9679; Live</span>"#)
             } else {
                 ("", r#"<span class="offline">&#9679; Offline</span>"#)
             };

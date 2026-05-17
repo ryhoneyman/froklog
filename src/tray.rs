@@ -122,14 +122,8 @@ pub mod tray {
         }
 
         let tray_guard = tray.lock().unwrap();
-        let _ = tray_guard.set_icon(Some(make_icon(
-            &handle.config.lock().unwrap(),
-            now_on,
-        )));
-        let _ = tray_guard.set_tooltip(Some(make_tooltip(
-            &handle.config.lock().unwrap(),
-            now_on,
-        )));
+        let _ = tray_guard.set_icon(Some(make_icon(&handle.config.lock().unwrap(), now_on)));
+        let _ = tray_guard.set_tooltip(Some(make_tooltip(&handle.config.lock().unwrap(), now_on)));
 
         let label = if now_on {
             "Disable Logging"

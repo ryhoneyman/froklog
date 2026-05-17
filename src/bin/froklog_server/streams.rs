@@ -128,7 +128,12 @@ impl StreamRegistry {
                 entry.player_name.to_lowercase(),
             );
             // Only remove from name_to_id if this stream is still the active one.
-            if self.name_to_id.get(&key).map(|id| id == stream_id).unwrap_or(false) {
+            if self
+                .name_to_id
+                .get(&key)
+                .map(|id| id == stream_id)
+                .unwrap_or(false)
+            {
                 self.name_to_id.remove(&key);
             }
             Some(entry)
