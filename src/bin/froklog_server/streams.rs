@@ -18,6 +18,8 @@ pub struct StreamEntry {
     pub stream_token: String,
     /// Secret token viewers must supply in the query string to watch the stream.
     pub view_token: String,
+    /// Game identifier, e.g. "eql" for Everquest Legends.
+    pub game: String,
     /// EverQuest server name (e.g. "Bristlebane").
     pub server: String,
     /// EverQuest character name reported by the client on stream creation.
@@ -38,10 +40,12 @@ pub struct StreamEntry {
 }
 
 impl StreamEntry {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         stream_id: String,
         stream_token: String,
         view_token: String,
+        game: String,
         server: String,
         player_name: String,
         public_stream: bool,
@@ -54,6 +58,7 @@ impl StreamEntry {
             stream_id,
             stream_token,
             view_token,
+            game,
             server,
             player_name,
             public_stream,
@@ -81,9 +86,9 @@ pub struct StreamRegistry {
     by_id: HashMap<String, StreamEntry>,
     /// Reverse index: stream_token → stream_id (for O(1) ingest auth lookup).
     token_to_id: HashMap<String, String>,
-    /// Public name index: (server_lower, player_lower) → stream_id.
+    /// Public name index: (game_lower, server_lower, player_lower) → stream_id.
     /// Points to the most recently inserted stream for that identity.
-    name_to_id: HashMap<(String, String), String>,
+    name_to_id: HashMap<(String, String, String), String>,
     /// Root directory for on-disk journals.
     pub data_dir: PathBuf,
 }
@@ -101,6 +106,7 @@ impl StreamRegistry {
     pub fn insert(&mut self, entry: StreamEntry) {
         if !entry.server.is_empty() {
             let key = (
+                entry.game.to_lowercase(),
                 entry.server.to_lowercase(),
                 entry.player_name.to_lowercase(),
             );
@@ -112,8 +118,8 @@ impl StreamRegistry {
     }
 
     /// Look up the stream_id for a public player identity (case-insensitive).
-    pub fn find_id_by_player(&self, server: &str, name: &str) -> Option<String> {
-        let key = (server.to_lowercase(), name.to_lowercase());
+    pub fn find_id_by_player(&self, game: &str, server: &str, name: &str) -> Option<String> {
+        let key = (game.to_lowercase(), server.to_lowercase(), name.to_lowercase());
         self.name_to_id.get(&key).cloned()
     }
 
@@ -133,6 +139,7 @@ impl StreamRegistry {
         if let Some(entry) = self.by_id.remove(stream_id) {
             self.token_to_id.remove(&entry.stream_token);
             let key = (
+                entry.game.to_lowercase(),
                 entry.server.to_lowercase(),
                 entry.player_name.to_lowercase(),
             );
@@ -169,6 +176,7 @@ impl StreamRegistry {
             .values()
             .map(|e| AdminStreamInfo {
                 stream_id: e.stream_id.clone(),
+                game: e.game.clone(),
                 server: e.server.clone(),
                 player_name: e.player_name.clone(),
                 view_token: e.view_token.clone(),
@@ -184,6 +192,7 @@ impl StreamRegistry {
 /// Snapshot of a stream's fields needed by the admin panel.
 pub struct AdminStreamInfo {
     pub stream_id: String,
+    pub game: String,
     pub server: String,
     pub player_name: String,
     pub view_token: String,

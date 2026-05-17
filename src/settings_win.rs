@@ -75,8 +75,28 @@ mod win {
     // ── Static data ───────────────────────────────────────────────────────────
 
     const GAMES: &[&str] = &["Everquest Legends"];
+    const GAME_IDS: &[&str] = &["eql"];
     const SERVERS: &[&str] = &["Test"];
     const CLASS_NAME: &str = "FroklogSettings\0";
+
+    fn label_to_game_id(label: &str) -> &'static str {
+        GAMES
+            .iter()
+            .position(|&g| g == label)
+            .and_then(|i| GAME_IDS.get(i).copied())
+            .unwrap_or("eql")
+    }
+
+    fn migrate_game(s: String) -> String {
+        // Old configs stored the display label; normalise to the ID.
+        if GAMES.contains(&s.as_str()) {
+            label_to_game_id(&s).to_string()
+        } else if s.is_empty() {
+            GAME_IDS[0].to_string()
+        } else {
+            s
+        }
+    }
 
     // ── State ─────────────────────────────────────────────────────────────────
 
@@ -142,7 +162,7 @@ mod win {
                 .clone()
                 .or_else(|| cfg.server_name_from_log())
                 .unwrap_or_else(|| SERVERS[0].to_string()),
-            draft_game: cfg.game.clone().unwrap_or_else(|| GAMES[0].to_string()),
+            draft_game: migrate_game(cfg.game.clone().unwrap_or_default()),
             draft_password: cfg.stream_password.clone().unwrap_or_default(),
             draft_public: cfg.public_stream,
             is_registered: cfg.is_registered(),
@@ -381,6 +401,7 @@ mod win {
                     let url = get_text(state.edit_url);
                     let player = get_text(state.edit_player);
                     let server = combo_text(state.combo_server);
+                    let game = label_to_game_id(&combo_text(state.combo_game)).to_string();
                     if url.is_empty() || player.is_empty() {
                         msgbox(
                             hwnd,
@@ -398,7 +419,7 @@ mod win {
                             == BST_CHECKED;
                     let hwnd_usize = hwnd.0 as usize;
                     std::thread::spawn(move || unsafe {
-                        let result = do_register(&url, &player, &server, &password, is_public);
+                        let result = do_register(&url, &player, &server, &game, &password, is_public);
                         let ptr = Box::into_raw(Box::new(result));
                         let _ = PostMessageW(
                             HWND(hwnd_usize as *mut c_void),
@@ -437,7 +458,8 @@ mod win {
         let log_path = get_text(state.edit_logfile);
         let server_url = get_text(state.edit_url);
         let password = get_text(state.edit_password);
-        let game = combo_text(state.combo_game);
+        let game_label = combo_text(state.combo_game);
+        let game = label_to_game_id(&game_label).to_string();
         let server = combo_text(state.combo_server);
         let public = SendMessageW(state.chk_public, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize
             == BST_CHECKED;
@@ -527,9 +549,9 @@ mod win {
         }
         cb_sel(
             state.combo_game,
-            GAMES
+            GAME_IDS
                 .iter()
-                .position(|&g| g == state.draft_game)
+                .position(|&id| id == state.draft_game)
                 .unwrap_or(0),
         );
         y += row;
@@ -1056,11 +1078,12 @@ mod win {
         url: &str,
         player: &str,
         server: &str,
+        game: &str,
         password: &str,
         public_stream: bool,
     ) -> RegisterResult {
         let endpoint = format!("{}/stream", url.trim_end_matches('/'));
-        let body = serde_json::json!({ "player": player, "server": server, "public_stream": public_stream });
+        let body = serde_json::json!({ "player": player, "server": server, "game": game, "public_stream": public_stream });
 
         let client = match reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))

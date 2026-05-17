@@ -186,8 +186,8 @@ async fn main() {
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
         .route("/stream/{id}/stats", get(stream_stats_handler))
         // Public player routes (live only, no token)
-        .route("/player/{server}/{name}", get(viewer::player_page_handler))
-        .route("/player/{server}/{name}/ws", get(viewer::player_ws_handler))
+        .route("/player/{game}/{server}/{name}", get(viewer::player_page_handler))
+        .route("/player/{game}/{server}/{name}/ws", get(viewer::player_ws_handler))
         // Ingest route (Windows clients push here)
         .route("/ingest/{id}", get(ingest::ingest_ws_handler))
         // Health check
@@ -226,6 +226,8 @@ async fn main() {
 
 #[derive(Deserialize)]
 struct CreateStreamBody {
+    #[serde(default)]
+    game: String,
     server: String,
     player: String,
     #[serde(default)]
@@ -269,7 +271,7 @@ async fn create_stream_handler(
     let ingest_path = format!("/ingest/{stream_id}");
     let view_path = format!("/stream/{stream_id}?vtok={view_token}");
     let player_path = if !body.server.is_empty() {
-        Some(format!("/player/{}/{}", body.server, body.player))
+        Some(format!("/player/{}/{}/{}", body.game, body.server, body.player))
     } else {
         None
     };
@@ -278,6 +280,7 @@ async fn create_stream_handler(
         stream_id.clone(),
         stream_token.clone(),
         view_token.clone(),
+        body.game.clone(),
         body.server.clone(),
         body.player.clone(),
         body.public_stream,
@@ -298,6 +301,7 @@ async fn create_stream_handler(
         "stream_id": stream_id,
         "stream_token": stream_token,
         "view_token": view_token,
+        "game": body.game,
         "server": body.server,
         "player": body.player,
         "public_stream": body.public_stream,
@@ -372,6 +376,7 @@ async fn patch_stream_handler(
             entry.stream_id.clone(),
             entry.stream_token.clone(),
             entry.view_token.clone(),
+            entry.game.clone(),
             entry.server.clone(),
             entry.player_name.clone(),
             entry.public_stream,
@@ -383,14 +388,15 @@ async fn patch_stream_handler(
         "stream_id":    snapshot.0,
         "stream_token": snapshot.1,
         "view_token":   snapshot.2,
-        "server":       snapshot.3,
-        "player":       snapshot.4,
-        "public_stream": snapshot.5,
+        "game":         snapshot.3,
+        "server":       snapshot.4,
+        "player":       snapshot.5,
+        "public_stream": snapshot.6,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         warn!("Patch [{stream_id}]: failed to rewrite meta: {e}");
     }
-    info!("Patch [{stream_id}] [{ip}]: public_stream={}", snapshot.5);
+    info!("Patch [{stream_id}] [{ip}]: public_stream={}", snapshot.6);
     StatusCode::OK.into_response()
 }
 
@@ -474,11 +480,17 @@ struct StreamMeta {
     stream_id: String,
     stream_token: String,
     view_token: String,
+    #[serde(default = "default_eql")]
+    game: String,
     #[serde(default)]
     server: String,
     player: String,
     #[serde(default)]
     public_stream: bool,
+}
+
+fn default_eql() -> String {
+    "eql".to_string()
 }
 
 async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedRegistry) {
@@ -502,6 +514,7 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
             meta.stream_id.clone(),
             meta.stream_token,
             meta.view_token,
+            meta.game,
             meta.server,
             meta.player.clone(),
             meta.public_stream,
