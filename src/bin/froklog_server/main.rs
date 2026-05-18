@@ -15,7 +15,7 @@ use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -158,11 +158,14 @@ async fn main() {
     let cors = CorsLayer::new().allow_origin(Any);
 
     let app = Router::new()
+        // Favicon
+        .route("/favicon.ico", get(favicon_handler))
         // Admin panel
         .route("/admin", get(admin::admin_panel_handler))
         // Stream management
         .route("/stream", post(create_stream_handler))
         .route("/stream/{id}", patch(patch_stream_handler))
+        .route("/stream/{id}", delete(reset_stream_handler))
         // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
@@ -400,6 +403,59 @@ async fn patch_stream_handler(
     StatusCode::OK.into_response()
 }
 
+// ── Stream reset (admin only) ─────────────────────────────────────────────────
+
+/// `DELETE /stream/:id` — wipe journal and sessions; stream identity is preserved.
+/// Authenticated with the global admin token (Bearer).
+async fn reset_stream_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let token = match ingest::extract_bearer(&headers) {
+        Some(t) => t,
+        None => {
+            warn!("Reset [{stream_id}] [{ip}]: missing token");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+    if !state.is_admin_token(&token) {
+        warn!("Reset [{stream_id}] [{ip}]: bad token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    // Clone Arc handles before dropping the registry lock.
+    let handles = {
+        let reg = state.registry.read().await;
+        reg.get(&stream_id)
+            .map(|e| (Arc::clone(&e.journal), Arc::clone(&e.session_index)))
+    };
+    let (journal, session_index) = match handles {
+        Some(h) => h,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    {
+        let mut j = journal.write().await;
+        if let Err(e) = j.clear() {
+            warn!("Reset [{stream_id}] [{ip}]: journal clear failed: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    {
+        let mut si = session_index.write().await;
+        if let Err(e) = si.clear() {
+            warn!("Reset [{stream_id}] [{ip}]: session index clear failed: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    info!("Reset [{stream_id}] [{ip}]: journal and sessions cleared");
+    StatusCode::OK.into_response()
+}
+
 // ── HTTP stats snapshot (poll fallback for viewers) ───────────────────────────
 
 async fn stream_stats_handler(
@@ -432,6 +488,16 @@ async fn stream_stats_handler(
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+// ── Favicon ───────────────────────────────────────────────────────────────────
+
+async fn favicon_handler() -> impl IntoResponse {
+    static FAVICON: &[u8] = include_bytes!("../../../assets/froklog-green.png");
+    (
+        [(axum::http::header::CONTENT_TYPE, "image/png")],
+        FAVICON,
+    )
 }
 
 // ── Health check ──────────────────────────────────────────────────────────────

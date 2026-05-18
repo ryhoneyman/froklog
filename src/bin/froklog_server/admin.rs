@@ -14,6 +14,15 @@ pub struct AdminQuery {
     pub atok: Option<String>,
 }
 
+struct SessionDisplay {
+    num: u32,
+    label: String,
+    start_log_ts: u64,
+    end_log_ts: Option<u64>,
+    duration_secs: Option<u64>,
+    batch_count: usize,
+}
+
 struct StreamDisplay {
     stream_id: String,
     view_token: String,
@@ -25,6 +34,7 @@ struct StreamDisplay {
     batches: usize,
     file_bytes: u64,
     duration_secs: Option<u64>,
+    sessions: Vec<SessionDisplay>,
 }
 
 fn game_display_name(id: &str) -> &str {
@@ -70,6 +80,35 @@ pub async fn admin_panel_handler(
             .map(|m| m.len())
             .unwrap_or(0);
         let duration_secs = first_ts.zip(last_ts).map(|(f, l)| l.saturating_sub(f));
+        let si = info.session_index.read().await;
+        let sessions_raw = si.list().to_vec();
+        drop(si);
+        let sessions: Vec<SessionDisplay> = sessions_raw
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let batch_count = if i + 1 < sessions_raw.len() {
+                    sessions_raw[i + 1]
+                        .start_journal_idx
+                        .saturating_sub(s.start_journal_idx)
+                } else {
+                    batches.saturating_sub(s.start_journal_idx)
+                };
+                let end_log_ts = if i + 1 < sessions_raw.len() {
+                    Some(sessions_raw[i + 1].start_log_ts)
+                } else {
+                    last_ts
+                };
+                SessionDisplay {
+                    num: s.num,
+                    label: s.label.clone(),
+                    start_log_ts: s.start_log_ts,
+                    end_log_ts,
+                    duration_secs: end_log_ts.map(|e| e.saturating_sub(s.start_log_ts)),
+                    batch_count,
+                }
+            })
+            .collect();
         flat.push((
             info.game,
             info.server,
@@ -85,6 +124,7 @@ pub async fn admin_panel_handler(
                 batches,
                 file_bytes,
                 duration_secs,
+                sessions,
             },
         ));
     }
@@ -241,9 +281,22 @@ pub async fn admin_panel_handler(
                         status_kw,
                         public_kw,
                     );
+                    let stream_id_cell = if s.sessions.len() <= 1 {
+                        format!("<td class=\"mono\"><span class=\"chevron\" style=\"visibility:hidden\">&#9660;</span>{}</td>", s.stream_id)
+                    } else {
+                        format!(
+                            "<td class=\"mono has-sessions\" onclick=\"toggleSessions('{}')\">\
+<span class=\"chevron\" id=\"chev-{}\">&#9660;</span>{} ({})\
+</td>",
+                            s.stream_id,
+                            s.stream_id,
+                            s.stream_id,
+                            s.sessions.len()
+                        )
+                    };
                     body.push_str(&format!(
-                        "<tr class=\"stream-row {row_class}\" data-gid=\"{gi}\" data-sid=\"{si}\" data-pid=\"{pi}\" data-search=\"{}\">\
-                          <td class=\"mono\">{}</td>\
+                        "<tr class=\"stream-row {row_class}\" data-gid=\"{gi}\" data-sid=\"{si}\" data-pid=\"{pi}\" data-stid=\"{}\" data-search=\"{}\">\
+                          {}\
                           <td class=\"ts\">{}</td>\
                           <td class=\"ts\">{}</td>\
                           <td class=\"num dur\">{}</td>\
@@ -251,10 +304,11 @@ pub async fn admin_panel_handler(
                           <td class=\"num\">{}</td>\
                           <td>{}</td>\
                           <td>{}</td>\
-                          <td><a href=\"{}\" target=\"_blank\">View</a></td>\
+                          <td><a href=\"{}\" target=\"_blank\">View</a>&ensp;<button class=\"btn-reset\" onclick=\"resetStream('{}')\" title=\"Erase journal and sessions\">Reset</button></td>\
                         </tr>\n",
-                        html_escape(&search_data),
                         s.stream_id,
+                        html_escape(&search_data),
+                        stream_id_cell,
                         format_ts(s.first_ts),
                         format_ts(s.last_ts),
                         format_duration(s.duration_secs),
@@ -263,7 +317,29 @@ pub async fn admin_panel_handler(
                         status,
                         public_badge,
                         html_escape(&view_url),
+                        s.stream_id,
                     ));
+                    if s.sessions.len() > 1 {
+                        for session in &s.sessions {
+                            body.push_str(&format!(
+                                "<tr class=\"session-row\" data-stid=\"{}\" hidden>\
+                                  <td class=\"session-num\">\u{21B3}&ensp;#{} &mdash; {}</td>\
+                                  <td class=\"ts\">{}</td>\
+                                  <td class=\"ts\">{}</td>\
+                                  <td class=\"num dur\">{}</td>\
+                                  <td class=\"num\">{}</td>\
+                                  <td></td><td></td><td></td><td></td>\
+                                </tr>\n",
+                                s.stream_id,
+                                session.num,
+                                html_escape(&session.label),
+                                format_ts(Some(session.start_log_ts)),
+                                format_ts(session.end_log_ts),
+                                format_duration(session.duration_secs),
+                                session.batch_count,
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -276,6 +352,7 @@ pub async fn admin_panel_handler(
     // Script lives outside the format! template to avoid escaping every brace.
     let script = r#"<script>
 const collapsed = {};
+const expandedStreams = {};
 function updateVisibility() {
     const q = document.getElementById('search').value.toLowerCase().trim();
     const searching = q.length > 0;
@@ -286,6 +363,13 @@ function updateVisibility() {
         row.hidden = searching
             ? !row.dataset.search.includes(q)
             : !!(collapsed['g'+gid] || collapsed['s'+gid+'.'+sid] || collapsed['p'+gid+'.'+sid+'.'+pid]);
+    });
+
+    // Session rows follow their parent stream row's visibility and expand state.
+    document.querySelectorAll('tr.session-row').forEach(row => {
+        const stid = row.dataset.stid;
+        const parent = document.querySelector('tr.stream-row[data-stid="' + stid + '"]');
+        row.hidden = !parent || parent.hidden || !expandedStreams[stid];
     });
 
     document.querySelectorAll('tr.player-hdr').forEach(row => {
@@ -330,6 +414,25 @@ function updateVisibility() {
 function toggleGame(gi) { collapsed['g'+gi] = !collapsed['g'+gi]; updateVisibility(); }
 function toggleServer(gi,si) { const k='s'+gi+'.'+si; collapsed[k]=!collapsed[k]; updateVisibility(); }
 function togglePlayer(gi,si,pi) { const k='p'+gi+'.'+si+'.'+pi; collapsed[k]=!collapsed[k]; updateVisibility(); }
+function toggleSessions(id) {
+    expandedStreams[id] = !expandedStreams[id];
+    updateVisibility();
+    const chev = document.getElementById('chev-' + id);
+    if (chev) chev.textContent = expandedStreams[id] ? '▼' : '▶';
+}
+async function resetStream(id) {
+    if (!confirm('Reset stream ' + id + '?\n\nThis will permanently erase all journal data and sessions.\nThe stream identity and tokens will be preserved.')) return;
+    const atok = new URLSearchParams(window.location.search).get('atok');
+    const resp = await fetch('/stream/' + id, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + atok }
+    });
+    if (resp.ok) {
+        location.reload();
+    } else {
+        alert('Reset failed: HTTP ' + resp.status);
+    }
+}
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('search').addEventListener('input', updateVisibility);
 });
@@ -342,6 +445,7 @@ document.addEventListener('DOMContentLoaded', () => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>froklog — Admin</title>
+<link rel="icon" type="image/png" href="/favicon.ico">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:#0f1117;color:#cdd6f4;font-family:'Segoe UI',system-ui,sans-serif;padding:2rem}}
@@ -381,6 +485,16 @@ tr.recorded-row td:first-child{{border-left:3px solid #cba6f7}}
 tr.live-row:hover td{{background:#243024}}
 a{{color:#89b4fa;text-decoration:none}}
 a:hover{{text-decoration:underline}}
+.btn-reset{{background:none;border:none;color:#f38ba8;cursor:pointer;font-size:.85rem;padding:0;font-family:inherit}}
+.btn-reset:hover{{text-decoration:underline}}
+.btn-sessions{{background:none;border:none;color:#89b4fa;cursor:pointer;font-size:.78rem;padding:0 0 0 .3rem;font-family:inherit;opacity:.7}}
+.btn-sessions:hover{{opacity:1;text-decoration:underline}}
+tr.session-row td{{background:#15151f;font-size:.78rem;color:#6c7086;border-top:1px solid #1e1e2e}}
+tr.stream-row td:first-child{{padding-left:4rem}}
+tr.stream-row td.has-sessions{{cursor:pointer;user-select:none}}
+tr.session-row td:first-child{{border-left:2px solid #313244;padding-left:5rem;color:#a6adc8}}
+tr.session-row:hover td{{background:#1a1a2a}}
+.session-num{{font-style:italic}}
 </style>
 </head>
 <body>

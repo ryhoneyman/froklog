@@ -255,6 +255,18 @@ impl Journal {
     pub fn log_ts_at(&self, pos: usize) -> Option<u64> {
         self.index.get(pos).map(|e| e.log_ts.unwrap_or(e.wall_ts))
     }
+
+    /// Truncate the on-disk journal to zero bytes and clear the in-memory index.
+    pub fn clear(&mut self) -> std::io::Result<()> {
+        if self.path.exists() {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&self.path)?;
+        }
+        self.index.clear();
+        Ok(())
+    }
 }
 
 /// Thread-safe wrapper used from async code.

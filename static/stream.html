@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>froklog — stream viewer</title>
+<link rel="icon" type="image/png" href="/favicon.ico">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: monospace; background: #141414; color: #ddd; overflow: hidden; }
@@ -247,6 +248,31 @@
   }
   .graph-pane { flex: 1; position: relative; min-width: 0; }
   #cards-scroll { flex: 1; overflow: auto; padding: 6px; }
+
+  /* ── Scrollbars ── */
+  /* Firefox */
+  #mob-scroll, #sum-scroll, #cards-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #3a3a3a #141414;
+  }
+  /* Webkit (Chrome, Edge, Safari) */
+  #mob-scroll::-webkit-scrollbar,
+  #sum-scroll::-webkit-scrollbar,
+  #cards-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+  #mob-scroll::-webkit-scrollbar-track,
+  #sum-scroll::-webkit-scrollbar-track,
+  #cards-scroll::-webkit-scrollbar-track { background: #141414; }
+  #mob-scroll::-webkit-scrollbar-thumb,
+  #sum-scroll::-webkit-scrollbar-thumb,
+  #cards-scroll::-webkit-scrollbar-thumb {
+    background: #3a3a3a; border-radius: 3px;
+  }
+  #mob-scroll::-webkit-scrollbar-thumb:hover,
+  #sum-scroll::-webkit-scrollbar-thumb:hover,
+  #cards-scroll::-webkit-scrollbar-thumb:hover { background: #555; }
+
+  /* Ensure the last mob row is never clipped by the scrollbar */
+  #mob-rows { padding-bottom: 24px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
@@ -346,18 +372,43 @@ function applyBatchesUpTo(targetLogTs) {
   return count;
 }
 
-/// After session preloading completes, reset state to the session start and
-/// position the server and scrubber at SESSION_LOG_TS.  The cache must already
-/// contain only in-session batches before this is called.
+/// After session preloading completes, apply all cached in-session batches
+/// and position to the session end.  For the latest session on a live stream,
+/// applies cached state and immediately subscribes to the live feed.
 function snapSessionToStart() {
   sessionPreloading = false;
   resetState();
-  applyBatchesUpTo(SESSION_LOG_TS);
+
+  // Latest session on a live stream: show accumulated session state then go live.
+  if (SESSION_END_LOG_TS === 0 && tlCanGoLive) {
+    applyBatchesUpTo(Infinity);
+    S.casts = {};
+    pendingMobRestore = null;
+    document.getElementById('tl-speed').value = '1';
+    tlIsLive = true;
+    tlPaused = false;
+    updateLiveBtn();
+    updatePlayPauseBtn();
+    setScrubberToEnd();
+    sendWS({ t: 'live' });
+    updateTimelineBar();
+    scheduleRender();
+    return;
+  }
+
+  // Non-latest session or completed recording: show full accumulated state at end.
+  const maxTs = SESSION_END_LOG_TS > 0 ? SESSION_END_LOG_TS : Infinity;
+  applyBatchesUpTo(maxTs);
   S.casts = {};
-  scrubber.value = 0;
+  // After applying all batches, S.lastTs is the last event that produced
+  // meaningful combat state.  Cap logLastTs to this so the seek bar doesn't
+  // include non-combat tail time (e.g. hours of idle log after combat ends).
+  if (S.lastTs && logLastTs && S.lastTs < logLastTs) logLastTs = S.lastTs;
+  const endTs = logLastTs || SESSION_LOG_TS;
+  scrubber.value = 1000;
   updateScrubberTrack();
-  tlPosLabel.textContent = fmtTsPos(SESSION_LOG_TS);
-  sendWS({ t: 'seek_paused_log', to_log_ts: SESSION_LOG_TS });
+  tlPosLabel.textContent = fmtTsPos(endTs);
+  sendWS({ t: 'seek_paused_log', to_log_ts: endTs });
   updateTimelineBar();
   scheduleRender();
 }
@@ -489,13 +540,19 @@ function tlEntry(tl, mob, name) {
   return tl[mob][name];
 }
 function trackMob(mob, name, ts) {
+  // DoT ticks on a dead mob arrive as "X's corpse" — strip the suffix so the
+  // mob keeps its original name in the list.
+  if (name.endsWith("'s corpse")) name = name.slice(0, -("'s corpse".length));
+  // A known player should never be treated as a mob.
+  if (S.players[name]) return;
   if (!S.mobs[mob]) S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
   else { S.mobs[mob].lastTs = ts; S.mobs[mob].name = name; }
   if (!allMobsEver[mob]) {
-    allMobsEver[mob] = { name };
+    allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
     allMobOrderEver.push(mob);
   } else {
     allMobsEver[mob].name = name;
+    if (ts > allMobsEver[mob].lastTs) allMobsEver[mob].lastTs = ts;
   }
 }
 function bumpTs(ts) {
@@ -785,10 +842,15 @@ function buildRenderState() {
       const lastSeenAgo = Math.max(0, nowSecs - current.lastTs);
       const isDead  = current.dead || lastSeenAgo >= 15;
       const isActive = !isDead && lastSeenAgo < 5;
-      const fightSecs = getMobElapsed(current);
+      const ever = allMobsEver[id];
+      const fightSecs = (ever && ever.firstTs && ever.lastTs && ever.lastTs > ever.firstTs)
+        ? ever.lastTs - ever.firstTs : getMobElapsed(current);
       return { id:+id, name, last_seen_secs: fightSecs, is_dead:isDead, is_active:isActive, first_ts: current.firstTs, last_ts: current.lastTs };
     } else {
-      return { id:+id, name, last_seen_secs: 0, is_dead: false, is_active: false, first_ts: null, last_ts: null };
+      const ever = allMobsEver[id];
+      const fightSecs = (ever.firstTs && ever.lastTs && ever.lastTs > ever.firstTs)
+        ? ever.lastTs - ever.firstTs : 0;
+      return { id:+id, name, last_seen_secs: fightSecs, is_dead: true, is_active: false, first_ts: ever.firstTs || null, last_ts: ever.lastTs || null };
     }
   });
 
@@ -907,9 +969,11 @@ function selectMob(id) {
 
   if (wasSelected) {
     const mob = S.mobs[id];
-    if (mob && mob.firstTs) {
+    const ever = allMobsEver[id];
+    const firstTs = (mob && mob.firstTs) || (ever && ever.firstTs);
+    if (firstTs) {
       pendingMobRestore = id;
-      seekToLogTs(mob.firstTs);
+      seekToLogTs(firstTs);
     }
     return;
   }
@@ -928,6 +992,13 @@ function selectMob(id) {
       if (targetTs) {
         pendingMobRestore = id;
         seekToLogTs(targetTs);
+      }
+    } else {
+      // Mob not in current seek window — use persistent registry to seek to its first appearance.
+      const ever = allMobsEver[id];
+      if (ever && ever.firstTs) {
+        pendingMobRestore = id;
+        seekToLogTs(ever.firstTs);
       }
     }
   }
@@ -985,7 +1056,7 @@ function buildFightLabel(d) {
   let tsHtml = '';
 
   if (mobEntry) {
-    const enc = Math.round(mobEntry.last_seen_secs);
+    const enc = Math.round(d.fight_elapsed_secs || mobEntry.last_seen_secs);
     mainHtml += `<span class="fl-secs">${fmtTime(enc)}</span>`;
     mainHtml += '</span>';
 
@@ -1357,10 +1428,21 @@ function connectWS() {
       updateTimelineBar();
       return;
     }
+    if (msg.t === 'catch_up_done') {
+      // Server finished delivering all batches up to the preload target.
+      cacheComplete = true;
+      if (sessionPreloading) {
+        tlPaused = true;
+        tlIsLive = false;
+        updatePlayPauseBtn();
+        snapSessionToStart();
+      }
+      return;
+    }
     if (msg.t === 'stream_done') {
       cacheComplete = true;
       if (sessionPreloading) {
-        // Latest session preload finished — snap back to session start.
+        // Preload complete (completed recording) — show full session state at end.
         tlPaused = true;
         tlIsLive = false;
         updatePlayPauseBtn();
@@ -1377,7 +1459,7 @@ function connectWS() {
     if (msg.t === 'now_live') {
       cacheComplete = true;
       if (sessionPreloading) {
-        // Session preload caught up to live edge — snap back to session start.
+        // Preload caught up to live edge — show full session state and go live.
         tlPaused = true;
         tlIsLive = false;
         updateLiveBtn();
@@ -1790,17 +1872,20 @@ if (SESSIONS_PATH) {
       if (!sessions || sessions.length === 0) return;
       const urlSession = new URL(location.href).searchParams.get('session');
       const currentNum = urlSession ? parseInt(urlSession, 10) : null;
+      // No session param: redirect to the most recent session so the page
+      // always opens on the latest play session rather than the full journal.
+      if (!currentNum) {
+        onSessionChange(sessions[sessions.length - 1].num);
+        return;
+      }
       sessionSel.innerHTML = '';
-      const latestOpt = document.createElement('option');
-      latestOpt.value = '';
-      latestOpt.textContent = 'Latest';
-      if (!currentNum) latestOpt.selected = true;
-      sessionSel.appendChild(latestOpt);
       for (let i = sessions.length - 1; i >= 0; i--) {
         const s = sessions[i];
         const opt = document.createElement('option');
         opt.value = s.num;
-        opt.textContent = `#${s.num} — ${s.label}`;
+        opt.textContent = i === sessions.length - 1
+          ? `Latest — ${s.label}`
+          : `#${s.num} — ${s.label}`;
         if (currentNum === s.num) opt.selected = true;
         sessionSel.appendChild(opt);
       }

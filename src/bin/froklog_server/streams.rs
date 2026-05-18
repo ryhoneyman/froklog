@@ -207,6 +207,7 @@ impl StreamRegistry {
                 is_replay: e.is_replay,
                 journal: e.journal.clone(),
                 journal_path: self.data_dir.join(&e.stream_id).join("journal.jsonl"),
+                session_index: e.session_index.clone(),
             })
             .collect()
     }
@@ -226,6 +227,8 @@ pub struct AdminStreamInfo {
     pub journal: SharedJournal,
     /// Absolute path to the journal file (for file-size stat).
     pub journal_path: PathBuf,
+    /// Handle to the session index for per-session breakdown.
+    pub session_index: SharedSessionIndex,
 }
 
 /// Thread-safe handle to the registry shared across all Axum handlers.

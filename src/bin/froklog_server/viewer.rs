@@ -179,6 +179,9 @@ enum ServerMsg {
     /// Sent when catch-up completes on a stream whose client is no longer
     /// connected — signals that no further live data will arrive.
     StreamDone,
+    /// Sent when a CatchUpTo sequence finishes and the server transitions to
+    /// Paused, signalling that all requested batches have been delivered.
+    CatchUpDone,
 }
 
 /// Wrap a raw EventBatch JSON string in our WS envelope without re-parsing.
@@ -255,6 +258,11 @@ async fn handle_viewer_ws(
                 then_speed,
             } => {
                 if *pos >= target_pos {
+                    if then_speed.is_none() {
+                        if let Ok(txt) = serde_json::to_string(&ServerMsg::CatchUpDone) {
+                            let _ = socket.send(Message::Text(txt.into())).await;
+                        }
+                    }
                     mode = match then_speed {
                         Some(speed) => ViewerMode::Replay {
                             pos: target_pos,
@@ -284,6 +292,11 @@ async fn handle_viewer_ws(
                 }
                 if exhausted {
                     let cur = *pos;
+                    if then_speed.is_none() {
+                        if let Ok(txt) = serde_json::to_string(&ServerMsg::CatchUpDone) {
+                            let _ = socket.send(Message::Text(txt.into())).await;
+                        }
+                    }
                     mode = match then_speed {
                         Some(speed) => ViewerMode::Replay { pos: cur, speed },
                         None => ViewerMode::Paused { pos: cur },

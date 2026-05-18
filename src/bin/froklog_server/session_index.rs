@@ -103,6 +103,18 @@ impl SessionIndex {
         self.sessions.last().map(|s| s.start_journal_idx)
     }
 
+    /// Truncate the on-disk sessions file to zero bytes and clear the in-memory list.
+    pub fn clear(&mut self) -> std::io::Result<()> {
+        if self.path.exists() {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&self.path)?;
+        }
+        self.sessions.clear();
+        Ok(())
+    }
+
     /// Scan an existing journal index for combat-event time gaps and populate
     /// this session index retroactively.  No-op when sessions already exist.
     pub fn retroactive_scan(&mut self, journal_index: &[IndexEntry]) -> std::io::Result<()> {

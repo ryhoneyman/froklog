@@ -105,16 +105,26 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
 
     // WS reconnect trigger: cut a session if the journal has content and the
     // last batch arrived more than RECONNECT_GAP_SECS ago (player was gone).
+    // Skip when the last batch was historical replay data (wall_ts >> log_ts):
+    // in that case the gap is between replay uploads, not actual gameplay breaks.
     {
         let reg = state.registry.read().await;
         if let Some(entry) = reg.get(&stream_id) {
-            let (journal_len, last_ts) = {
+            let (journal_len, last_wall_ts, last_log_ts) = {
                 let j = entry.journal.read().await;
-                (j.len(), j.last_ts())
+                (j.len(), j.last_ts(), j.log_last_ts())
             };
             if journal_len > 0 {
-                let gap = last_ts.map(|t| now_secs().saturating_sub(t)).unwrap_or(0);
-                if gap >= RECONNECT_GAP_SECS {
+                let gap = last_wall_ts
+                    .map(|t| now_secs().saturating_sub(t))
+                    .unwrap_or(0);
+                // Skew between server-receipt time and EQ log time: near-zero for live
+                // content, hours/days for historical replays.
+                let skew = last_wall_ts
+                    .zip(last_log_ts)
+                    .map(|(w, l)| w.saturating_sub(l))
+                    .unwrap_or(0);
+                if gap >= RECONNECT_GAP_SECS && skew < RECONNECT_GAP_SECS {
                     let wall_ts = now_secs();
                     cut_session(entry, journal_len, wall_ts, wall_ts, &stream_id).await;
                 }

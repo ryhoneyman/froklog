@@ -1199,6 +1199,9 @@ fn entity_stats<'a>(state: &'a mut CombatState, name: &str) -> &'a mut EntityCom
 }
 
 fn track_mob_candidate(candidates: &mut HashMap<String, HashSet<String>>, tgt: String, src: &str) {
+    if tgt.ends_with("'s corpse") {
+        return;
+    }
     candidates.entry(tgt).or_default().insert(src.to_owned());
 }
 
