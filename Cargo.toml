@@ -27,17 +27,7 @@ path = "src/bin/froklog_debug/main.rs"
 default = []
 # Windows systray client (no visible window; requires Windows cross-compile)
 tray = ["dep:tray-icon", "dep:winit", "dep:image"]
-# Legacy egui desktop GUI (kept for reference, not built by default)
-gui = ["dep:eframe", "dep:egui"]
-
 [dependencies]
-# Legacy GUI — only built when feature = "gui" is active
-eframe = { version = "0.31", optional = true, default-features = false, features = [
-    "default_fonts",
-    "glow",
-] }
-egui = { version = "0.31", optional = true }
-
 # Systray — only makes sense on Windows; use `--features tray` when cross-compiling
 tray-icon = { version = "0.19", optional = true }
 winit     = { version = "0.30", optional = true, default-features = false }

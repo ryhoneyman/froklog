@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use futures_util::SinkExt;
@@ -15,16 +15,18 @@ use crate::event::{CombatEvent, EventBatch};
 /// `CombatEvent`s accumulated over 1-second windows.
 /// Automatically reconnects on disconnect.
 ///
-/// `push_url`     — WebSocket URL, e.g. `ws://server:8766/ingest/<stream_id>`
-/// `stream_token` — Bearer token issued by `POST /stream` on the server.
-/// `events_sent`  — Incremented by the number of events in each batch sent.
-/// `connected`    — Set true when WS is up, false while disconnected/retrying.
+/// `push_url`          — WebSocket URL, e.g. `ws://server:8766/ingest/<stream_id>`
+/// `stream_token`      — Bearer token issued by `POST /stream` on the server.
+/// `events_sent`       — Incremented by the number of events in each batch sent.
+/// `connected`         — Set true when WS is up, false while disconnected/retrying.
+/// `last_connect_error`— Last connect error string; cleared on successful connect.
 pub async fn push_to_server(
     push_url: String,
     stream_token: String,
     mut event_rx: UnboundedReceiver<CombatEvent>,
     events_sent: Arc<AtomicU64>,
     connected: Arc<AtomicBool>,
+    last_connect_error: Arc<RwLock<Option<String>>>,
 ) {
     let mut seq: u32 = 0;
 
@@ -42,11 +44,17 @@ pub async fn push_to_server(
             Ok((ws, _)) => {
                 info!("Pusher: connected");
                 connected.store(true, Ordering::Relaxed);
+                if let Ok(mut guard) = last_connect_error.write() {
+                    *guard = None;
+                }
                 ws
             }
             Err(e) => {
                 error!("Pusher: connect failed: {e}");
                 connected.store(false, Ordering::Relaxed);
+                if let Ok(mut guard) = last_connect_error.write() {
+                    *guard = Some(e.to_string());
+                }
                 // Drain accumulated events to avoid unbounded memory growth during
                 // prolonged reconnect loops.
                 while event_rx.try_recv().is_ok() {}

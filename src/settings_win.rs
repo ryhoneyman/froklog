@@ -288,6 +288,17 @@ mod win {
                         cfg.stream_id = Some(stream_id);
                         cfg.stream_token = Some(stream_token);
                         cfg.view_token = Some(view_token);
+                        // Also commit server_url and log_path so is_ready() becomes
+                        // true immediately — without this the engine never starts if
+                        // the user hasn't clicked Save yet.
+                        let url = unsafe { get_text(state.edit_url) };
+                        if !url.is_empty() {
+                            cfg.server_url = Some(url);
+                        }
+                        let log = unsafe { get_text(state.edit_logfile) };
+                        if !log.is_empty() {
+                            cfg.log_path = Some(log);
+                        }
                         cfg.save();
                         state.handle.restart.store(true, Ordering::Relaxed);
                     }

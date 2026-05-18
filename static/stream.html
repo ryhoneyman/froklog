@@ -116,6 +116,12 @@
   }
   .mob-row:hover { background: #1e1e1e; }
   .mob-row.selected { background: #252535; }
+  .mob-row.mob-active  { background: rgba(60,220,60,0.07);  box-shadow: inset 2px 0 0 rgba(60,220,60,0.45); }
+  .mob-row.mob-alive   { background: rgba(200,170,30,0.05); box-shadow: inset 2px 0 0 rgba(200,170,30,0.4); }
+  .mob-row.mob-active:hover { background: rgba(60,220,60,0.13); }
+  .mob-row.mob-alive:hover  { background: rgba(200,170,30,0.10); }
+  .mob-row.mob-active.selected { background: #1c2d1c; box-shadow: inset 2px 0 0 rgba(60,220,60,0.7); }
+  .mob-row.mob-alive.selected  { background: #2c2816; box-shadow: inset 2px 0 0 rgba(200,170,30,0.6); }
   .mob-dot { font-size: 9px; margin-right: 3px; flex-shrink: 0; line-height: 1; }
   .mob-name { flex: 1; font-size: 11px; overflow: hidden; white-space: nowrap; }
   .mob-time { font-size: 10px; color: #666; margin-left: 4px; flex-shrink: 0; }
@@ -384,6 +390,7 @@ function snapSessionToStart() {
     applyBatchesUpTo(Infinity);
     S.casts = {};
     pendingMobRestore = null;
+    liveAutoSelect = true;
     document.getElementById('tl-speed').value = '1';
     tlIsLive = true;
     tlPaused = false;
@@ -957,6 +964,7 @@ function buildRenderState() {
 // ── UI state ──────────────────────────────────────────────────────────────────
 let selectedMob      = null;
 let pendingMobRestore = null;  // mob id to re-select after a seek reset, if still in window
+let liveAutoSelect   = true;   // auto-select most recent active mob in live mode; disabled by manual pick, re-enabled by Go Live
 let detailMode   = 'damage';
 let lastData     = null;
 let graphVisible    = false;
@@ -964,6 +972,7 @@ let chartInst       = null;
 let chartInstRate   = null;
 
 function selectMob(id) {
+  if (tlIsLive) liveAutoSelect = false;
   pendingMobRestore = null;
   const wasSelected = selectedMob === id;
 
@@ -1004,6 +1013,7 @@ function selectMob(id) {
   }
 }
 function deselectMob() {
+  if (tlIsLive) liveAutoSelect = false;
   pendingMobRestore = null;
   if (selectedMob !== null) { selectedMob = null; if (lastData) rerender(); }
 }
@@ -1025,6 +1035,11 @@ function scheduleRender() {
         selectedMob = pendingMobRestore;
         pendingMobRestore = null;
       }
+    }
+    if (tlIsLive && liveAutoSelect) {
+      const liveMob = (lastData.mob_list || []).find(m => !m.is_dead);
+      const targetId = liveMob ? liveMob.id : null;
+      if (targetId !== selectedMob) selectedMob = targetId;
     }
     updateLogClock(lastData);
     rerender();
@@ -1091,9 +1106,10 @@ function renderMobList(d) {
     const outside = !m.first_ts && m.last_seen_secs === 0 && !m.is_dead && !m.is_active;
     const dotColor  = outside ? '#333333' : m.is_dead ? '#464646' : m.is_active ? '#3cdc3c' : '#c8aa1e';
     const nameColor = outside ? '#444444' : m.is_dead ? '#5a5a5a' : m.is_active ? '#ffffff' : '#a0a0a0';
+    const statusCls = outside || m.is_dead ? '' : m.is_active ? ' mob-active' : ' mob-alive';
     const sel = selectedMob === m.id ? ' selected' : '';
     const timeStr = m.last_seen_secs > 0 ? fmtTime(m.last_seen_secs) : '';
-    return `<div class="mob-row${sel}" data-mob-id="${m.id}" onclick="event.stopPropagation();selectMob(+this.dataset.mobId)">
+    return `<div class="mob-row${statusCls}${sel}" data-mob-id="${m.id}" onclick="event.stopPropagation();selectMob(+this.dataset.mobId)">
       <span class="mob-dot" style="color:${dotColor}">●</span>
       <span class="mob-name" style="color:${nameColor}">${truncate(m.name, 17)}</span>
       <span class="mob-time">${timeStr}</span>
@@ -1469,6 +1485,7 @@ function connectWS() {
       }
       tlIsLive = true;
       tlPaused = false;
+      liveAutoSelect = true;
       document.getElementById('tl-speed').value = '1';
       updateLiveBtn();
       updatePlayPauseBtn();
@@ -1714,6 +1731,7 @@ function commitSeek() {
 function goLive() {
   tlIsLive = true;
   tlPaused = false;
+  liveAutoSelect = true;
   pendingMobRestore = null;
   document.getElementById('tl-speed').value = '1';
   updateLiveBtn();

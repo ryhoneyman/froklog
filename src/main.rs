@@ -55,6 +55,7 @@ fn main() {
             Arc::clone(&quit),
             Arc::new(AtomicU64::new(0)),
             Arc::new(AtomicBool::new(false)),
+            Arc::new(std::sync::RwLock::new(None)),
         );
         loop {
             thread::sleep(Duration::from_secs(3600));
@@ -91,6 +92,7 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
                         Arc::clone(&handle.quit),
                         Arc::clone(&handle.events_sent),
                         Arc::clone(&handle.connected),
+                        Arc::clone(&handle.last_connect_error),
                     );
                     info!("Engine stopped");
                 } else {
@@ -115,6 +117,7 @@ fn run_engine_once(
     quit: Arc<AtomicBool>,
     events_sent: Arc<AtomicU64>,
     connected: Arc<AtomicBool>,
+    last_connect_error: Arc<std::sync::RwLock<Option<String>>>,
 ) {
     let log_path = match config.log_path.as_ref() {
         Some(p) => p.clone(),
@@ -205,6 +208,7 @@ fn run_engine_once(
                     event_rx,
                     events_sent,
                     connected,
+                    last_connect_error,
                 ));
             })
             .expect("spawn pusher");

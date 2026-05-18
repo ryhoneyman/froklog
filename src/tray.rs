@@ -6,6 +6,7 @@
 #[cfg(feature = "tray")]
 pub mod tray {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::RwLock;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -43,6 +44,8 @@ pub mod tray {
         pub events_sent: Arc<AtomicU64>,
         /// True while the pusher has an active WebSocket connection.
         pub connected: Arc<AtomicBool>,
+        /// Last pusher connection error, cleared on successful connect.
+        pub last_connect_error: Arc<RwLock<Option<String>>>,
     }
 
     impl AppHandle {
@@ -56,6 +59,7 @@ pub mod tray {
                 settings_open: Arc::new(AtomicBool::new(false)),
                 events_sent: Arc::new(AtomicU64::new(0)),
                 connected: Arc::new(AtomicBool::new(false)),
+                last_connect_error: Arc::new(RwLock::new(None)),
             }
         }
     }
@@ -123,6 +127,11 @@ pub mod tray {
                     let logging_on = handle_clone.logging_enabled.load(Ordering::Relaxed);
                     let is_connected = handle_clone.connected.load(Ordering::Relaxed);
                     let cfg = handle_clone.config.lock().unwrap();
+                    let last_err = handle_clone
+                        .last_connect_error
+                        .read()
+                        .ok()
+                        .and_then(|g| g.clone());
 
                     let _ = tray.lock().unwrap().set_tooltip(Some(make_tooltip_full(
                         &cfg,
@@ -130,7 +139,14 @@ pub mod tray {
                         is_connected,
                         rate,
                     )));
-                    let _ = status_item.set_text(make_status_text(logging_on, is_connected, rate));
+                    let _ = status_item.set_text(make_status_text(
+                        logging_on,
+                        is_connected,
+                        &cfg,
+                        last_err.as_deref(),
+                        cur,
+                        rate,
+                    ));
                 }
 
                 let _ = event;
@@ -179,7 +195,7 @@ pub mod tray {
 
         let status_item = MenuItem::with_id(
             ID_STATUS,
-            make_status_text(logging_on, false, 0),
+            make_status_text(logging_on, false, cfg, None, 0, 0),
             false,
             None,
         );
@@ -211,18 +227,35 @@ pub mod tray {
         (tray, toggle_item, status_item)
     }
 
-    fn make_status_text(logging_on: bool, connected: bool, rate: u32) -> String {
+    fn make_status_text(
+        logging_on: bool,
+        connected: bool,
+        cfg: &crate::config::Config,
+        last_err: Option<&str>,
+        count: u64,
+        rate: u32,
+    ) -> String {
         if !logging_on {
             return "Logging disabled".into();
         }
+        if !cfg.is_ready() {
+            if !cfg.is_registered() {
+                return "Not registered".into();
+            }
+            return "Not configured (missing log file or server URL)".into();
+        }
         if !connected {
-            return "Reconnecting…".into();
+            return match last_err {
+                Some(e) => format!("Reconnecting… ({e})"),
+                None => "Reconnecting…".into(),
+            };
         }
-        if rate == 0 {
-            "Connected — idle".into()
+        let rate_str = if rate == 0 {
+            "idle".into()
         } else {
-            format!("Connected — {rate} ev/min")
-        }
+            format!("{rate} ev/min")
+        };
+        format!("Connected {count} ({rate_str})")
     }
 
     fn make_tooltip(cfg: &Config, logging_on: bool) -> String {
