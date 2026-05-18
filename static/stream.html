@@ -746,11 +746,18 @@ function applyEvent(ev) {
 
 function applyBatch(batch) {
   for (const ev of batch.events) applyEvent(ev);
+  lastBatchWallTimeSecs = Date.now() / 1000;
 }
 
 // ── Build the render-ready state snapshot from S ──────────────────────────────
 function buildRenderState() {
-  const nowSecs = Date.now() / 1000;
+  // EQ log timestamps are stored as "fake UTC" (local time treated as UTC),
+  // so we cannot compare them directly to Date.now().  Instead, use S.lastTs
+  // as the log-time origin and advance it by however much real wall-clock time
+  // has elapsed since the last batch arrived.  This keeps everything in the
+  // same fake-UTC coordinate system and correctly ages out mobs after combat stops.
+  const wallElapsed = lastBatchWallTimeSecs > 0 ? Math.max(0, Date.now() / 1000 - lastBatchWallTimeSecs) : 0;
+  const nowSecs = (S.lastTs || 0) + wallElapsed;
 
   // Use log-based timestamps for all duration calculations so that replayed
   // historical logs and live logs both produce correct elapsed times.
@@ -960,6 +967,10 @@ function buildRenderState() {
     casting,
   };
 }
+
+// Wall-clock time (seconds) when the most recent batch was applied.
+// Used to advance "nowSecs" between batches without depending on client timezone.
+let lastBatchWallTimeSecs = 0;
 
 // ── UI state ──────────────────────────────────────────────────────────────────
 let selectedMob      = null;
