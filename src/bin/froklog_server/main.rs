@@ -494,10 +494,7 @@ async fn stream_stats_handler(
 
 async fn favicon_handler() -> impl IntoResponse {
     static FAVICON: &[u8] = include_bytes!("../../../assets/froklog-green.png");
-    (
-        [(axum::http::header::CONTENT_TYPE, "image/png")],
-        FAVICON,
-    )
+    ([(axum::http::header::CONTENT_TYPE, "image/png")], FAVICON)
 }
 
 // ── Health check ──────────────────────────────────────────────────────────────
