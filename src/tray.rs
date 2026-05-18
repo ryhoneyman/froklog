@@ -89,8 +89,18 @@ pub mod tray {
                 elwt.set_control_flow(ControlFlow::WaitUntil(next_tick));
 
                 // ── Left-click: toggle logging ────────────────────────────────
+                // Match only Left+Up to avoid double-firing: every click produces
+                // both a Down and an Up event, and right-click (which opens the
+                // context menu) must not also toggle logging.
                 if let Ok(evt) = TrayIconEvent::receiver().try_recv() {
-                    if matches!(evt, tray_icon::TrayIconEvent::Click { .. }) {
+                    if matches!(
+                        evt,
+                        tray_icon::TrayIconEvent::Click {
+                            button: tray_icon::MouseButton::Left,
+                            button_state: tray_icon::MouseButtonState::Up,
+                            ..
+                        }
+                    ) {
                         toggle_logging(&handle_clone, &tray, &toggle_item);
                     }
                 }
