@@ -16,6 +16,14 @@ pub const MODS_SLAY_UNDEAD: u16 = 0x0100;
 pub const MODS_DOUBLEBOW: u16 = 0x0200;
 pub const MODS_FLURRY: u16 = 0x0400;
 
+fn is_zero(v: &u16) -> bool {
+    *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
+}
+
 /// A single fully-parsed, attributed combat event emitted by the client.
 ///
 /// `ts`   — unix timestamp in seconds (u32, safe until 2106).
@@ -33,8 +41,9 @@ pub enum CombatEvent {
         tgt: String,
         dmg: u32,
         typ: String,
+        #[serde(default, skip_serializing_if = "is_false")]
         tank: bool,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_zero")]
         mods: u16,
     },
     /// Attributed direct-damage spell.  Same `tank` semantics as Melee.
@@ -45,8 +54,9 @@ pub enum CombatEvent {
         tgt: String,
         dmg: u32,
         sp: String,
+        #[serde(default, skip_serializing_if = "is_false")]
         tank: bool,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_zero")]
         mods: u16,
     },
     /// DoT tick — always player (`src`) → mob (`tgt`).
@@ -57,7 +67,7 @@ pub enum CombatEvent {
         tgt: String,
         dmg: u32,
         sp: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_zero")]
         mods: u16,
     },
     /// Riposte damage — always player (`src`) riposting mob (`tgt`).
@@ -67,7 +77,7 @@ pub enum CombatEvent {
         src: String,
         tgt: String,
         dmg: u32,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_zero")]
         mods: u16,
     },
     /// Damage shield proc — always player's (`src`) DS hitting mob (`tgt`).
@@ -86,7 +96,7 @@ pub enum CombatEvent {
         tgt: String,
         amt: u32,
         sp: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_zero")]
         mods: u16,
     },
     /// Mob (`tgt`) confirmed killed by `killer` (empty string if unknown/self).
@@ -128,6 +138,8 @@ pub enum CombatEvent {
         ts: u32,
         name: String,
         classes: Vec<String>,
+        #[serde(default)]
+        level: u8,
     },
     /// Player logged in — emitted when "Welcome to EverQuest Legends!" is seen in the log.
     /// Used by the server to cut a new session boundary in the archive.
@@ -344,6 +356,7 @@ mod ts_tests {
             ts: 1200,
             name: "Rysk".into(),
             classes: vec!["WAR".into()],
+            level: 65,
         };
         assert_eq!(ev.ts(), 1200);
     }

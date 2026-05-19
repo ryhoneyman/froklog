@@ -83,6 +83,9 @@ pub struct CombatState {
     /// Skipped from direct serialization; class info is embedded per-entity in to_api_json().
     #[serde(skip)]
     pub player_classes: HashMap<String, Vec<String>>,
+    /// Level for known players, populated from /who log lines.
+    #[serde(skip)]
+    pub player_levels: HashMap<String, u8>,
 
     #[serde(skip)]
     pub fight_start: Option<Instant>,
@@ -215,10 +218,12 @@ impl CombatState {
                 };
                 let classes = self.player_classes.get(*name).cloned().unwrap_or_default();
                 let class = classes.first().cloned().unwrap_or_default();
+                let level = self.player_levels.get(*name).copied().unwrap_or(0);
                 json!({
                     "name": name,
                     "class": class,
                     "classes": classes,
+                    "level": level,
                     "total_damage": stats.total_damage,
                     "dps": (stats.total_damage as f64 / elapsed).round() as u64,
                     "crit_count": stats.crit_count,
@@ -249,10 +254,12 @@ impl CombatState {
                 };
                 let classes = self.player_classes.get(*name).cloned().unwrap_or_default();
                 let class = classes.first().cloned().unwrap_or_default();
+                let level = self.player_levels.get(*name).copied().unwrap_or(0);
                 json!({
                     "name": name,
                     "class": class,
                     "classes": classes,
+                    "level": level,
                     "total_heals": stats.total_heals,
                     "hps": (stats.total_heals as f64 / elapsed).round() as u64,
                     "heals_by_spell": heals_by_spell,
@@ -280,10 +287,12 @@ impl CombatState {
                 };
                 let classes = self.player_classes.get(*name).cloned().unwrap_or_default();
                 let class = classes.first().cloned().unwrap_or_default();
+                let level = self.player_levels.get(*name).copied().unwrap_or(0);
                 json!({
                     "name": name,
                     "class": class,
                     "classes": classes,
+                    "level": level,
                     "total_healed_received": stats.total_healed_received,
                     "hps": (stats.total_healed_received as f64 / elapsed).round() as u64,
                     "healed_received_by_spell": healed_received_by_spell,
@@ -362,10 +371,12 @@ impl CombatState {
                             .cloned()
                             .unwrap_or_default();
                         let class = classes.first().cloned().unwrap_or_default();
+                        let level = self.player_levels.get(*player).copied().unwrap_or(0);
                         json!({
                             "name": *player,
                             "class": class,
                             "classes": classes,
+                            "level": level,
                             "total_damage": stats.total_damage,
                             "dps": (stats.total_damage as f64 / elapsed).round() as u64,
                             "damage_by_type": by_type,
@@ -412,10 +423,12 @@ impl CombatState {
                             .cloned()
                             .unwrap_or_default();
                         let class = classes.first().cloned().unwrap_or_default();
+                        let level = self.player_levels.get(*player).copied().unwrap_or(0);
                         json!({
                             "name": *player,
                             "class": class,
                             "classes": classes,
+                            "level": level,
                             "total_damage": stats.total_damage,
                             "dps": (stats.total_damage as f64 / elapsed).round() as u64,
                             "damage_by_type": by_type,
@@ -455,10 +468,12 @@ impl CombatState {
                             .cloned()
                             .unwrap_or_default();
                         let class = classes.first().cloned().unwrap_or_default();
+                        let level = self.player_levels.get(*healer).copied().unwrap_or(0);
                         json!({
                             "name": *healer,
                             "class": class,
                             "classes": classes,
+                            "level": level,
                             "total_heals": stats.total_heals,
                             "hps": (stats.total_heals as f64 / elapsed).round() as u64,
                             "heals_by_spell": heals_by_spell,
@@ -488,10 +503,12 @@ impl CombatState {
                     };
                     let classes = self.player_classes.get(*healee).cloned().unwrap_or_default();
                     let class  = classes.first().cloned().unwrap_or_default();
+                    let level = self.player_levels.get(*healee).copied().unwrap_or(0);
                     json!({
                         "name": *healee,
                         "class": class,
                         "classes": classes,
+                        "level": level,
                         "total_healed_received": stats.total_healed_received,
                         "hps": (stats.total_healed_received as f64 / elapsed).round() as u64,
                         "healed_received_by_spell": healed_received_by_spell,
@@ -546,10 +563,12 @@ impl CombatState {
                         .cloned()
                         .unwrap_or_default();
                     let class = classes.first().cloned().unwrap_or_default();
+                    let level = self.player_levels.get(name.as_str()).copied().unwrap_or(0);
                     json!({
                         "name": name,
                         "class": class,
                         "classes": classes,
+                        "level": level,
                         "total_damage": stats.total_damage,
                         "dps": (stats.total_damage as f64 / elapsed).round() as u64,
                         "damage_by_type": by_type,

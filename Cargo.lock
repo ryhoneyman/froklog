@@ -709,6 +709,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossbeam-channel",
+ "flate2",
  "futures-util",
  "image",
  "once_cell",

@@ -11,23 +11,30 @@
 
   /* ── Header ── */
   #header {
-    background: #1e1e1e; padding: 4px 10px; height: 42px;
+    background: #1e1e1e; padding: 4px 10px; height: 45px;
     display: flex; align-items: center; gap: 12px;
     border-bottom: 1px solid #333;
   }
   #fight-label {
     flex: 1; display: flex; flex-direction: row; align-items: center;
-    padding-left: 8px; border-left: 3px solid #444; gap: 18px; overflow: hidden;
+    padding-left: 8px; border-left: 3px solid #444; gap: 12px; overflow: hidden;
   }
+  .fl-name-wrap { overflow: hidden; flex-shrink: 1; min-width: 0; }
   .fl-name    { font-size: 28px; font-weight: bold; color: #f0a030; line-height: 1;
-                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
-  .fl-stats   { display: flex; flex-direction: column; justify-content: center;
-                gap: 2px; flex-shrink: 0; }
-  .fl-primary { display: flex; align-items: baseline; gap: 8px; }
-  .fl-totdmg  { font-size: 13px; color: #5cc8e8; font-weight: bold; }
-  .fl-sep     { color: #444; font-size: 11px; }
-  .fl-secs    { font-size: 13px; color: #ddd; }
-  .fl-ts      { font-size: 10px; color: #555; }
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .fl-stats   { display: flex; flex-direction: row; align-items: center;
+                gap: 7px; flex-shrink: 0; }
+  .fl-stat-block { display: flex; flex-direction: column; align-items: center;
+                   padding: 2px 10px; border-radius: 4px; border: 1px solid #2e2e2e;
+                   background: rgba(255,255,255,0.03); }
+  .fl-stat-dmg  { background: rgba(92,200,232,0.07);  border-color: rgba(92,200,232,0.22); }
+  .fl-stat-dur  { background: rgba(180,180,255,0.05); border-color: rgba(160,160,220,0.18); }
+  .fl-stat-seen { background: rgba(180,140,55,0.07);  border-color: rgba(180,140,55,0.22); }
+  .fl-stat-label { font-size: 8px; text-transform: uppercase; letter-spacing: 0.1em;
+                   color: #888; line-height: 1.4; }
+  .fl-totdmg  { font-size: 18px; color: #5cc8e8; font-weight: bold; line-height: 1.1; }
+  .fl-secs    { font-size: 18px; color: #ddd; font-weight: bold; line-height: 1.1; }
+  .fl-seen    { font-size: 11px; color: #999; line-height: 1.2; white-space: nowrap; }
   #stream-badge {
     font-size: 11px; color: #888; background: #2a2a2a;
     padding: 2px 6px; border-radius: 3px; border: 1px solid #3a3a3a;
@@ -101,7 +108,7 @@
   .tl-transport.is-playing  { color: #ffb347; border-color: #6c5020; }
 
   /* ── Main layout ── */
-  #layout { display: flex; height: calc(100vh - 34px - var(--tl-height, 0px)); overflow: hidden; }
+  #layout { display: flex; height: calc(100vh - 45px - var(--tl-height, 0px)); overflow: hidden; }
 
   /* ── Mob panel ── */
   #mobs {
@@ -178,6 +185,7 @@
     display: flex; gap: 5px; align-items: baseline;
   }
   .card-hdr .cls { font-size: 11px; }
+  .card-hdr .lvl { margin-left: auto; font-size: 11px; font-weight: normal; opacity: 0.65; flex-shrink: 0; }
   .card-hdr .cls span { color: #fff !important; }
   .card-col-hdr {
     display: flex; align-items: center; padding: 1px 4px;
@@ -556,14 +564,28 @@ function trackMob(mob, name, ts) {
   if (name.endsWith("'s corpse")) name = name.slice(0, -("'s corpse".length));
   // A known player should never be treated as a mob.
   if (S.players[name]) return;
-  if (!S.mobs[mob]) S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
-  else { S.mobs[mob].lastTs = ts; S.mobs[mob].name = name; }
+  if (!S.mobs[mob]) {
+    S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
+  } else if (S.mobs[mob].name !== name) {
+    // Mob ID reused after a combat reset — start a fresh entry.
+    S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
+  } else {
+    S.mobs[mob].lastTs = ts;
+  }
   if (!allMobsEver[mob]) {
     allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
+    allMobOrderEver.push(mob);
+  } else if (allMobsEver[mob].name !== name) {
+    // Different mob reusing the same ID after a combat reset: reset timestamps
+    // and move to end of order so it renders at the top of the list.
+    allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
+    const idx = allMobOrderEver.indexOf(mob);
+    if (idx !== -1) allMobOrderEver.splice(idx, 1);
     allMobOrderEver.push(mob);
   } else {
     allMobsEver[mob].name = name;
     if (ts > allMobsEver[mob].lastTs) allMobsEver[mob].lastTs = ts;
+    if (ts < allMobsEver[mob].firstTs) allMobsEver[mob].firstTs = ts;
   }
 }
 function bumpTs(ts) {
@@ -743,6 +765,7 @@ function applyEvent(ev) {
       const p = player(ev.name);
       p.classes = ev.classes || [];
       p.cls = p.classes[0] || '';
+      p.level = ev.level || 0;
       break;
     }
   }
@@ -920,7 +943,7 @@ function buildRenderState() {
     .map(([name, av]) => {
       const sp = S.players[name] || {};
       return {
-        name, class: sp.cls||'', classes: sp.classes||[],
+        name, class: sp.cls||'', classes: sp.classes||[], level: sp.level||0,
         total: av.total,
         by_type: Object.entries(av.byType).sort((a,b)=>b[1]-a[1]).map(([type,count])=>({type,count})),
       };
@@ -932,7 +955,7 @@ function buildRenderState() {
     Object.entries(byPlayer).sort((a,b)=>b[1].total-a[1].total).map(([name,av])=>{
       const sp = S.players[name] || {};
       return {
-        name, class: sp.cls||'', classes: sp.classes||[],
+        name, class: sp.cls||'', classes: sp.classes||[], level: sp.level||0,
         total: av.total,
         by_type: Object.entries(av.byType).sort((a,b)=>b[1]-a[1]).map(([type,count])=>({type,count})),
       };
@@ -1065,7 +1088,7 @@ function scheduleRender() {
 function buildFightLabel(d) {
   const el = document.getElementById('fight-label');
   if (selectedMob === null) {
-    el.innerHTML = '<span class="fl-name" style="font-size:13px;color:#555">No mob selected</span>';
+    el.innerHTML = '<div class="fl-name-wrap"><span class="fl-name" style="font-size:13px;color:#555">No mob selected</span></div>';
     el.style.borderLeftColor = '#444';
     return;
   }
@@ -1085,24 +1108,23 @@ function buildFightLabel(d) {
   if (mobEntry) {
     const enc = Math.round(d.fight_elapsed_secs || mobEntry.last_seen_secs);
 
-    const dmg  = totalMobDmg > 0 ? `<span class="fl-totdmg">${fmtK(totalMobDmg)}</span><span class="fl-sep">·</span>` : '';
-    const secs = `<span class="fl-secs">${fmtTime(enc)}</span>`;
-    const primaryRow = `<div class="fl-primary">${dmg}${secs}</div>`;
-
-    let tsRow = '';
+    const dmgBlock = totalMobDmg > 0
+      ? `<div class="fl-stat-block fl-stat-dmg"><span class="fl-stat-label">Damage</span><span class="fl-totdmg">${fmtK(totalMobDmg)}</span></div>`
+      : '';
+    const secsBlock = `<div class="fl-stat-block fl-stat-dur"><span class="fl-stat-label">Duration</span><span class="fl-secs">${fmtTime(enc)}</span></div>`;
+    let seenBlock = '';
     if (mobEntry.first_ts) {
-      const seen = fmtTsPos(mobEntry.first_ts);
-      if (mobEntry.is_dead && mobEntry.last_ts && mobEntry.last_ts !== mobEntry.first_ts) {
-        tsRow = `<span class="fl-ts">${seen} → ${fmtTsPos(mobEntry.last_ts)}</span>`;
-      } else {
-        tsRow = `<span class="fl-ts">seen ${seen}</span>`;
-      }
+      const seenStart = fmtTsPos(mobEntry.first_ts);
+      const seenVal = (mobEntry.is_dead && mobEntry.last_ts && mobEntry.last_ts !== mobEntry.first_ts)
+        ? `${seenStart} → ${fmtTsPos(mobEntry.last_ts)}`
+        : seenStart;
+      seenBlock = `<div class="fl-stat-block fl-stat-seen"><span class="fl-stat-label">Seen</span><span class="fl-seen">${seenVal}</span></div>`;
     }
-    statsHtml = `<div class="fl-stats">${primaryRow}${tsRow}</div>`;
+    statsHtml = `<div class="fl-stats">${dmgBlock}${secsBlock}${seenBlock}</div>`;
   }
 
   const nameColor = accentColor === '#3cdc3c' ? '#3cdc3c' : '#f0a030';
-  el.innerHTML = `<span class="fl-name" style="color:${nameColor}">${mob}</span>${statsHtml}`;
+  el.innerHTML = `<div class="fl-name-wrap"><span class="fl-name" style="color:${nameColor}">${mob}</span></div>${statsHtml}`;
 }
 
 function rerender() {
@@ -1210,7 +1232,8 @@ function damageCard(e, elapsed, barColor = null) {
   const typeRows  = byType.map(r => typeRow(r.type, r.damage, total, bc, elapsed)).join('');
   const spellRows = spells.length ? `<hr class="spell-sep">` + spells.map(r => typeRow(truncate(r.spell, 17), r.damage, total, '#3c64a0', elapsed)).join('') : '';
   const clsHtml = classCodesHtml(classes);
-  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Damage</span><span class="c-rate">DPS</span></div>${typeRows}${spellRows}<div class="card-pad"></div></div>`;
+  const lvlHtml = e.level ? `<span class="lvl">${e.level}</span>` : '';
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Damage</span><span class="c-rate">DPS</span></div>${typeRows}${spellRows}<div class="card-pad"></div></div>`;
 }
 
 function healerCard(e, elapsed) {
@@ -1221,7 +1244,8 @@ function healerCard(e, elapsed) {
   const spells = e.heals_by_spell || [];
   const spellRows = (!spells.length && total > 0) ? typeRow('heal', total, total, healColor, elapsed, true) : spells.map(r => typeRow(truncate(r.spell, 17), r.healed, total, healColor, elapsed, true)).join('');
   const clsHtml = classCodesHtml(classes);
-  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Spell</span><span class="c-val">Healed</span><span class="c-rate">HPS</span></div>${spellRows}<div class="card-pad"></div></div>`;
+  const lvlHtml = e.level ? `<span class="lvl">${e.level}</span>` : '';
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Spell</span><span class="c-val">Healed</span><span class="c-rate">HPS</span></div>${spellRows}<div class="card-pad"></div></div>`;
 }
 
 function healeeCard(e, elapsed) {
@@ -1232,7 +1256,8 @@ function healeeCard(e, elapsed) {
   const spells = e.healed_received_by_spell || [];
   const spellRows = (!spells.length && total > 0) ? typeRow('heal', total, total, healColor, elapsed, true) : spells.map(r => typeRow(truncate(r.spell, 17), r.healed, total, healColor, elapsed, true)).join('');
   const clsHtml = classCodesHtml(classes);
-  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Spell</span><span class="c-val">Healed</span><span class="c-rate">HPS</span></div>${spellRows}<div class="card-pad"></div></div>`;
+  const lvlHtml = e.level ? `<span class="lvl">${e.level}</span>` : '';
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Spell</span><span class="c-val">Healed</span><span class="c-rate">HPS</span></div>${spellRows}<div class="card-pad"></div></div>`;
 }
 
 function avoidCard(e) {
@@ -1244,7 +1269,8 @@ function avoidCard(e) {
     return `<div class="type-row"><span class="c-type"><span class="type-bar" style="width:${pct}%;background:#2a6a8a"></span><span class="type-label">${r.type}</span></span><span class="c-val">${r.count}</span><span class="c-rate">${pct}%</span></div>`;
   }).join('');
   const clsHtml = classCodesHtml(classes);
-  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}</div><div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Count</span><span class="c-rate">%</span></div>${rows}<div class="card-pad"></div></div>`;
+  const lvlHtml = e.level ? `<span class="lvl">${e.level}</span>` : '';
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div><div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Count</span><span class="c-rate">%</span></div>${rows}<div class="card-pad"></div></div>`;
 }
 
 function typeRow(label, dmg, total, barColor, elapsed, isHeal = false) {

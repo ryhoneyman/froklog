@@ -95,6 +95,8 @@ struct DebugState {
     mob_candidates: HashMap<String, HashSet<String>>,
     /// player name → 1–3 class short-codes from /who lines
     player_classes: HashMap<String, Vec<String>>,
+    /// player name → level from /who lines
+    player_levels: HashMap<String, u8>,
 }
 
 #[derive(Default)]
@@ -1468,22 +1470,24 @@ fn main() {
         } else if let Some(caps) = RE_WHO.captures(line) {
             let name = caps["name"].to_owned();
             let classes = parse_who_classes(&caps["classes"]);
+            let level: u8 = caps["lvl"].parse().unwrap_or(0);
             t!(
                 "MATCH",
-                format!("RE_WHO — name={name:?} classes={classes:?}")
+                format!("RE_WHO — name={name:?} level={level} classes={classes:?}")
             );
             if !classes.is_empty() {
                 let prev = state.player_classes.insert(name.clone(), classes.clone());
                 if prev.as_deref() != Some(&classes) {
                     t!("STORE", format!("player_classes[{name:?}] = {classes:?}"));
                 }
+                state.player_levels.insert(name.clone(), level);
             } else {
                 t!(
                     "SKIP",
                     format!("no recognised class names in {:?}", &caps["classes"])
                 );
             }
-            event_desc = format!("Who name={name:?} classes={classes:?}");
+            event_desc = format!("Who name={name:?} level={level} classes={classes:?}");
             matched = true;
 
         // ── RE_HEAL ───────────────────────────────────────────────────────────

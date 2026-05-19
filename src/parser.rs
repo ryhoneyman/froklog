@@ -111,10 +111,12 @@ pub fn run(
             let lines = state.lines_parsed;
             let player = state.player_name.clone();
             let player_classes = std::mem::take(&mut state.player_classes);
+            let player_levels = std::mem::take(&mut state.player_levels);
             state = CombatState {
                 lines_parsed: lines,
                 player_name: player,
                 player_classes,
+                player_levels,
                 ..Default::default()
             };
             spell_caster.clear();
@@ -988,14 +990,17 @@ pub fn run(
         } else if let Some(caps) = RE_WHO.captures(line) {
             let name = caps["name"].to_owned();
             let classes = parse_who_classes(&caps["classes"]);
+            let level: u8 = caps["lvl"].parse().unwrap_or(0);
             if !classes.is_empty() {
                 state.player_classes.insert(name.clone(), classes.clone());
+                state.player_levels.insert(name.clone(), level);
                 emit(
                     &event_tx,
                     CombatEvent::Who {
                         ts: current_ts,
                         name,
                         classes,
+                        level,
                     },
                 );
             }

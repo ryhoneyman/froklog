@@ -1,15 +1,28 @@
 /// Persistent on-disk journal for a single stream.
 ///
-/// Layout:  `<data_dir>/<stream_id>/journal.jsonl`
+/// Layout: `<data_dir>/<stream_id>/journal.jsonl`
 ///
-/// Each line is a JSON object:
-///   `{"wall_ts":<unix_secs_u64>,"seq":<u32>,"batch":<EventBatch_json>}`
+/// New records use a 25-byte binary header (magic=0x01) followed by
+/// zlib-compressed batch JSON. Legacy records are newline-delimited JSON
+/// (magic=`{`) and remain readable indefinitely. Both formats coexist in the
+/// same file; `open()` detects format per-record from the first byte.
+///
+/// Binary record layout:
+///   [u8  0x01]  magic
+///   [u64 LE  ]  wall_ts  (unix seconds)
+///   [u64 LE  ]  log_ts   (EQ log unix seconds; 0 = absent)
+///   [u32 LE  ]  seq
+///   [u32 LE  ]  clen     (byte length of compressed payload)
+///   [N bytes ]  zlib-compressed batch JSON
 ///
 /// An in-memory index maps wall_ts → byte offset so seek is O(log n).
-use std::io::{BufRead, Seek, SeekFrom, Write};
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::info;
@@ -42,6 +55,47 @@ pub struct Journal {
     pub index: Vec<IndexEntry>,
 }
 
+fn compress_batch(json: &str) -> std::io::Result<Vec<u8>> {
+    let mut enc = ZlibEncoder::new(Vec::new(), Compression::fast());
+    enc.write_all(json.as_bytes())?;
+    enc.finish()
+}
+
+fn decompress_batch(data: &[u8]) -> Option<String> {
+    let mut dec = ZlibDecoder::new(data);
+    let mut out = String::new();
+    dec.read_to_string(&mut out).ok()?;
+    Some(out)
+}
+
+/// Read one record (JSONL or binary) from `reader`, returning the batch JSON string.
+fn read_one_record<R: BufRead>(reader: &mut R) -> Option<String> {
+    let mut magic = [0u8; 1];
+    reader.read_exact(&mut magic).ok()?;
+    match magic[0] {
+        b'{' => {
+            // Legacy JSONL: read rest of line, parse JournalLine, return batch field.
+            let mut rest = Vec::new();
+            reader.read_until(b'\n', &mut rest).ok()?;
+            let mut line = vec![b'{'];
+            line.extend_from_slice(&rest);
+            let s = std::str::from_utf8(&line).ok()?;
+            let jl: JournalLine = serde_json::from_str(s.trim_end()).ok()?;
+            serde_json::to_string(&jl.batch).ok()
+        }
+        0x01 => {
+            // Binary: 24-byte header then compressed payload.
+            let mut hdr = [0u8; 24];
+            reader.read_exact(&mut hdr).ok()?;
+            let clen = u32::from_le_bytes(hdr[20..24].try_into().unwrap()) as usize;
+            let mut compressed = vec![0u8; clen];
+            reader.read_exact(&mut compressed).ok()?;
+            decompress_batch(&compressed)
+        }
+        _ => None,
+    }
+}
+
 impl Journal {
     /// Open (or create) the journal file and build the seek index from existing content.
     pub fn open(data_dir: &std::path::Path, stream_id: &str) -> std::io::Result<Self> {
@@ -55,24 +109,65 @@ impl Journal {
             let file = std::fs::File::open(&path)?;
             let mut reader = std::io::BufReader::new(file);
             let mut offset: u64 = 0;
-            let mut line = String::new();
+
             loop {
-                line.clear();
-                let n = reader.read_line(&mut line)?;
-                if n == 0 {
-                    break;
+                let record_offset = offset;
+                let mut magic = [0u8; 1];
+                match reader.read_exact(&mut magic) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => return Err(e),
                 }
-                let trimmed = line.trim_end();
-                if !trimmed.is_empty() {
-                    if let Ok(jl) = serde_json::from_str::<JournalLine>(trimmed) {
-                        index.push(IndexEntry {
-                            wall_ts: jl.wall_ts,
-                            log_ts: jl.log_ts,
-                            byte_offset: offset,
-                        });
+                offset += 1;
+
+                if magic[0] == b'{' {
+                    // Legacy JSONL record.
+                    let mut rest = Vec::new();
+                    let n = reader.read_until(b'\n', &mut rest)?;
+                    offset += n as u64;
+                    let mut line = vec![b'{'];
+                    line.extend_from_slice(&rest);
+                    if let Ok(s) = std::str::from_utf8(&line) {
+                        if let Ok(jl) = serde_json::from_str::<JournalLine>(s.trim_end()) {
+                            index.push(IndexEntry {
+                                wall_ts: jl.wall_ts,
+                                log_ts: jl.log_ts,
+                                byte_offset: record_offset,
+                            });
+                        }
                     }
+                } else if magic[0] == 0x01 {
+                    // Binary record: read 24-byte header, skip compressed payload.
+                    let mut hdr = [0u8; 24];
+                    match reader.read_exact(&mut hdr) {
+                        Ok(()) => {}
+                        Err(_) => break,
+                    }
+                    offset += 24;
+                    let wall_ts = u64::from_le_bytes(hdr[0..8].try_into().unwrap());
+                    let log_ts_raw = u64::from_le_bytes(hdr[8..16].try_into().unwrap());
+                    let clen = u32::from_le_bytes(hdr[20..24].try_into().unwrap()) as usize;
+                    let mut skip = vec![0u8; clen];
+                    match reader.read_exact(&mut skip) {
+                        Ok(()) => {}
+                        Err(_) => break,
+                    }
+                    offset += clen as u64;
+                    index.push(IndexEntry {
+                        wall_ts,
+                        log_ts: if log_ts_raw == 0 {
+                            None
+                        } else {
+                            Some(log_ts_raw)
+                        },
+                        byte_offset: record_offset,
+                    });
+                } else {
+                    // Unknown byte — skip to next newline as best-effort recovery.
+                    let mut rest = Vec::new();
+                    let n = reader.read_until(b'\n', &mut rest)?;
+                    offset += n as u64;
                 }
-                offset += n as u64;
             }
             info!(
                 "Journal [{stream_id}]: loaded {} batches from disk",
@@ -92,18 +187,15 @@ impl Journal {
         seq: u32,
         batch_json: &str,
     ) -> std::io::Result<()> {
-        // Parse the batch value from the already-validated JSON string.
-        let batch: serde_json::Value = serde_json::from_str(batch_json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let compressed = compress_batch(batch_json)?;
+        let clen = compressed.len() as u32;
 
-        let jl = JournalLine {
-            wall_ts,
-            log_ts,
-            seq,
-            batch,
-        };
-        let line = serde_json::to_string(&jl)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let mut header = [0u8; 25];
+        header[0] = 0x01;
+        header[1..9].copy_from_slice(&wall_ts.to_le_bytes());
+        header[9..17].copy_from_slice(&log_ts.unwrap_or(0).to_le_bytes());
+        header[17..21].copy_from_slice(&seq.to_le_bytes());
+        header[21..25].copy_from_slice(&clen.to_le_bytes());
 
         let mut file = std::fs::OpenOptions::new()
             .create(true)
@@ -111,7 +203,8 @@ impl Journal {
             .open(&self.path)?;
 
         let byte_offset = file.seek(SeekFrom::End(0))?;
-        writeln!(file, "{}", line)?;
+        file.write_all(&header)?;
+        file.write_all(&compressed)?;
         file.flush()?;
 
         self.index.push(IndexEntry {
@@ -186,27 +279,18 @@ impl Journal {
         lo
     }
 
-    /// Read a single line (EventBatch JSON) from disk by its index position.
+    /// Read a single batch JSON from disk by its index position.
     /// Returns `None` if the position is out of range or the file cannot be read.
     pub fn read_at(&self, pos: usize) -> Option<Arc<String>> {
         let entry = self.index.get(pos)?;
         let mut file = std::fs::File::open(&self.path).ok()?;
         file.seek(SeekFrom::Start(entry.byte_offset)).ok()?;
         let mut reader = std::io::BufReader::new(file);
-        let mut line = String::new();
-        reader.read_line(&mut line).ok()?;
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            return None;
-        }
-        // Parse and re-emit just the batch field so the client receives the
-        // same EventBatch JSON it would get from the live broadcast.
-        let jl: JournalLine = serde_json::from_str(trimmed).ok()?;
-        Some(Arc::new(serde_json::to_string(&jl.batch).ok()?))
+        read_one_record(&mut reader).map(Arc::new)
     }
 
     /// Read up to `count` batches sequentially from disk starting at index position `pos`.
-    /// Opens the file once and reads contiguous lines, avoiding per-batch file overhead.
+    /// Opens the file once and reads contiguous records, avoiding per-batch file overhead.
     /// Returns fewer than `count` entries only when the journal is exhausted.
     pub fn read_burst(&self, pos: usize, count: usize) -> Vec<Arc<String>> {
         if pos >= self.index.len() || count == 0 {
@@ -223,23 +307,10 @@ impl Journal {
         }
         let mut reader = std::io::BufReader::new(file);
         let mut results = Vec::with_capacity(end - pos);
-        let mut line = String::new();
         for _ in pos..end {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-            let trimmed = line.trim_end();
-            if trimmed.is_empty() {
-                break;
-            }
-            match serde_json::from_str::<JournalLine>(trimmed) {
-                Ok(jl) => match serde_json::to_string(&jl.batch) {
-                    Ok(s) => results.push(Arc::new(s)),
-                    Err(_) => break,
-                },
-                Err(_) => break,
+            match read_one_record(&mut reader) {
+                Some(json) => results.push(Arc::new(json)),
+                None => break,
             }
         }
         results
