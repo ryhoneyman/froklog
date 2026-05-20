@@ -81,7 +81,7 @@ uuid = { version = "1", features = ["v4"] }
 clap = { version = "4", features = ["derive"] }
 
 # WebSocket client (used by froklog binary in push mode)
-tokio-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # HTTP client (used by froklog-replay for stream auto-registration)
