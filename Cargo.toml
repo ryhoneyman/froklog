@@ -13,15 +13,19 @@ path = "src/main.rs"
 
 [[bin]]
 name = "froklog-server"
-path = "src/bin/froklog_server/main.rs"
+path = "src/bin/froklog-server/main.rs"
 
 [[bin]]
 name = "froklog-replay"
-path = "src/bin/froklog_replay/main.rs"
+path = "src/bin/froklog-replay/main.rs"
 
 [[bin]]
 name = "froklog-debug"
-path = "src/bin/froklog_debug/main.rs"
+path = "src/bin/froklog-debug/main.rs"
+
+[[bin]]
+name = "froklog-migrate"
+path = "src/bin/froklog-migrate/main.rs"
 
 [features]
 default = []

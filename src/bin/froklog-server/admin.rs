@@ -224,6 +224,10 @@ pub async fn admin_panel_handler(
         .flat_map(|(_, sv)| sv.iter().map(|(_, pv)| pv.len()))
         .sum();
 
+    let icon_view = r#"<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><circle cx="10" cy="15" r="2.5"/><line x1="12.2" y1="17.2" x2="14.5" y2="19.5"/></svg>"#;
+    let icon_reset = r#"<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.01"/></svg>"#;
+    let icon_delete = r#"<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>"#;
+
     let mut body = String::new();
     for (gi, (game_label, server_groups)) in game_groups.iter().enumerate() {
         body.push_str(&format!(
@@ -294,6 +298,16 @@ pub async fn admin_panel_handler(
                             s.sessions.len()
                         )
                     };
+                    let actions_cell = format!(
+                        "<td class=\"act\">\
+                          <a href=\"{}\" target=\"_blank\" class=\"btn-act btn-view\" title=\"View stream\">{icon_view}</a>\
+                          <button class=\"btn-act btn-reset\" onclick=\"resetStream('{}')\" title=\"Reset: erase journal and sessions\">{icon_reset}</button>\
+                          <button class=\"btn-act btn-delete\" onclick=\"deleteStream('{}')\" title=\"Delete stream permanently\">{icon_delete}</button>\
+                        </td>",
+                        html_escape(&view_url),
+                        s.stream_id,
+                        s.stream_id,
+                    );
                     body.push_str(&format!(
                         "<tr class=\"stream-row {row_class}\" data-gid=\"{gi}\" data-sid=\"{si}\" data-pid=\"{pi}\" data-stid=\"{}\" data-search=\"{}\">\
                           {}\
@@ -304,7 +318,7 @@ pub async fn admin_panel_handler(
                           <td class=\"num\">{}</td>\
                           <td>{}</td>\
                           <td>{}</td>\
-                          <td><a href=\"{}\" target=\"_blank\">View</a>&ensp;<button class=\"btn-reset\" onclick=\"resetStream('{}')\" title=\"Erase journal and sessions\">Reset</button></td>\
+                          {actions_cell}\
                         </tr>\n",
                         s.stream_id,
                         html_escape(&search_data),
@@ -316,8 +330,6 @@ pub async fn admin_panel_handler(
                         format_size(s.file_bytes),
                         status,
                         public_badge,
-                        html_escape(&view_url),
-                        s.stream_id,
                     ));
                     if s.sessions.len() > 1 {
                         for session in &s.sessions {
@@ -433,6 +445,19 @@ async function resetStream(id) {
         alert('Reset failed: HTTP ' + resp.status);
     }
 }
+async function deleteStream(id) {
+    if (!confirm('Delete stream ' + id + '?\n\nThis will permanently remove the stream, all journal data, sessions, and the stream identity.\nThis cannot be undone.')) return;
+    const atok = new URLSearchParams(window.location.search).get('atok');
+    const resp = await fetch('/stream/' + id + '/purge', {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + atok }
+    });
+    if (resp.ok) {
+        location.reload();
+    } else {
+        alert('Delete failed: HTTP ' + resp.status);
+    }
+}
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('search').addEventListener('input', updateVisibility);
 });
@@ -485,8 +510,13 @@ tr.recorded-row td:first-child{{border-left:3px solid #cba6f7}}
 tr.live-row:hover td{{background:#243024}}
 a{{color:#89b4fa;text-decoration:none}}
 a:hover{{text-decoration:underline}}
-.btn-reset{{background:none;border:none;color:#f38ba8;cursor:pointer;font-size:.85rem;padding:0;font-family:inherit}}
-.btn-reset:hover{{text-decoration:underline}}
+.btn-act{{background:none;border:none;cursor:pointer;padding:2px;vertical-align:middle;line-height:0;border-radius:4px;opacity:.75;transition:opacity .15s,background .15s}}
+.btn-act:hover{{opacity:1;background:#313244}}
+.btn-view{{color:#89b4fa}}
+.btn-reset{{color:#f9e2af}}
+.btn-delete{{color:#f38ba8}}
+.act{{white-space:nowrap}}
+.act .btn-act+.btn-act{{margin-left:2px}}
 .btn-sessions{{background:none;border:none;color:#89b4fa;cursor:pointer;font-size:.78rem;padding:0 0 0 .3rem;font-family:inherit;opacity:.7}}
 .btn-sessions:hover{{opacity:1;text-decoration:underline}}
 tr.session-row td{{background:#15151f;font-size:.78rem;color:#6c7086;border-top:1px solid #1e1e2e}}

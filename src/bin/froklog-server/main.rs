@@ -166,6 +166,7 @@ async fn main() {
         .route("/stream", post(create_stream_handler))
         .route("/stream/{id}", patch(patch_stream_handler))
         .route("/stream/{id}", delete(reset_stream_handler))
+        .route("/stream/{id}/purge", delete(delete_stream_handler))
         // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
@@ -453,6 +454,47 @@ async fn reset_stream_handler(
     }
 
     info!("Reset [{stream_id}] [{ip}]: journal and sessions cleared");
+    StatusCode::OK.into_response()
+}
+
+// ── Stream delete (admin only) ────────────────────────────────────────────────
+
+/// `DELETE /stream/:id/purge` — remove the stream entirely: deregister and delete all on-disk data.
+async fn delete_stream_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let token = match ingest::extract_bearer(&headers) {
+        Some(t) => t,
+        None => {
+            warn!("Delete [{stream_id}] [{ip}]: missing token");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+    if !state.is_admin_token(&token) {
+        warn!("Delete [{stream_id}] [{ip}]: bad token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let stream_dir = {
+        let mut reg = state.registry.write().await;
+        match reg.remove(&stream_id) {
+            Some(_) => reg.data_dir.join(&stream_id),
+            None => return StatusCode::NOT_FOUND.into_response(),
+        }
+    };
+
+    if stream_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&stream_dir) {
+            warn!("Delete [{stream_id}] [{ip}]: failed to remove directory: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    info!("Delete [{stream_id}] [{ip}]: stream removed");
     StatusCode::OK.into_response()
 }
 

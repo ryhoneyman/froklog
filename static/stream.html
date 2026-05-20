@@ -579,12 +579,12 @@ function trackMob(mob, name, ts) {
     allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
     allMobOrderEver.push(mob);
   } else if (allMobsEver[mob].name !== name) {
-    // Different mob reusing the same ID after a combat reset: reset timestamps
-    // and move to end of order so it renders at the top of the list.
+    // Mob ID reused after a combat reset — update the registry with fresh
+    // timestamps and the new name, but keep the existing position in
+    // allMobOrderEver.  Reordering allMobOrderEver on each seek causes the
+    // list to scramble: partial replays encounter IDs whose allMobsEver name
+    // was recorded during a later seek, triggering false name-change moves.
     allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
-    const idx = allMobOrderEver.indexOf(mob);
-    if (idx !== -1) allMobOrderEver.splice(idx, 1);
-    allMobOrderEver.push(mob);
   } else {
     allMobsEver[mob].name = name;
     if (ts > allMobsEver[mob].lastTs) allMobsEver[mob].lastTs = ts;
