@@ -1,8 +1,8 @@
-/// Native Win32 settings dialog for the froklog tray application.
-///
-/// Only compiled when the `tray` feature is active.
-/// On Windows the full dialog runs on a dedicated thread with its own message loop.
-/// On non-Windows platforms (dev builds) open_settings is a no-op stub.
+// Native Win32 settings dialog for the froklog tray application.
+//
+// Only compiled when the `tray` feature is active.
+// On Windows the full dialog runs on a dedicated thread with its own message loop.
+// On non-Windows platforms (dev builds) open_settings is a no-op stub.
 
 // ── Windows implementation ────────────────────────────────────────────────────
 
@@ -740,6 +740,7 @@ mod win {
 
     // ── Control factories ─────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn mk_child(
         parent: HWND,
         hi: HINSTANCE,
@@ -774,6 +775,7 @@ mod win {
         hwnd
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn mk_label(
         parent: HWND,
         hi: HINSTANCE,
@@ -787,6 +789,7 @@ mod win {
         mk_child(parent, hi, font, "STATIC", text, x, y, w, h, 0, SS_RIGHT)
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn mk_static(
         parent: HWND,
         hi: HINSTANCE,
@@ -802,6 +805,7 @@ mod win {
         mk_child(parent, hi, font, "STATIC", text, x, y, w, h, id, style)
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn mk_edit(
         parent: HWND,
         hi: HINSTANCE,
@@ -853,6 +857,7 @@ mod win {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn mk_button(
         parent: HWND,
         hi: HINSTANCE,
@@ -879,6 +884,7 @@ mod win {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn mk_checkbox(
         parent: HWND,
         hi: HINSTANCE,

@@ -4,6 +4,7 @@
 /// All heavy work (tailer, parser, pusher) happens on background threads/tasks
 /// co-ordinated through the `AppHandle` passed in from main.
 #[cfg(feature = "tray")]
+#[allow(clippy::module_inception)]
 pub mod tray {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::RwLock;
@@ -23,6 +24,7 @@ pub mod tray {
     const ID_STATUS: &str = "status";
     const ID_TOGGLE_LOGGING: &str = "toggle_logging";
     const ID_SETTINGS: &str = "settings";
+    const ID_COPY_VIEWER_URL: &str = "copy_viewer_url";
     const ID_QUIT: &str = "quit";
 
     const TICK_SECS: u64 = 5;
@@ -71,9 +73,11 @@ pub mod tray {
         let event_loop: EventLoop<()> = EventLoop::builder().build().expect("event loop");
 
         let logging_on = handle.logging_enabled.load(Ordering::Relaxed);
-        let (tray, toggle_item, status_item) =
+        let (tray, toggle_item, status_item, copy_url_item) =
             build_tray(&handle.config.lock().unwrap(), logging_on);
+        #[allow(clippy::arc_with_non_send_sync)]
         let tray = Arc::new(Mutex::new(tray));
+        #[allow(clippy::arc_with_non_send_sync)]
         let toggle_item = Arc::new(Mutex::new(toggle_item));
 
         let handle_clone = Arc::clone(&handle);
@@ -111,9 +115,15 @@ pub mod tray {
                         ID_TOGGLE_LOGGING => {
                             toggle_logging(&handle_clone, &tray, &toggle_item);
                         }
-                        ID_SETTINGS => {
-                            if !handle_clone.settings_open.swap(true, Ordering::Relaxed) {
-                                crate::settings_win::open_settings(Arc::clone(&handle_clone));
+                        ID_SETTINGS
+                            if !handle_clone.settings_open.swap(true, Ordering::Relaxed) =>
+                        {
+                            crate::settings_win::open_settings(Arc::clone(&handle_clone));
+                        }
+                        ID_COPY_VIEWER_URL => {
+                            let url = handle_clone.config.lock().unwrap().stream_url();
+                            if let Some(url) = url {
+                                copy_to_clipboard(&url);
                             }
                         }
                         ID_QUIT => {
@@ -149,7 +159,7 @@ pub mod tray {
                         is_connected,
                         rate,
                     )));
-                    let _ = status_item.set_text(make_status_text(
+                    status_item.set_text(make_status_text(
                         logging_on,
                         is_connected,
                         &cfg,
@@ -157,6 +167,7 @@ pub mod tray {
                         cur,
                         rate,
                     ));
+                    copy_url_item.set_enabled(cfg.is_registered());
                 }
 
                 let _ = event;
@@ -195,12 +206,56 @@ pub mod tray {
         } else {
             "Enable Logging"
         };
-        let _ = toggle_item.lock().unwrap().set_text(label);
+        toggle_item.lock().unwrap().set_text(label);
     }
+
+    // ── Clipboard ─────────────────────────────────────────────────────────────
+
+    #[cfg(target_os = "windows")]
+    fn copy_to_clipboard(text: &str) {
+        use windows::Win32::Foundation::{HANDLE, HWND};
+        use windows::Win32::System::DataExchange::{
+            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+        };
+        use windows::Win32::System::Memory::{
+            GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+        };
+
+        const CF_UNICODETEXT: u32 = 13;
+
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0u16)).collect();
+        let byte_count = wide.len() * 2;
+
+        unsafe {
+            let Ok(hglob) = GlobalAlloc(GMEM_MOVEABLE, byte_count) else {
+                return;
+            };
+            let ptr = GlobalLock(hglob) as *mut u16;
+            if ptr.is_null() {
+                return;
+            }
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+            let _ = GlobalUnlock(hglob);
+
+            if OpenClipboard(HWND::default()).is_err() {
+                return;
+            }
+            let _ = EmptyClipboard();
+            // Ownership of hglob transfers to the clipboard; do not free it.
+            let _ = SetClipboardData(CF_UNICODETEXT, HANDLE(hglob.0));
+            let _ = CloseClipboard();
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn copy_to_clipboard(_text: &str) {}
 
     // ── Tray construction ─────────────────────────────────────────────────────
 
-    fn build_tray(cfg: &Config, logging_on: bool) -> (tray_icon::TrayIcon, MenuItem, MenuItem) {
+    fn build_tray(
+        cfg: &Config,
+        logging_on: bool,
+    ) -> (tray_icon::TrayIcon, MenuItem, MenuItem, MenuItem) {
         let menu = Menu::new();
 
         let status_item = MenuItem::with_id(
@@ -217,6 +272,12 @@ pub mod tray {
         };
         let toggle_item = MenuItem::with_id(ID_TOGGLE_LOGGING, toggle_label, true, None);
         let settings_item = MenuItem::with_id(ID_SETTINGS, "Settings…", true, None);
+        let copy_url_item = MenuItem::with_id(
+            ID_COPY_VIEWER_URL,
+            "Copy Viewer URL",
+            cfg.is_registered(),
+            None,
+        );
         let sep = PredefinedMenuItem::separator();
         let quit_item = MenuItem::with_id(ID_QUIT, "Quit", true, None);
 
@@ -224,6 +285,7 @@ pub mod tray {
         menu.append(&sep_status).unwrap();
         menu.append(&toggle_item).unwrap();
         menu.append(&settings_item).unwrap();
+        menu.append(&copy_url_item).unwrap();
         menu.append(&sep).unwrap();
         menu.append(&quit_item).unwrap();
 
@@ -234,7 +296,7 @@ pub mod tray {
             .build()
             .expect("tray icon");
 
-        (tray, toggle_item, status_item)
+        (tray, toggle_item, status_item, copy_url_item)
     }
 
     fn make_status_text(

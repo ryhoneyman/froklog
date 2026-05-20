@@ -249,6 +249,8 @@ fn main() {
                     std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     std::sync::Arc::new(std::sync::RwLock::new(None)),
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 ));
             })
             .expect("spawn pusher");

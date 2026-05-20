@@ -20,6 +20,7 @@ use crate::event::{CombatEvent, EventBatch};
 /// `events_sent`       — Incremented by the number of events in each batch sent.
 /// `connected`         — Set true when WS is up, false while disconnected/retrying.
 /// `last_connect_error`— Last connect error string; cleared on successful connect.
+#[allow(clippy::too_many_arguments)]
 pub async fn push_to_server(
     push_url: String,
     stream_token: String,
@@ -27,10 +28,17 @@ pub async fn push_to_server(
     events_sent: Arc<AtomicU64>,
     connected: Arc<AtomicBool>,
     last_connect_error: Arc<RwLock<Option<String>>>,
+    restart: Arc<AtomicBool>,
+    quit: Arc<AtomicBool>,
 ) {
     let mut seq: u32 = 0;
 
     loop {
+        if restart.load(Ordering::Relaxed) || quit.load(Ordering::Relaxed) {
+            info!("Pusher: stopping (restart/quit)");
+            return;
+        }
+
         let req = match build_request(&push_url, &stream_token) {
             Ok(r) => r,
             Err(e) => {
@@ -58,6 +66,9 @@ pub async fn push_to_server(
                 // Drain accumulated events to avoid unbounded memory growth during
                 // prolonged reconnect loops.
                 while event_rx.try_recv().is_ok() {}
+                if restart.load(Ordering::Relaxed) || quit.load(Ordering::Relaxed) {
+                    return;
+                }
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
@@ -117,6 +128,9 @@ pub async fn push_to_server(
         connected.store(false, Ordering::Relaxed);
         if disconnected {
             warn!("Pusher: send failed — reconnecting in 5s");
+        }
+        if restart.load(Ordering::Relaxed) || quit.load(Ordering::Relaxed) {
+            return;
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
     }

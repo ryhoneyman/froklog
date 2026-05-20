@@ -74,7 +74,7 @@ impl Config {
         let ws_base = base
             .replacen("https://", "wss://", 1)
             .replacen("http://", "ws://", 1);
-        Some(format!("{ws_base}/ingest/{id}"))
+        Some(format!("{}/ingest/{id}", ws_base.trim_end_matches('/')))
     }
 
     /// Returns the full shareable viewer URL.
@@ -82,7 +82,31 @@ impl Config {
         let base = self.server_url.as_deref()?;
         let id = self.stream_id.as_deref()?;
         let vtok = self.view_token.as_deref()?;
-        Some(format!("{base}/stream/{id}?vtok={vtok}"))
+        Some(format!(
+            "{}/stream/{id}?vtok={vtok}",
+            base.trim_end_matches('/')
+        ))
+    }
+
+    /// Returns the appropriate stream URL to share.
+    /// Public streams use the /player/{game}/{server}/{player} route;
+    /// private streams use /stream/{id}?vtok={token}.
+    pub fn stream_url(&self) -> Option<String> {
+        let base = self.server_url.as_deref()?.trim_end_matches('/');
+        if self.public_stream {
+            let game = self.game.as_deref()?;
+            let server = self
+                .server_name
+                .clone()
+                .or_else(|| self.server_name_from_log())?;
+            let player = self.effective_player_name();
+            if player.is_empty() {
+                return None;
+            }
+            Some(format!("{base}/player/{game}/{server}/{player}"))
+        } else {
+            self.viewer_url()
+        }
     }
 
     /// Returns true when the config has everything needed to start pushing.

@@ -195,6 +195,8 @@ fn run_engine_once(
     }
 
     {
+        let restart_p = Arc::clone(&restart);
+        let quit_p = Arc::clone(&quit);
         thread::Builder::new()
             .name("eq-pusher".into())
             .spawn(move || {
@@ -209,6 +211,8 @@ fn run_engine_once(
                     events_sent,
                     connected,
                     last_connect_error,
+                    restart_p,
+                    quit_p,
                 ));
             })
             .expect("spawn pusher");
