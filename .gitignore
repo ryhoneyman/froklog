@@ -4,5 +4,7 @@
 # EQ log files (contain personal character/server names)
 /logs/
 
+/streams/
+
 # IDE local settings
 .vscode/
