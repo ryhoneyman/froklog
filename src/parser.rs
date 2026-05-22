@@ -15,10 +15,11 @@ use crate::event::{
     MODS_TWINCAST,
 };
 use crate::patterns::{
-    norm, normalize_article_case, normalize_miss, normalize_verb, parse_who_classes,
-    RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_DIED, RE_DOT, RE_DS, RE_DS_PROC, RE_EXTRA_DMG,
-    RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE, RE_SLAIN_BY,
-    RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
+    norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_who_classes,
+    RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED, RE_DOT, RE_DS,
+    RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL, RE_LOOT_ENHANCE,
+    RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE,
+    RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
 use crate::state::{CombatState, EntityCombatStats, MobSighting};
 
@@ -729,6 +730,120 @@ pub fn run(
             let tgt = normalize_article_case(&caps["tgt"]);
             handle_slay(&mut state, &event_tx, tgt, String::new(), current_ts);
 
+        // ── Loot and currency ──────────────────────────────────────────────────
+
+        // "You receive 6 platinum, 1 gold, 8 silver and 3 copper from the corpse."
+        // NOTE: EQL emits currency BEFORE the kill message, so we use active_mob_id
+        // (the mob currently engaged in combat) rather than the post-slay pending mob.
+        } else if let Some(caps) = RE_CURRENCY_CORPSE.captures(line) {
+            let copper = parse_copper(&caps["amounts"]);
+            let mob = state.active_mob_id.unwrap_or(0) as u32;
+            emit(
+                &event_tx,
+                CombatEvent::CurrencyLoot {
+                    ts: current_ts,
+                    mob,
+                    copper,
+                },
+            );
+
+        // "--You have looted X from mob's corpse.--"
+        } else if let Some(caps) = RE_LOOT_KEPT.captures(line) {
+            let item = caps["item"].to_owned();
+            let mob_name = normalize_article_case(&caps["mob"]);
+            let mob = state
+                .mob_list
+                .iter()
+                .rev()
+                .find(|m| m.name == mob_name)
+                .map(|m| m.id as u32)
+                .or(state.pending_loot_mob)
+                .unwrap_or(0);
+            emit(
+                &event_tx,
+                CombatEvent::ItemLoot {
+                    ts: current_ts,
+                    mob,
+                    item,
+                    qty: 1,
+                },
+            );
+
+        // "You looted [N] X from mob's corpse and sold it for Y."
+        } else if let Some(caps) = RE_LOOT_SOLD.captures(line) {
+            let qty: u32 = caps
+                .name("qty")
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(1);
+            let item = caps["item"].to_owned();
+            let mob_name = normalize_article_case(&caps["mob"]);
+            let price_str = &caps["price"];
+            let copper = if price_str == "free" {
+                0
+            } else {
+                parse_copper(price_str)
+            };
+            let mob = state
+                .mob_list
+                .iter()
+                .rev()
+                .find(|m| m.name == mob_name)
+                .map(|m| m.id as u32)
+                .or(state.pending_loot_mob)
+                .unwrap_or(0);
+            emit(
+                &event_tx,
+                CombatEvent::ItemSell {
+                    ts: current_ts,
+                    mob,
+                    item,
+                    qty,
+                    copper,
+                },
+            );
+
+        // "You looted X from mob's corpse and stored it in your Dragon Hoard"
+        } else if let Some(caps) = RE_LOOT_HOARD.captures(line) {
+            let item = caps["item"].to_owned();
+            let mob_name = normalize_article_case(&caps["mob"]);
+            let mob = state
+                .mob_list
+                .iter()
+                .rev()
+                .find(|m| m.name == mob_name)
+                .map(|m| m.id as u32)
+                .or(state.pending_loot_mob)
+                .unwrap_or(0);
+            emit(
+                &event_tx,
+                CombatEvent::ItemHoard {
+                    ts: current_ts,
+                    mob,
+                    item,
+                },
+            );
+
+        // "You looted X from mob's corpse to create Y"
+        } else if let Some(caps) = RE_LOOT_ENHANCE.captures(line) {
+            let item = caps["item"].to_owned();
+            let mob_name = normalize_article_case(&caps["mob"]);
+            let mob = state
+                .mob_list
+                .iter()
+                .rev()
+                .find(|m| m.name == mob_name)
+                .map(|m| m.id as u32)
+                .or(state.pending_loot_mob)
+                .unwrap_or(0);
+            emit(
+                &event_tx,
+                CombatEvent::ItemEnhance {
+                    ts: current_ts,
+                    mob,
+                    item,
+                },
+            );
+
         // ── "X has taken N damage from [Player's/your] Spell [by Player]." ────
         } else if let Some(caps) = RE_HAS_TAKEN.captures(line) {
             let tgt = norm(caps["tgt"].trim(), &player_name);
@@ -1121,6 +1236,8 @@ fn handle_slay(
         .find(|m| m.name == tgt)
         .map(|m| m.id as u32)
         .unwrap_or(0);
+    state.pending_loot_mob = Some(mob_id);
+    state.pending_loot_ts = ts;
     emit(
         event_tx,
         CombatEvent::Slay {

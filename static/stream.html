@@ -188,7 +188,7 @@
     display: flex; gap: 5px; align-items: baseline;
   }
   .card-hdr .cls { font-size: 11px; }
-  .card-hdr .lvl { margin-left: auto; font-size: 11px; font-weight: normal; opacity: 0.65; flex-shrink: 0; }
+  .card-hdr .lvl { margin-left: auto; font-size: 10px; font-weight: bold; flex-shrink: 0; background: #000; color: #fff; border-radius: 8px; padding: 1px 5px; line-height: 1.4; }
   .card-hdr .cls span { color: #fff !important; }
   .card-col-hdr {
     display: flex; align-items: center; padding: 1px 4px;
@@ -294,6 +294,47 @@
 
   /* Ensure the last mob row is never clipped by the scrollbar */
   #mob-rows { padding-bottom: 24px; }
+
+  /* ── Loot tab content ── */
+  .loot-player-hdr {
+    display: flex; align-items: center; padding: 0 6px;
+    height: 18px; font-size: 11px; font-weight: bold; color: #eee;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  .loot-empty {
+    padding: 6px 8px; font-size: 11px; color: #555; font-style: italic;
+  }
+  .loot-kill {
+    padding: 2px 6px 0;
+  }
+  .loot-kill-name {
+    font-size: 10px; color: #777; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+    border-bottom: 1px solid #222; margin-bottom: 1px; padding-bottom: 1px;
+  }
+  .loot-kill-coin {
+    font-size: 10px; color: #c8aa1e; padding-left: 2px;
+  }
+  .loot-kill-items {
+    display: flex; flex-wrap: wrap; gap: 2px; padding: 1px 2px 3px;
+  }
+  .loot-chip {
+    font-size: 9px; padding: 0 4px; border-radius: 2px; line-height: 16px;
+    white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis;
+  }
+  .loot-chip-kept    { background: #1e2e3a; color: #7ab8f5; border: 1px solid #2a4a5a; }
+  .loot-chip-sold    { background: #2a2a1a; color: #c8a840; border: 1px solid #4a4020; }
+  .loot-chip-hoard   { background: #2a1a3a; color: #b080e0; border: 1px solid #4a2a60; }
+  .loot-chip-enhance { background: #1a2a1a; color: #60c060; border: 1px solid #2a4a2a; }
+  .loot-session-totals {
+    padding: 3px 6px; font-size: 10px; color: #bbb;
+    border-bottom: 1px solid #222; margin-bottom: 2px;
+  }
+  .loot-session-totals .ls-coin    { color: #ffee1e; }
+  .loot-session-totals .ls-sold    { color: #ffee1e; }
+  .loot-session-totals .ls-kept    { color: #7ab8f5; }
+  .loot-session-totals .ls-autosold { color: #c8a840; }
+  .loot-session-totals .ls-enhance { color: #60c060; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
@@ -380,6 +421,10 @@ let cacheComplete = false;  // true once the initial catch-up is done
 // newest-first so live mobs pop in at the top.
 const allMobsEver  = {};   // mob_id -> { name }
 const allMobOrderEver = []; // mob_ids in first-appearance order (oldest first)
+// Loot cache that spans seeks: populated from ALL cached batches, not just up
+// to the current seek target.  Lets the loot tab show post-death loot when a
+// mob is selected even if the timeline is positioned at the kill moment.
+const allMobLootEver = {};  // mob_id -> { copper, items: [{item,qty,d,copper}] }
 
 /// Replay all cached batches with logTs <= targetLogTs and return the count applied.
 /// Does NOT reset state — caller must call resetState() first if needed.
@@ -448,6 +493,12 @@ function seekWithCache(targetLogTs, paused, speed) {
   pendingMobRestore = selectedMob;
   resetState();
   applyBatchesUpTo(targetLogTs);
+  // Forward-fill allMobLootEver with loot from batches beyond the seek target
+  // so the loot tab shows post-death loot when a mob is selected.
+  for (const cb of cachedBatches) {
+    if (cb.logTs <= targetLogTs) continue;
+    for (const ev of cb.batch.events) applyLootToGlobal(ev);
+  }
   scheduleRender();
   if (paused) {
     sendWS({ t: 'seek_paused_log', to_log_ts: targetLogTs });
@@ -500,6 +551,22 @@ function fmtTime(secs) {
 }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-1)+'…' : s; }
 
+// Format a copper value as "6pp 3gp 7sp 3cp", skipping zero tiers.
+function formatCopper(c) {
+  if (!c) return '';
+  const pp = Math.floor(c / 1000); c %= 1000;
+  const gp = Math.floor(c / 100);  c %= 100;
+  const sp = Math.floor(c / 10);   c %= 10;
+  const cp = c;
+  return [pp && `${pp}pp`, gp && `${gp}gp`, sp && `${sp}sp`, cp && `${cp}cp`].filter(Boolean).join(' ');
+}
+function formatCopperShort(c) {
+  if (!c) return '';
+  const pp = Math.floor(c / 1000);
+  const gp = Math.floor((c % 1000) / 100);
+  return [pp && `${pp}pp`, gp && `${gp}gp`].filter(Boolean).join(' ') || '<1gp';
+}
+
 // ── Accumulated combat state ──────────────────────────────────────────────────
 // All state is rebuilt from incoming EventBatch messages.  The server sends the
 // full journal on connect (catch-up) followed by live batches.
@@ -520,6 +587,10 @@ const S = {
   fightStartTs: null,  // unix seconds of first combat event
   lastTs: 0,           // unix seconds of most recent event
   casts: {},           // player_name -> { spell, logTs }
+  mobLoot: {},         // mob_id -> { copper: 0, items: [{item,qty,d,copper}] }
+  sessionCoin: 0,      // total copper from corpses this session
+  sessionSold: 0,      // total copper from auto-sells this session
+  lootOrder: [],       // mob_ids in loot-event order (newest last)
 };
 
 function player(name) {
@@ -555,6 +626,24 @@ function mobAvoidPlayer(mob, name) {
   if (!S.mobAvoid[mob])       S.mobAvoid[mob] = {};
   if (!S.mobAvoid[mob][name]) S.mobAvoid[mob][name] = { total:0, byType:{} };
   return S.mobAvoid[mob][name];
+}
+function mobLootEntry(mob) {
+  if (!S.mobLoot[mob]) {
+    S.mobLoot[mob] = { copper: 0, items: [] };
+    if (!S.lootOrder.includes(mob)) S.lootOrder.push(mob);
+  }
+  return S.mobLoot[mob];
+}
+function applyLootToGlobal(ev) {
+  if (!allMobLootEver[ev.mob]) allMobLootEver[ev.mob] = { copper: 0, items: [] };
+  const e = allMobLootEver[ev.mob];
+  switch (ev.k) {
+    case 'currency_loot': e.copper += ev.copper; break;
+    case 'item_loot':     e.items.push({ item: ev.item, qty: ev.qty, d: 'kept', copper: 0 }); break;
+    case 'item_sell':     e.items.push({ item: ev.item, qty: ev.qty, d: 'sold', copper: ev.copper }); break;
+    case 'item_hoard':    e.items.push({ item: ev.item, qty: 1, d: 'hoard', copper: 0 }); break;
+    case 'item_enhance':  e.items.push({ item: ev.item, qty: 1, d: 'enhance', copper: 0 }); break;
+  }
 }
 function tlEntry(tl, mob, name) {
   if (!tl[mob]) tl[mob] = {};
@@ -623,6 +712,11 @@ function resetState() {
   S.fightStartTs = null;
   S.lastTs    = 0;
   S.casts     = {};
+  S.mobLoot   = {};
+  S.sessionCoin = 0;
+  S.sessionSold = 0;
+  S.lootOrder = [];
+  for (const k of Object.keys(allMobLootEver)) delete allMobLootEver[k];
   selectedMob = null;
   lastData    = null;
   for (const [name, info] of Object.entries(savedClasses)) {
@@ -771,6 +865,38 @@ function applyEvent(ev) {
       p.level = ev.level || 0;
       break;
     }
+    case 'currency_loot': {
+      bumpTs(ev.ts);
+      mobLootEntry(ev.mob).copper += ev.copper;
+      S.sessionCoin += ev.copper;
+      applyLootToGlobal(ev);
+      break;
+    }
+    case 'item_loot': {
+      bumpTs(ev.ts);
+      mobLootEntry(ev.mob).items.push({ item: ev.item, qty: ev.qty, d: 'kept', copper: 0 });
+      applyLootToGlobal(ev);
+      break;
+    }
+    case 'item_sell': {
+      bumpTs(ev.ts);
+      mobLootEntry(ev.mob).items.push({ item: ev.item, qty: ev.qty, d: 'sold', copper: ev.copper });
+      S.sessionSold += ev.copper;
+      applyLootToGlobal(ev);
+      break;
+    }
+    case 'item_hoard': {
+      bumpTs(ev.ts);
+      mobLootEntry(ev.mob).items.push({ item: ev.item, qty: 1, d: 'hoard', copper: 0 });
+      applyLootToGlobal(ev);
+      break;
+    }
+    case 'item_enhance': {
+      bumpTs(ev.ts);
+      mobLootEntry(ev.mob).items.push({ item: ev.item, qty: 1, d: 'enhance', copper: 0 });
+      applyLootToGlobal(ev);
+      break;
+    }
   }
 }
 
@@ -815,6 +941,7 @@ function buildRenderState() {
           name,
           class:   sp.cls     || p.cls     || '',
           classes: sp.classes || p.classes || [],
+          level:   sp.level   || p.level   || 0,
           total_damage: p.dmg,
           dps: Math.round(p.dmg / el),
           damage_by_type: Object.entries(p.dmgByType||{})
@@ -1145,6 +1272,61 @@ function buildFightLabel(d) {
   el.innerHTML = `<div class="fl-name-wrap"><span class="fl-name" style="color:${nameColor}">${mob}</span></div>${statsHtml}`;
 }
 
+function lootKillBlock(mob, entry, mobName) {
+  const chips = entry.items.map(it => {
+    const qty   = it.qty > 1 ? `×${it.qty} ` : '';
+    const label = truncate(`${qty}${it.item}`, 22);
+    let cls = 'loot-chip ';
+    let title = it.item;
+    if (it.d === 'sold')         { cls += 'loot-chip-sold';    title += ` (sold ${formatCopper(it.copper)})`; }
+    else if (it.d === 'hoard')   { cls += 'loot-chip-hoard';   }
+    else if (it.d === 'enhance') { cls += 'loot-chip-enhance'; }
+    else                         { cls += 'loot-chip-kept';    }
+    return `<span class="${cls}" title="${title}">${label}</span>`;
+  }).join('');
+  if (!chips) return '';
+  return `<div class="loot-kill">
+    <div class="loot-kill-name">${truncate(mobName, 28)}</div>
+    <div class="loot-kill-items">${chips}</div>
+  </div>`;
+}
+
+function renderLootRows() {
+  const playerName = document.getElementById('player-name').textContent;
+  const hdr = `<div class="loot-player-hdr">${playerName || '—'}</div>`;
+
+  if (selectedMob !== null) {
+    const entry   = allMobLootEver[selectedMob] || S.mobLoot[selectedMob] || { copper: 0, items: [] };
+    const mobName = (S.mobs[selectedMob]?.name) || (allMobsEver[selectedMob]?.name) || 'unknown';
+    const block   = lootKillBlock(selectedMob, entry, mobName);
+    return hdr + (block || '<div class="loot-empty">No loot for this mob</div>');
+  }
+
+  const keptCount    = Object.values(S.mobLoot).reduce((n, e) => n + e.items.filter(i => i.d === 'kept' || i.d === 'hoard').length, 0);
+  const soldCount    = Object.values(S.mobLoot).reduce((n, e) => n + e.items.filter(i => i.d === 'sold').length, 0);
+  const enhanceCount = Object.values(S.mobLoot).reduce((n, e) => n + e.items.filter(i => i.d === 'enhance').length, 0);
+  const coinParts = [];
+  if (S.sessionCoin) coinParts.push(`Coin: <span class="ls-coin">${formatCopperShort(S.sessionCoin)}</span>`);
+  if (S.sessionSold) coinParts.push(`Sold: <span class="ls-sold">${formatCopperShort(S.sessionSold)}</span>`);
+  const itemParts = [];
+  if (keptCount)    itemParts.push(`Kept: <span class="ls-kept">${keptCount}</span>`);
+  if (soldCount)    itemParts.push(`Auto-sold: <span class="ls-autosold">${soldCount}</span>`);
+  if (enhanceCount) itemParts.push(`Enhance: <span class="ls-enhance">${enhanceCount}</span>`);
+  const summaryLines = [coinParts.join('  '), itemParts.join('  ')].filter(Boolean);
+  const summary = summaryLines.length ? `<div class="loot-session-totals">${summaryLines.join('<br>')}</div>` : '';
+
+  const order = [...S.lootOrder].reverse();
+  if (!order.length) return hdr + summary + '<div class="loot-empty">No loot this session</div>';
+
+  const chunks = order.map(mob => {
+    const entry   = S.mobLoot[mob] || { copper: 0, items: [] };
+    const mobName = (S.mobs[mob]?.name) || (allMobsEver[mob]?.name) || 'unknown';
+    return lootKillBlock(mob, entry, mobName);
+  }).filter(Boolean);
+
+  return hdr + summary + chunks.join('');
+}
+
 function rerender() {
   if (!lastData) return;
   buildFightLabel(lastData);
@@ -1197,7 +1379,7 @@ function renderMobList(d) {
     if (row.className          !== newCls)   row.className          = newCls;
     if (row._dot.style.color   !== dotColor) row._dot.style.color   = dotColor;
     if (row._name.style.color  !== nameColor) row._name.style.color = nameColor;
-    const nameText = truncate(m.name, 23);
+    const nameText = truncate(m.name, 18);
     if (row._name.textContent  !== nameText)  row._name.textContent = nameText;
     if (row._time.textContent  !== timeStr)   row._time.textContent = timeStr;
 
@@ -1218,12 +1400,17 @@ function renderSummary(d) {
   const hdrEl  = document.getElementById('sum-header-area');
   const rowsEl = document.getElementById('sum-rows');
 
-  const TAB_LABELS = { damage:'Dmg', healing:'Healer', healed:'Healed', tanked:'Tank', avoid:'Avoid' };
-  const tabs = ['damage','healing','healed','tanked','avoid'].map(m => {
+  const TAB_LABELS = { damage:'Dmg', healing:'Healer', healed:'Healed', tanked:'Tank', avoid:'Avoid', loot:'Loot' };
+  const tabs = ['damage','healing','healed','tanked','avoid','loot'].map(m => {
     const active = detailMode === m ? ' active' : '';
     return `<button class="mode-tab${active}" onclick="event.stopPropagation();setMode('${m}')">${TAB_LABELS[m]}</button>`;
   }).join('');
   hdrEl.innerHTML = `<div id="mode-tabs">${tabs}</div>`;
+
+  if (detailMode === 'loot') {
+    rowsEl.innerHTML = renderLootRows();
+    return;
+  }
 
   // Suppress per-second rates when we don't yet have reliable elapsed data
   // (mob has only been seen within a single log-second).
@@ -1260,12 +1447,14 @@ function sumRow(name, classes, val, rate, rateLabel) {
 }
 
 function renderCards(d) {
+  const cardsEl = document.getElementById('cards');
+  if (detailMode === 'loot') { cardsEl.innerHTML = ''; return; }
+
   // Use null elapsed to suppress per-second rates when mob has only been seen
   // within a single log-second (rates would be meaningless at that resolution).
   const mobEntry = selectedMob !== null ? (d.mob_list || []).find(m => m.id === selectedMob) : null;
   const hasRealElapsed = !mobEntry || (mobEntry.first_ts && mobEntry.last_ts && mobEntry.last_ts > mobEntry.first_ts);
   const elapsed = hasRealElapsed ? Math.max(d.fight_elapsed_secs, 1) : null;
-  const cardsEl = document.getElementById('cards');
 
   if (selectedMob !== null) {
     const key = String(selectedMob);

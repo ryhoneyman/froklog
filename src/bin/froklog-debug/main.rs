@@ -17,10 +17,11 @@ use std::time::{Duration, Instant};
 use chrono::Timelike;
 use clap::Parser;
 use froklog::patterns::{
-    norm, normalize_article_case, normalize_miss, normalize_verb, parse_who_classes,
-    RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_DIED, RE_DOT, RE_DS, RE_DS_PROC, RE_EXTRA_DMG,
-    RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE, RE_SLAIN_BY,
-    RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
+    norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_who_classes,
+    RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED, RE_DOT, RE_DS,
+    RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL, RE_LOOT_ENHANCE,
+    RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE,
+    RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
 use froklog::tailer::parse_eq_timestamp;
 
@@ -89,6 +90,11 @@ struct DebugState {
     fight_started: bool,
     mob_name: String,
 
+    /// Mob-instance ID of the most recently slain mob (for loot attribution).
+    pending_loot_mob: Option<u32>,
+    /// EQ log timestamp of the most recent slay event.
+    pending_loot_ts: u32,
+
     /// spell name → caster name
     spell_caster: HashMap<String, String>,
     /// mob name → set of players who attacked it
@@ -112,6 +118,7 @@ struct EntityStats {
     resists_by_spell: HashMap<String, u64>,
 }
 
+#[derive(Clone)]
 struct MobInstance {
     id: u64,
     name: String,
@@ -168,9 +175,6 @@ fn update_mob_list(state: &mut DebugState, tgt: &str) -> (u64, bool) {
         (id, true)
     };
 
-    state
-        .mob_list
-        .sort_unstable_by_key(|b| std::cmp::Reverse(b.last_seen));
     state.active_mob_id = Some(id);
     (id, is_new)
 }
@@ -237,6 +241,7 @@ fn main() {
 
     let mut line_no: u64 = 0;
     let mut ts_display = String::from("(no timestamp)");
+    let mut current_ts: u32 = 0;
 
     for raw_line in BufReader::new(file).lines() {
         let raw_line = match raw_line {
@@ -266,6 +271,7 @@ fn main() {
                     dt.minute(),
                     dt.second()
                 );
+                current_ts = dt.and_utc().timestamp() as u32;
             }
             &raw_line[TS_LEN..]
         } else {
@@ -1249,6 +1255,9 @@ fn main() {
             let mob_id = state.mob_list.iter().find(|m| m.name == tgt).map(|m| m.id);
             if let Some(id) = mob_id {
                 t!("LOOKUP", format!("mob instance #{id} for {tgt:?}"));
+                state.pending_loot_mob = Some(id as u32);
+                state.pending_loot_ts = current_ts;
+                t!("STORE", format!("pending_loot_mob = #{id}"));
                 event_desc = format!("Slay tgt={tgt:?} mob_id=#{id}");
             } else {
                 t!(
@@ -1257,6 +1266,103 @@ fn main() {
                 );
                 event_desc = format!("Slay tgt={tgt:?} mob_id=unknown");
             }
+            matched = true;
+
+        // ── Loot and currency ─────────────────────────────────────────────────
+
+        // "You receive X from the corpse."
+        // EQL emits currency BEFORE the kill message, so active_mob_id is used.
+        } else if let Some(caps) = RE_CURRENCY_CORPSE.captures(line) {
+            let copper = parse_copper(&caps["amounts"]);
+            let mob = state.active_mob_id.unwrap_or(u64::MAX) as u32;
+            t!(
+                "MATCH",
+                format!("RE_CURRENCY_CORPSE — copper={copper} mob_id=#{mob}")
+            );
+            event_desc = format!("CurrencyLoot copper={copper} mob=#{mob}");
+            matched = true;
+
+        // "--You have looted X from mob's corpse.--"
+        } else if let Some(caps) = RE_LOOT_KEPT.captures(line) {
+            let item = caps["item"].to_owned();
+            let mob_name = normalize_article_case(&caps["mob"]);
+            let mob = state
+                .mob_list
+                .iter()
+                .rev()
+                .find(|m| m.name == mob_name)
+                .map(|m| m.id as u32)
+                .or(state.pending_loot_mob)
+                .unwrap_or(0);
+            t!(
+                "MATCH",
+                format!("RE_LOOT_KEPT — item={item:?} mob={mob_name:?} mob_id=#{mob}")
+            );
+            event_desc = format!("ItemLoot item={item:?} qty=1 mob=#{mob}");
+            matched = true;
+
+        // "You looted [N] X from mob's corpse and sold it for Y."
+        } else if let Some(caps) = RE_LOOT_SOLD.captures(line) {
+            let qty: u32 = caps
+                .name("qty")
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(1);
+            let item = caps["item"].to_owned();
+            let mob_name = normalize_article_case(&caps["mob"]);
+            let price_str = &caps["price"];
+            let copper = if price_str == "free" {
+                0
+            } else {
+                parse_copper(price_str)
+            };
+            let mob = state
+                .mob_list
+                .iter()
+                .rev()
+                .find(|m| m.name == mob_name)
+                .map(|m| m.id as u32)
+                .or(state.pending_loot_mob)
+                .unwrap_or(0);
+            t!("MATCH", format!("RE_LOOT_SOLD — item={item:?} qty={qty} mob={mob_name:?} copper={copper} mob_id=#{mob}"));
+            event_desc = format!("ItemSell item={item:?} qty={qty} copper={copper} mob=#{mob}");
+            matched = true;
+
+        // "You looted X from mob's corpse and stored it in your Dragon Hoard"
+        } else if let Some(caps) = RE_LOOT_HOARD.captures(line) {
+            let item = caps["item"].to_owned();
+            let mob_name = normalize_article_case(&caps["mob"]);
+            let mob = state
+                .mob_list
+                .iter()
+                .rev()
+                .find(|m| m.name == mob_name)
+                .map(|m| m.id as u32)
+                .or(state.pending_loot_mob)
+                .unwrap_or(0);
+            t!(
+                "MATCH",
+                format!("RE_LOOT_HOARD — item={item:?} mob={mob_name:?} mob_id=#{mob}")
+            );
+            event_desc = format!("ItemHoard item={item:?} mob=#{mob}");
+            matched = true;
+
+        // "You looted X from mob's corpse to create Y"
+        } else if let Some(caps) = RE_LOOT_ENHANCE.captures(line) {
+            let item = caps["item"].to_owned();
+            let mob_name = normalize_article_case(&caps["mob"]);
+            let mob = state
+                .mob_list
+                .iter()
+                .rev()
+                .find(|m| m.name == mob_name)
+                .map(|m| m.id as u32)
+                .or(state.pending_loot_mob)
+                .unwrap_or(0);
+            t!(
+                "MATCH",
+                format!("RE_LOOT_ENHANCE — item={item:?} mob={mob_name:?} mob_id=#{mob}")
+            );
+            event_desc = format!("ItemEnhance item={item:?} mob=#{mob}");
             matched = true;
 
         // ── RE_HAS_TAKEN ──────────────────────────────────────────────────────
@@ -1610,8 +1716,9 @@ fn main() {
                     .filter(|(k, _)| state.known_players.contains(k.as_str()))
                     .map(|(k, v)| format!("{k}={}", v.total_damage))
                     .collect();
-                let mobs: Vec<String> = state
-                    .mob_list
+                let mut mob_display = state.mob_list.clone();
+                mob_display.sort_unstable_by_key(|b| std::cmp::Reverse(b.last_seen));
+                let mobs: Vec<String> = mob_display
                     .iter()
                     .map(|m| {
                         let dead = if state.dead_mobs.contains(&m.name) {

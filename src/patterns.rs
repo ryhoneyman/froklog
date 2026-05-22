@@ -162,6 +162,56 @@ pub static RE_RESIST: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+// "You receive 6 platinum, 1 gold, 8 silver and 3 copper from the corpse."
+// "You receive 4 silver from the corpse."
+pub static RE_CURRENCY_CORPSE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^You receive (?P<amounts>.+?) from the corpse\.$").unwrap());
+
+// "--You have looted a Crystallized Sulfur from an abhorrent's corpse.--"
+pub static RE_LOOT_KEPT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^--You have looted (?P<item>.+?) from (?P<mob>.+?)'s corpse\.--$").unwrap()
+});
+
+// "You looted 4 Giant Bat Fur from a sonic bat's corpse and sold it for 8 silver and 4 copper."
+// "You looted a Bat Meat from a sonic bat's corpse and sold it for free."
+// Quantity prefix is optional; article ("a"/"an") stays as part of item name when absent.
+pub static RE_LOOT_SOLD: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^You looted (?:(?P<qty>\d+) )?(?P<item>.+?) from (?P<mob>.+?)'s corpse and sold it for (?P<price>.+?)\.$").unwrap()
+});
+
+// "You looted a Throwing Boulder +1 from a fire giant warrior's corpse and stored it in your Dragon Hoard"
+pub static RE_LOOT_HOARD: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^You looted (?P<item>.+?) from (?P<mob>.+?)'s corpse and stored it in your Dragon Hoard",
+    )
+    .unwrap()
+});
+
+// "You looted a Darkbrood Mask +1 from Innoruuk, the Prince of Hate's corpse to create a Darkbrood Mask +1"
+pub static RE_LOOT_ENHANCE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^You looted (?P<item>.+?) from (?P<mob>.+?)'s corpse to create ").unwrap()
+});
+
+static RE_CURRENCY_PARSE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(\d+)\s*(platinum|gold|silver|copper)").unwrap());
+
+/// Parse a currency string (e.g. "6 platinum, 1 gold, 8 silver and 3 copper" or
+/// "132 platinum 7 gold 5 silver 9 copper") into a total copper value.
+pub fn parse_copper(s: &str) -> u32 {
+    let mut total: u32 = 0;
+    for caps in RE_CURRENCY_PARSE.captures_iter(s) {
+        let n: u32 = caps[1].parse().unwrap_or(0);
+        let mult: u32 = match &caps[2] {
+            "platinum" => 1000,
+            "gold" => 100,
+            "silver" => 10,
+            _ => 1,
+        };
+        total = total.saturating_add(n.saturating_mul(mult));
+    }
+    total
+}
+
 // "/who" player listing: "[Level Class1 [Class2 [Class3]]] Name (Race)"
 // Matches 1–3 class names (space-separated) inside the brackets, then the player name.
 pub static RE_WHO: Lazy<Regex> = Lazy::new(|| {

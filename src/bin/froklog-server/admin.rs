@@ -25,6 +25,7 @@ struct SessionDisplay {
 
 struct StreamDisplay {
     stream_id: String,
+    game_id: String,
     view_token: String,
     connected: bool,
     public_stream: bool,
@@ -110,11 +111,12 @@ pub async fn admin_panel_handler(
             })
             .collect();
         flat.push((
-            info.game,
+            info.game.clone(),
             info.server,
             info.player_name,
             StreamDisplay {
                 stream_id: info.stream_id,
+                game_id: info.game,
                 view_token: info.view_token,
                 connected: info.connected,
                 public_stream: info.public_stream,
@@ -270,7 +272,11 @@ pub async fn admin_panel_handler(
                             "offline",
                         )
                     };
-                    let view_url = format!("/stream/{}?vtok={}", s.stream_id, s.view_token);
+                    let view_url = if s.public_stream {
+                        format!("/player/{}/{}/{}", s.game_id, server, player)
+                    } else {
+                        format!("/stream/{}?vtok={}", s.stream_id, s.view_token)
+                    };
                     let (public_badge, public_kw) = if s.public_stream {
                         (r#"<span class="pub-yes">&#10003; Yes</span>"#, "public")
                     } else {

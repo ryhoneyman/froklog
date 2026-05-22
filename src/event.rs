@@ -144,6 +144,28 @@ pub enum CombatEvent {
     /// Player logged in — emitted when "Welcome to EverQuest Legends!" is seen in the log.
     /// Used by the server to cut a new session boundary in the archive.
     Login { ts: u32 },
+    /// Currency looted from a corpse.  `mob` = mob-instance ID (0 if unattributed).
+    /// Amount is the total in copper (pp×1000 + gp×100 + sp×10 + cp).
+    CurrencyLoot { ts: u32, mob: u32, copper: u32 },
+    /// Item looted from a corpse and kept in inventory.
+    ItemLoot {
+        ts: u32,
+        mob: u32,
+        item: String,
+        qty: u32,
+    },
+    /// Item auto-sold directly from a corpse.  `copper` = sale price (0 = sold for free).
+    ItemSell {
+        ts: u32,
+        mob: u32,
+        item: String,
+        qty: u32,
+        copper: u32,
+    },
+    /// Item stored in Dragon Hoard from a corpse.
+    ItemHoard { ts: u32, mob: u32, item: String },
+    /// Item consumed to create an upgraded item (enchant/enhance loot).
+    ItemEnhance { ts: u32, mob: u32, item: String },
 }
 
 impl CombatEvent {
@@ -162,7 +184,12 @@ impl CombatEvent {
             | Self::Absorb { ts, .. }
             | Self::Resist { ts, .. }
             | Self::Who { ts, .. }
-            | Self::Login { ts } => *ts,
+            | Self::Login { ts }
+            | Self::CurrencyLoot { ts, .. }
+            | Self::ItemLoot { ts, .. }
+            | Self::ItemSell { ts, .. }
+            | Self::ItemHoard { ts, .. }
+            | Self::ItemEnhance { ts, .. } => *ts,
         }
     }
 }

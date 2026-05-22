@@ -111,8 +111,9 @@ async fn main() {
         Some(cfg.stream_password.clone())
     };
 
-    let data_dir: PathBuf = cfg.data_dir.clone().into();
+    let data_dir = config::resolve_data_dir(&cfg.data_dir, &cfg_path);
     std::fs::create_dir_all(&data_dir).expect("create data_dir");
+    info!("Stream data directory: {}", data_dir.display());
 
     let registry = new_registry(data_dir.clone());
 

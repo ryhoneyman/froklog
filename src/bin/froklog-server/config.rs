@@ -44,6 +44,38 @@ pub fn config_path() -> PathBuf {
         .join("froklog-server.toml")
 }
 
+/// If the binary lives inside a Cargo `target/<profile>/` directory, returns the
+/// project root (two levels up). Otherwise returns `None`.
+fn project_root_from_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let profile_dir = exe.parent()?; // e.g. …/target/debug
+    let target_dir = profile_dir.parent()?; // e.g. …/target
+    if target_dir.file_name()?.to_str()? != "target" {
+        return None;
+    }
+    target_dir.parent().map(Path::to_path_buf)
+}
+
+/// Resolve `data_dir` to an absolute `PathBuf`.
+///
+/// Absolute paths are returned unchanged. Relative paths are resolved against:
+///   1. The project root when the binary lives inside `target/<profile>/`
+///      (i.e. a `cargo run` / dev-build scenario), or
+///   2. The directory containing the config file.
+///
+/// This ensures streams survive `cargo clean` even when no explicit absolute
+/// path has been set in the config.
+pub fn resolve_data_dir(data_dir: &str, config_path: &Path) -> PathBuf {
+    let p = PathBuf::from(data_dir);
+    if p.is_absolute() {
+        return p;
+    }
+    let base = project_root_from_exe()
+        .or_else(|| config_path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join(p)
+}
+
 /// Load config from `path`, creating it with defaults if it does not exist.
 pub fn load_or_create(path: &Path) -> ServerConfig {
     if path.exists() {
@@ -69,7 +101,14 @@ pub fn load_or_create(path: &Path) -> ServerConfig {
         }
     }
 
-    let cfg = ServerConfig::default();
+    // Generate an absolute data_dir so newly-created configs don't store a
+    // relative path that depends on the working directory at runtime.
+    let cfg = ServerConfig {
+        data_dir: resolve_data_dir("streams", path)
+            .to_string_lossy()
+            .into_owned(),
+        ..Default::default()
+    };
     write_defaults(path, &cfg);
     cfg
 }

@@ -104,6 +104,13 @@ pub struct CombatState {
     /// ID of the mob instance most recently seen in a combat event.
     #[serde(skip)]
     pub active_mob_id: Option<u64>,
+    /// Mob-instance ID of the most recently slain mob, used to attribute
+    /// "from the corpse" currency lines that carry no mob name.
+    #[serde(skip)]
+    pub pending_loot_mob: Option<u32>,
+    /// EQ log timestamp (seconds) of the most recent slay event.
+    #[serde(skip)]
+    pub pending_loot_ts: u32,
 }
 
 impl CombatState {
