@@ -62,6 +62,8 @@ mod win {
     // Win32 control style constants (from WinUser.h / CommCtrl.h).
     const SS_LEFT: u32 = 0x0000_0000;
     const SS_RIGHT: u32 = 0x0000_0002;
+    const SS_ETCHEDHORZ: u32 = 0x0000_0010;
+    const EM_SETCUEBANNER: u32 = 0x1501;
     const BS_PUSHBUTTON: u32 = 0x0000_0000;
     const BS_DEFPUSHBUTTON: u32 = 0x0000_0001;
     const BS_AUTOCHECKBOX: u32 = 0x0000_0003;
@@ -198,8 +200,8 @@ mod win {
             };
             let _ = RegisterClassExW(&wc);
 
-            let w = 490i32;
-            let h = 430i32;
+            let w = 420i32;
+            let h = 380i32;
             let sw = GetSystemMetrics(SM_CXSCREEN);
             let sh = GetSystemMetrics(SM_CYSCREEN);
             let x = (sw - w) / 2;
@@ -562,16 +564,16 @@ mod win {
         let hi = HINSTANCE(hmodule.0);
         let font = GetStockObject(DEFAULT_GUI_FONT);
 
-        // Layout constants.
+        // Layout constants — window is 420 px wide with 12 px margins on both sides.
         let lx = 12i32; // label left
-        let lw = 86i32; // label width
-        let cx = 104i32; // control left
-        let cw = 264i32; // control width (full, no side button)
-        let cw2 = 188i32; // control width when a side button follows
-        let bx = 298i32; // side button left
-        let bw = 78i32; // side button width
+        let lw = 92i32; // label width
+        let cx = 110i32; // control left  (lx + lw + 6)
+        let cw = 298i32; // control width, full row
+        let cw2 = 212i32; // control width when a side button follows
+        let bx = 328i32; // side button left  (cx + cw2 + 6)
+        let bw = 80i32; // side button width  → right edge = 408, margin = 12
         let ch = 22i32; // control height
-        let row = 32i32; // row stride
+        let row = 30i32; // row stride (8 px gap between controls)
         let mut y = 12i32;
 
         // ── Game ─────────────────────────────────────────────────────────────
@@ -618,7 +620,19 @@ mod win {
             IDC_PLAYER_EDIT,
             0,
         );
+        {
+            let hint = wide("Auto from log filename");
+            SendMessageW(
+                state.edit_player,
+                EM_SETCUEBANNER,
+                WPARAM(1),
+                LPARAM(hint.as_ptr() as isize),
+            );
+        }
         y += row;
+
+        mk_separator(hwnd, hi, font, lx, y, bx + bw - lx);
+        y += 14;
 
         // ── Log File ─────────────────────────────────────────────────────────
         mk_label(hwnd, hi, font, "Log File:", lx, y, lw, ch);
@@ -652,6 +666,15 @@ mod win {
             0,
         );
         mk_button(hwnd, hi, font, "Test", bx, y, bw, ch, IDC_URL_TEST);
+        {
+            let hint = wide("https://server:8766");
+            SendMessageW(
+                state.edit_url,
+                EM_SETCUEBANNER,
+                WPARAM(1),
+                LPARAM(hint.as_ptr() as isize),
+            );
+        }
         y += row;
 
         // ── URL status ───────────────────────────────────────────────────────
@@ -662,12 +685,15 @@ mod win {
             "",
             cx,
             y,
-            cw + bw + (bx - cx - cw2),
+            bx + bw - cx, // full width from control column to right edge
             ch,
             IDC_URL_STATUS,
             SS_LEFT,
         );
-        y += 28i32;
+        y += 26i32;
+
+        mk_separator(hwnd, hi, font, lx, y, bx + bw - lx);
+        y += 14;
 
         // ── Stream ID ────────────────────────────────────────────────────────
         mk_label(hwnd, hi, font, "Stream ID:", lx, y, lw, ch);
@@ -850,6 +876,10 @@ mod win {
         .unwrap_or_default();
         SendMessageW(hwnd, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
         hwnd
+    }
+
+    unsafe fn mk_separator(parent: HWND, hi: HINSTANCE, font: HGDIOBJ, x: i32, y: i32, w: i32) {
+        mk_child(parent, hi, font, "STATIC", "", x, y, w, 2, 0, SS_ETCHEDHORZ);
     }
 
     #[allow(clippy::too_many_arguments)]
