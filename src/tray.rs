@@ -25,6 +25,7 @@ pub mod tray {
     const ID_TOGGLE_LOGGING: &str = "toggle_logging";
     const ID_SETTINGS: &str = "settings";
     const ID_COPY_VIEWER_URL: &str = "copy_viewer_url";
+    const ID_OPEN_VIEWER_URL: &str = "open_viewer_url";
     const ID_QUIT: &str = "quit";
 
     const TICK_SECS: u64 = 5;
@@ -73,7 +74,7 @@ pub mod tray {
         let event_loop: EventLoop<()> = EventLoop::builder().build().expect("event loop");
 
         let logging_on = handle.logging_enabled.load(Ordering::Relaxed);
-        let (tray, toggle_item, status_item, copy_url_item) =
+        let (tray, toggle_item, status_item, copy_url_item, open_url_item) =
             build_tray(&handle.config.lock().unwrap(), logging_on);
         #[allow(clippy::arc_with_non_send_sync)]
         let tray = Arc::new(Mutex::new(tray));
@@ -82,20 +83,23 @@ pub mod tray {
 
         let handle_clone = Arc::clone(&handle);
 
-        // Rate-tracking state for the periodic 5-second tick.
+        // Rate-tracking and connection state.
         let mut prev_count: u64 = 0;
         let mut prev_sample = Instant::now();
+        let mut prev_connected: bool = false;
         let mut next_tick = Instant::now() + Duration::from_secs(TICK_SECS);
+        let mut next_fast_check = Instant::now() + Duration::from_secs(1);
 
         #[allow(deprecated)]
         event_loop
             .run(move |event, elwt| {
-                elwt.set_control_flow(ControlFlow::WaitUntil(next_tick));
+                // Wake at 1-second boundary for fast connection-state checks.
+                elwt.set_control_flow(ControlFlow::WaitUntil(next_fast_check));
 
-                // ── Left-click: toggle logging ────────────────────────────────
-                // Match only Left+Up to avoid double-firing: every click produces
-                // both a Down and an Up event, and right-click (which opens the
-                // context menu) must not also toggle logging.
+                // ── Left-click: open Settings ─────────────────────────────────
+                // Match only Left+Up to avoid double-firing. Opening Settings is
+                // safer than toggling logging, which stops capture and is easy to
+                // trigger accidentally.
                 if let Ok(evt) = TrayIconEvent::receiver().try_recv() {
                     if matches!(
                         evt,
@@ -105,7 +109,9 @@ pub mod tray {
                             ..
                         }
                     ) {
-                        toggle_logging(&handle_clone, &tray, &toggle_item);
+                        if !handle_clone.settings_open.swap(true, Ordering::Relaxed) {
+                            crate::settings_win::open_settings(Arc::clone(&handle_clone));
+                        }
                     }
                 }
 
@@ -119,6 +125,12 @@ pub mod tray {
                             if !handle_clone.settings_open.swap(true, Ordering::Relaxed) =>
                         {
                             crate::settings_win::open_settings(Arc::clone(&handle_clone));
+                        }
+                        ID_OPEN_VIEWER_URL => {
+                            let url = handle_clone.config.lock().unwrap().stream_url();
+                            if let Some(url) = url {
+                                open_in_browser(&url);
+                            }
                         }
                         ID_COPY_VIEWER_URL => {
                             let url = handle_clone.config.lock().unwrap().stream_url();
@@ -134,8 +146,24 @@ pub mod tray {
                     }
                 }
 
-                // ── Periodic status tick ──────────────────────────────────────
+                // ── Connection fast-check (1 s) ───────────────────────────────
                 let now = Instant::now();
+                if now >= next_fast_check {
+                    next_fast_check = now + Duration::from_secs(1);
+                    let is_connected = handle_clone.connected.load(Ordering::Relaxed);
+                    if is_connected != prev_connected {
+                        prev_connected = is_connected;
+                        let logging_on = handle_clone.logging_enabled.load(Ordering::Relaxed);
+                        let cfg = handle_clone.config.lock().unwrap();
+                        let _ = tray.lock().unwrap().set_icon(Some(make_icon(
+                            &cfg,
+                            logging_on,
+                            is_connected,
+                        )));
+                    }
+                }
+
+                // ── Periodic status tick (5 s) ────────────────────────────────
                 if now >= next_tick {
                     let cur = handle_clone.events_sent.load(Ordering::Relaxed);
                     let elapsed = now.duration_since(prev_sample).as_secs_f64().max(0.001);
@@ -146,6 +174,7 @@ pub mod tray {
 
                     let logging_on = handle_clone.logging_enabled.load(Ordering::Relaxed);
                     let is_connected = handle_clone.connected.load(Ordering::Relaxed);
+                    prev_connected = is_connected;
                     let cfg = handle_clone.config.lock().unwrap();
                     let last_err = handle_clone
                         .last_connect_error
@@ -159,15 +188,21 @@ pub mod tray {
                         is_connected,
                         rate,
                     )));
+                    let _ = tray.lock().unwrap().set_icon(Some(make_icon(
+                        &cfg,
+                        logging_on,
+                        is_connected,
+                    )));
                     status_item.set_text(make_status_text(
                         logging_on,
                         is_connected,
                         &cfg,
                         last_err.as_deref(),
-                        cur,
                         rate,
                     ));
-                    copy_url_item.set_enabled(cfg.is_registered());
+                    let is_reg = cfg.is_registered();
+                    copy_url_item.set_enabled(is_reg);
+                    open_url_item.set_enabled(is_reg);
                 }
 
                 let _ = event;
@@ -197,8 +232,13 @@ pub mod tray {
             handle.restart.store(true, Ordering::Relaxed);
         }
 
+        let is_connected = handle.connected.load(Ordering::Relaxed);
         let tray_guard = tray.lock().unwrap();
-        let _ = tray_guard.set_icon(Some(make_icon(&handle.config.lock().unwrap(), now_on)));
+        let _ = tray_guard.set_icon(Some(make_icon(
+            &handle.config.lock().unwrap(),
+            now_on,
+            is_connected,
+        )));
         let _ = tray_guard.set_tooltip(Some(make_tooltip(&handle.config.lock().unwrap(), now_on)));
 
         let label = if now_on {
@@ -250,17 +290,40 @@ pub mod tray {
     #[cfg(not(target_os = "windows"))]
     fn copy_to_clipboard(_text: &str) {}
 
+    // ── Browser launch ────────────────────────────────────────────────────────
+
+    #[cfg(target_os = "windows")]
+    fn open_in_browser(url: &str) {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let url_w: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+        let op_w: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            ShellExecuteW(
+                None,
+                windows::core::PCWSTR(op_w.as_ptr()),
+                windows::core::PCWSTR(url_w.as_ptr()),
+                windows::core::PCWSTR::null(),
+                windows::core::PCWSTR::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn open_in_browser(_url: &str) {}
+
     // ── Tray construction ─────────────────────────────────────────────────────
 
     fn build_tray(
         cfg: &Config,
         logging_on: bool,
-    ) -> (tray_icon::TrayIcon, MenuItem, MenuItem, MenuItem) {
+    ) -> (tray_icon::TrayIcon, MenuItem, MenuItem, MenuItem, MenuItem) {
         let menu = Menu::new();
 
         let status_item = MenuItem::with_id(
             ID_STATUS,
-            make_status_text(logging_on, false, cfg, None, 0, 0),
+            make_status_text(logging_on, false, cfg, None, 0),
             false,
             None,
         );
@@ -272,12 +335,9 @@ pub mod tray {
         };
         let toggle_item = MenuItem::with_id(ID_TOGGLE_LOGGING, toggle_label, true, None);
         let settings_item = MenuItem::with_id(ID_SETTINGS, "Settings…", true, None);
-        let copy_url_item = MenuItem::with_id(
-            ID_COPY_VIEWER_URL,
-            "Copy Viewer URL",
-            cfg.is_registered(),
-            None,
-        );
+        let is_reg = cfg.is_registered();
+        let open_url_item = MenuItem::with_id(ID_OPEN_VIEWER_URL, "Open Viewer URL", is_reg, None);
+        let copy_url_item = MenuItem::with_id(ID_COPY_VIEWER_URL, "Copy Viewer URL", is_reg, None);
         let sep = PredefinedMenuItem::separator();
         let quit_item = MenuItem::with_id(ID_QUIT, "Quit", true, None);
 
@@ -285,6 +345,7 @@ pub mod tray {
         menu.append(&sep_status).unwrap();
         menu.append(&toggle_item).unwrap();
         menu.append(&settings_item).unwrap();
+        menu.append(&open_url_item).unwrap();
         menu.append(&copy_url_item).unwrap();
         menu.append(&sep).unwrap();
         menu.append(&quit_item).unwrap();
@@ -292,11 +353,11 @@ pub mod tray {
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip(make_tooltip(cfg, logging_on))
-            .with_icon(make_icon(cfg, logging_on))
+            .with_icon(make_icon(cfg, logging_on, false))
             .build()
             .expect("tray icon");
 
-        (tray, toggle_item, status_item, copy_url_item)
+        (tray, toggle_item, status_item, copy_url_item, open_url_item)
     }
 
     fn make_status_text(
@@ -304,7 +365,6 @@ pub mod tray {
         connected: bool,
         cfg: &crate::config::Config,
         last_err: Option<&str>,
-        count: u64,
         rate: u32,
     ) -> String {
         if !logging_on {
@@ -327,7 +387,7 @@ pub mod tray {
         } else {
             format!("{rate} ev/min")
         };
-        format!("Connected {count} ({rate_str})")
+        format!("Connected ({rate_str})")
     }
 
     fn make_tooltip(cfg: &Config, logging_on: bool) -> String {
@@ -361,7 +421,7 @@ pub mod tray {
         format!("froklog ● {log} — {activity}")
     }
 
-    fn make_icon(cfg: &Config, logging_on: bool) -> tray_icon::Icon {
+    fn make_icon(cfg: &Config, logging_on: bool, connected: bool) -> tray_icon::Icon {
         const GREEN: &[u8] = include_bytes!("../assets/froklog-green.png");
         const GRAY: &[u8] = include_bytes!("../assets/froklog-gray.png");
         const ORANGE: &[u8] = include_bytes!("../assets/froklog-orange.png");
@@ -369,12 +429,18 @@ pub mod tray {
 
         let bytes = if !logging_on {
             RED
-        } else if cfg.is_registered() {
-            GREEN
-        } else if cfg.log_path.is_some() {
+        } else if !cfg.is_registered() {
+            // Partially configured: orange if log chosen, gray if nothing set.
+            if cfg.log_path.is_some() {
+                ORANGE
+            } else {
+                GRAY
+            }
+        } else if !connected {
+            // Registered but WS link is down — show orange to signal reconnecting.
             ORANGE
         } else {
-            GRAY
+            GREEN
         };
 
         let img = image::load_from_memory(bytes)

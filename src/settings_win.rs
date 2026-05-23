@@ -24,14 +24,15 @@ mod win {
     use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetDlgItem, GetMessageW,
-        GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, LoadCursorW,
-        MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
-        SetWindowLongPtrW, SetWindowTextW, TranslateMessage, CB_ADDSTRING, CB_FINDSTRINGEXACT,
-        CB_GETCURSEL, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CREATESTRUCTW, GWLP_USERDATA,
-        HMENU, IDC_ARROW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG,
-        SM_CXSCREEN, SM_CYSCREEN, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
-        WM_CREATE, WM_DESTROY, WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
-        WS_EX_APPWINDOW, WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+        GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
+        IsDialogMessageW, LoadCursorW, MessageBoxW, PostMessageW, PostQuitMessage,
+        RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, TranslateMessage,
+        CB_ADDSTRING, CB_FINDSTRINGEXACT, CB_GETCURSEL, CB_GETLBTEXT, CB_GETLBTEXTLEN,
+        CB_SETCURSEL, CREATESTRUCTW, GWLP_USERDATA, HMENU, IDC_ARROW, MB_ICONERROR, MB_ICONWARNING,
+        MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG, SM_CXSCREEN, SM_CYSCREEN, WINDOW_EX_STYLE,
+        WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_SETFONT, WNDCLASSEXW,
+        WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW, WS_EX_DLGMODALFRAME, WS_OVERLAPPED,
+        WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
     };
 
     use crate::tray::tray::AppHandle;
@@ -52,6 +53,7 @@ mod win {
     const IDC_PUBLIC_CHECK: i32 = 112;
     const IDC_SAVE_BTN: i32 = 113;
     const IDC_CANCEL_BTN: i32 = 114;
+    const IDC_COPY_STREAMID: i32 = 115;
 
     // Async result messages posted from background threads.
     const WM_URL_TEST_DONE: u32 = WM_APP + 1;
@@ -61,11 +63,13 @@ mod win {
     const SS_LEFT: u32 = 0x0000_0000;
     const SS_RIGHT: u32 = 0x0000_0002;
     const BS_PUSHBUTTON: u32 = 0x0000_0000;
+    const BS_DEFPUSHBUTTON: u32 = 0x0000_0001;
     const BS_AUTOCHECKBOX: u32 = 0x0000_0003;
     const CBS_DROPDOWNLIST: u32 = 0x0000_0003;
     const CBS_HASSTRINGS: u32 = 0x0000_0200;
     const ES_AUTOHSCROLL: u32 = 0x0000_0080;
     const ES_READONLY: u32 = 0x0000_0800;
+    const ES_PASSWORD: u32 = 0x0000_0020;
     const BM_SETCHECK: u32 = 0x00F1;
     const BM_GETCHECK: u32 = 0x00F0;
     const BST_CHECKED: usize = 1;
@@ -112,6 +116,7 @@ mod win {
         lbl_streamid: HWND,
         edit_password: HWND,
         btn_register: HWND,
+        btn_copy_streamid: HWND,
         chk_public: HWND,
         // Initial draft values (loaded from config at open)
         draft_log_path: String,
@@ -153,6 +158,7 @@ mod win {
             lbl_streamid: HWND::default(),
             edit_password: HWND::default(),
             btn_register: HWND::default(),
+            btn_copy_streamid: HWND::default(),
             chk_public: HWND::default(),
             draft_log_path: cfg.log_path.clone().unwrap_or_default(),
             draft_server_url: cfg.server_url.clone().unwrap_or_default(),
@@ -200,7 +206,7 @@ mod win {
             let y = (sh - h) / 2;
 
             let title = wide("froklog Settings");
-            CreateWindowExW(
+            let hwnd = CreateWindowExW(
                 WS_EX_DLGMODALFRAME | WS_EX_APPWINDOW,
                 PCWSTR(class_w.as_ptr()),
                 PCWSTR(title.as_ptr()),
@@ -218,8 +224,12 @@ mod win {
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+                // IsDialogMessageW handles Tab focus cycling and routes Enter to
+                // the default push button (Save).
+                if !IsDialogMessageW(hwnd, &mut msg).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
         }
 
@@ -284,6 +294,7 @@ mod win {
                         state.stream_id_text = stream_id.clone();
                         set_wnd_text(state.lbl_streamid, &stream_id);
                         set_wnd_text(state.btn_register, "Unregister");
+                        let _ = EnableWindow(state.btn_copy_streamid, BOOL(1));
                         let mut cfg = state.handle.config.lock().unwrap();
                         cfg.stream_id = Some(stream_id);
                         cfg.stream_token = Some(stream_token);
@@ -334,12 +345,20 @@ mod win {
 
         if id == IDC_PLAYER_EDIT && notif == EN_CHANGE {
             state.player_user_set = true;
+            refresh_register_btn(state);
+        }
+        if id == IDC_URL_EDIT && notif == EN_CHANGE {
+            refresh_register_btn(state);
         }
         if id == IDC_SERVER_COMBO && notif == CBN_SELCHANGE {
             state.server_user_set = true;
         }
 
         match id {
+            IDC_COPY_STREAMID => {
+                copy_to_clipboard(&state.stream_id_text);
+            }
+
             IDC_LOGFILE_BROWSE => {
                 if let Some(path) = pick_log_file() {
                     set_wnd_text(state.edit_logfile, &path);
@@ -405,8 +424,10 @@ mod win {
                         drop(cfg);
                         state.handle.restart.store(true, Ordering::Relaxed);
                         state.is_registered = false;
+                        state.stream_id_text = String::new();
                         set_wnd_text(state.lbl_streamid, "Not registered");
                         set_wnd_text(state.btn_register, "Register");
+                        let _ = EnableWindow(state.btn_copy_streamid, BOOL(0));
                     }
                 } else {
                     let url = get_text(state.edit_url);
@@ -657,10 +678,16 @@ mod win {
             &state.stream_id_text.clone(),
             cx,
             y,
-            cw,
+            cw2,
             ch,
             IDC_STREAMID_VALUE,
             SS_LEFT,
+        );
+        state.btn_copy_streamid =
+            mk_button(hwnd, hi, font, "Copy ID", bx, y, bw, ch, IDC_COPY_STREAMID);
+        let _ = EnableWindow(
+            state.btn_copy_streamid,
+            BOOL(if state.is_registered { 1 } else { 0 }),
         );
         y += row;
 
@@ -676,7 +703,7 @@ mod win {
             cw,
             ch,
             IDC_PASSWORD_EDIT,
-            0,
+            ES_PASSWORD,
         );
         y += row;
 
@@ -725,7 +752,8 @@ mod win {
             ch,
             IDC_CANCEL_BTN,
         );
-        mk_button(
+        // BS_DEFPUSHBUTTON makes Enter key trigger Save from any control.
+        mk_default_button(
             hwnd,
             hi,
             font,
@@ -735,6 +763,55 @@ mod win {
             bw2,
             ch,
             IDC_SAVE_BTN,
+        );
+
+        // Set initial Register button state based on whether fields are filled.
+        refresh_register_btn(state);
+    }
+
+    // ── Clipboard ─────────────────────────────────────────────────────────────
+
+    fn copy_to_clipboard(text: &str) {
+        use windows::Win32::Foundation::{HANDLE, HWND};
+        use windows::Win32::System::DataExchange::{
+            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+        };
+        use windows::Win32::System::Memory::{
+            GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+        };
+        const CF_UNICODETEXT: u32 = 13;
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0u16)).collect();
+        let byte_count = wide.len() * 2;
+        unsafe {
+            let Ok(hglob) = GlobalAlloc(GMEM_MOVEABLE, byte_count) else {
+                return;
+            };
+            let ptr = GlobalLock(hglob) as *mut u16;
+            if ptr.is_null() {
+                return;
+            }
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+            let _ = GlobalUnlock(hglob);
+            if OpenClipboard(HWND::default()).is_err() {
+                return;
+            }
+            let _ = EmptyClipboard();
+            let _ = SetClipboardData(CF_UNICODETEXT, HANDLE(hglob.0));
+            let _ = CloseClipboard();
+        }
+    }
+
+    // ── Register button enable/disable ────────────────────────────────────────
+
+    unsafe fn refresh_register_btn(state: &SettingsState) {
+        if state.is_registered {
+            return; // always enabled so the user can unregister
+        }
+        let url_ok = GetWindowTextLengthW(state.edit_url) > 0;
+        let player_ok = GetWindowTextLengthW(state.edit_player) > 0;
+        let _ = EnableWindow(
+            state.btn_register,
+            BOOL(if url_ok && player_ok { 1 } else { 0 }),
         );
     }
 
@@ -881,6 +958,33 @@ mod win {
             h,
             id,
             BS_PUSHBUTTON | WS_TABSTOP.0,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn mk_default_button(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "BUTTON",
+            text,
+            x,
+            y,
+            w,
+            h,
+            id,
+            BS_DEFPUSHBUTTON | WS_TABSTOP.0,
         )
     }
 
