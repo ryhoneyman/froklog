@@ -113,6 +113,13 @@ pub struct CombatState {
     pub pending_loot_ts: u32,
 }
 
+// Sort a &HashMap<String, V> by value descending.
+fn sort_map_desc<V: Ord>(map: &HashMap<String, V>) -> Vec<(&str, &V)> {
+    let mut v: Vec<_> = map.iter().map(|(k, val)| (k.as_str(), val)).collect();
+    v.sort_unstable_by(|a, b| b.1.cmp(a.1));
+    v
+}
+
 impl CombatState {
     pub fn elapsed_secs(&self) -> f64 {
         match (self.fight_start, self.fight_end) {
@@ -138,28 +145,6 @@ impl CombatState {
             .filter(|(k, _)| !self.confirmed_mobs.contains(k.as_str()))
             .map(|(k, v)| (k.as_str(), v))
             .collect();
-        v.sort_by_key(|b| std::cmp::Reverse(b.1.total_damage));
-        v
-    }
-
-    /// Players sorted by damage dealt to a specific mob instance.
-    #[allow(dead_code)]
-    pub fn mob_players_by_damage(&self, mob_id: u64) -> Vec<(&str, &EntityCombatStats)> {
-        let Some(by_player) = self.mob_damage.get(&mob_id) else {
-            return vec![];
-        };
-        let mut v: Vec<_> = by_player.iter().map(|(k, v)| (k.as_str(), v)).collect();
-        v.sort_by_key(|b| std::cmp::Reverse(b.1.total_damage));
-        v
-    }
-
-    /// Players sorted by damage tanked from a specific mob instance.
-    #[allow(dead_code)]
-    pub fn mob_players_by_tanking(&self, mob_id: u64) -> Vec<(&str, &EntityCombatStats)> {
-        let Some(by_player) = self.mob_tanking.get(&mob_id) else {
-            return vec![];
-        };
-        let mut v: Vec<_> = by_player.iter().map(|(k, v)| (k.as_str(), v)).collect();
         v.sort_by_key(|b| std::cmp::Reverse(b.1.total_damage));
         v
     }
@@ -197,32 +182,14 @@ impl CombatState {
             .sorted_by_damage()
             .iter()
             .map(|(name, stats)| {
-                let by_type: Vec<Value> = {
-                    let mut rows: Vec<_> = stats.damage_by_type.iter().collect();
-                    rows.sort_by(|a, b| b.1.cmp(a.1));
-                    rows.iter()
-                        .map(|(t, &d)| {
-                            json!({
-                                "type": t,
-                                "damage": d,
-                                "dps": (d as f64 / elapsed).round() as u64,
-                            })
-                        })
-                        .collect()
-                };
-                let spells: Vec<Value> = {
-                    let mut rows: Vec<_> = stats.damage_by_spell.iter().collect();
-                    rows.sort_by(|a, b| b.1.cmp(a.1));
-                    rows.iter()
-                        .map(|(s, &d)| {
-                            json!({
-                                "spell": s,
-                                "damage": d,
-                                "dps": (d as f64 / elapsed).round() as u64,
-                            })
-                        })
-                        .collect()
-                };
+                let by_type: Vec<Value> = sort_map_desc(&stats.damage_by_type)
+                    .into_iter()
+                    .map(|(t, &d)| json!({ "type": t, "damage": d, "dps": (d as f64 / elapsed).round() as u64 }))
+                    .collect();
+                let spells: Vec<Value> = sort_map_desc(&stats.damage_by_spell)
+                    .into_iter()
+                    .map(|(s, &d)| json!({ "spell": s, "damage": d, "dps": (d as f64 / elapsed).round() as u64 }))
+                    .collect();
                 let classes = self.player_classes.get(*name).cloned().unwrap_or_default();
                 let class = classes.first().cloned().unwrap_or_default();
                 let level = self.player_levels.get(*name).copied().unwrap_or(0);
@@ -246,19 +213,10 @@ impl CombatState {
             .healers_sorted()
             .iter()
             .map(|(name, stats)| {
-                let heals_by_spell: Vec<Value> = {
-                    let mut rows: Vec<_> = stats.heals_by_spell.iter().collect();
-                    rows.sort_by(|a, b| b.1.cmp(a.1));
-                    rows.iter()
-                        .map(|(s, &h)| {
-                            json!({
-                                "spell": s,
-                                "healed": h,
-                                "hps": (h as f64 / elapsed).round() as u64,
-                            })
-                        })
-                        .collect()
-                };
+                let heals_by_spell: Vec<Value> = sort_map_desc(&stats.heals_by_spell)
+                    .into_iter()
+                    .map(|(s, &h)| json!({ "spell": s, "healed": h, "hps": (h as f64 / elapsed).round() as u64 }))
+                    .collect();
                 let classes = self.player_classes.get(*name).cloned().unwrap_or_default();
                 let class = classes.first().cloned().unwrap_or_default();
                 let level = self.player_levels.get(*name).copied().unwrap_or(0);
@@ -279,19 +237,10 @@ impl CombatState {
             .healees_sorted()
             .iter()
             .map(|(name, stats)| {
-                let healed_received_by_spell: Vec<Value> = {
-                    let mut rows: Vec<_> = stats.healed_received_by_spell.iter().collect();
-                    rows.sort_by(|a, b| b.1.cmp(a.1));
-                    rows.iter()
-                        .map(|(s, &h)| {
-                            json!({
-                                "spell": s,
-                                "healed": h,
-                                "hps": (h as f64 / elapsed).round() as u64,
-                            })
-                        })
-                        .collect()
-                };
+                let healed_received_by_spell: Vec<Value> = sort_map_desc(&stats.healed_received_by_spell)
+                    .into_iter()
+                    .map(|(s, &h)| json!({ "spell": s, "healed": h, "hps": (h as f64 / elapsed).round() as u64 }))
+                    .collect();
                 let classes = self.player_classes.get(*name).cloned().unwrap_or_default();
                 let class = classes.first().cloned().unwrap_or_default();
                 let level = self.player_levels.get(*name).copied().unwrap_or(0);
@@ -308,8 +257,14 @@ impl CombatState {
             .collect();
 
         // ── Mob list (confirmed only, most-recently-seen first) ──
-        let mob_list: Vec<Value> = self.mob_list.iter()
+        let mut mob_list_sorted: Vec<&MobSighting> = self
+            .mob_list
+            .iter()
             .filter(|m| self.confirmed_mobs.contains(&m.name))
+            .collect();
+        mob_list_sorted.sort_unstable_by_key(|m| std::cmp::Reverse(m.last_seen));
+        let mob_list: Vec<Value> = mob_list_sorted.iter()
+            .copied()
             .map(|m| {
                 let secs_since_last = m.last_seen.elapsed().as_secs_f64();
                 let timed_out = secs_since_last >= 15.0;
@@ -348,35 +303,15 @@ impl CombatState {
                 let arr: Vec<Value> = players
                     .iter()
                     .map(|(player, stats)| {
-                        let by_type: Vec<Value> = {
-                            let mut rows: Vec<_> = stats.damage_by_type.iter().collect();
-                            rows.sort_by(|a, b| b.1.cmp(a.1));
-                            rows.iter()
-                                .map(|(t, &d)| {
-                                    json!({
-                                        "type": t, "damage": d,
-                                        "dps": (d as f64 / elapsed).round() as u64,
-                                    })
-                                })
-                                .collect()
-                        };
-                        let spells: Vec<Value> = {
-                            let mut rows: Vec<_> = stats.damage_by_spell.iter().collect();
-                            rows.sort_by(|a, b| b.1.cmp(a.1));
-                            rows.iter()
-                                .map(|(s, &d)| {
-                                    json!({
-                                        "spell": s, "damage": d,
-                                        "dps": (d as f64 / elapsed).round() as u64,
-                                    })
-                                })
-                                .collect()
-                        };
-                        let classes = self
-                            .player_classes
-                            .get(*player)
-                            .cloned()
-                            .unwrap_or_default();
+                        let by_type: Vec<Value> = sort_map_desc(&stats.damage_by_type)
+                            .into_iter()
+                            .map(|(t, &d)| json!({ "type": t, "damage": d, "dps": (d as f64 / elapsed).round() as u64 }))
+                            .collect();
+                        let spells: Vec<Value> = sort_map_desc(&stats.damage_by_spell)
+                            .into_iter()
+                            .map(|(s, &d)| json!({ "spell": s, "damage": d, "dps": (d as f64 / elapsed).round() as u64 }))
+                            .collect();
+                        let classes = self.player_classes.get(*player).cloned().unwrap_or_default();
                         let class = classes.first().cloned().unwrap_or_default();
                         let level = self.player_levels.get(*player).copied().unwrap_or(0);
                         json!({
@@ -400,35 +335,23 @@ impl CombatState {
         let mob_tanking: Value = {
             let mut map = serde_json::Map::new();
             for (mob_id, by_player) in &self.mob_tanking {
-                let mut players: Vec<_> = by_player.iter().collect();
+                let mut players: Vec<_> = by_player
+                    .iter()
+                    .filter(|(p, _)| !self.confirmed_mobs.contains(p.as_str()))
+                    .collect();
                 players.sort_by_key(|b| std::cmp::Reverse(b.1.total_damage));
                 let arr: Vec<Value> = players
                     .iter()
                     .map(|(player, stats)| {
-                        let by_type: Vec<Value> = {
-                            let mut rows: Vec<_> = stats.damage_by_type.iter().collect();
-                            rows.sort_by(|a, b| b.1.cmp(a.1));
-                            rows.iter()
-                                .map(|(t, &d)| {
-                                    json!({
-                                        "type": t, "damage": d,
-                                        "dps": (d as f64 / elapsed).round() as u64,
-                                    })
-                                })
-                                .collect()
-                        };
-                        let avoidance: Vec<Value> = {
-                            let mut rows: Vec<_> = stats.avoidance_by_type.iter().collect();
-                            rows.sort_by(|a, b| b.1.cmp(a.1));
-                            rows.iter()
-                                .map(|(t, &c)| json!({ "type": t, "count": c }))
-                                .collect()
-                        };
-                        let classes = self
-                            .player_classes
-                            .get(*player)
-                            .cloned()
-                            .unwrap_or_default();
+                        let by_type: Vec<Value> = sort_map_desc(&stats.damage_by_type)
+                            .into_iter()
+                            .map(|(t, &d)| json!({ "type": t, "damage": d, "dps": (d as f64 / elapsed).round() as u64 }))
+                            .collect();
+                        let avoidance: Vec<Value> = sort_map_desc(&stats.avoidance_by_type)
+                            .into_iter()
+                            .map(|(t, &c)| json!({ "type": t, "count": c }))
+                            .collect();
+                        let classes = self.player_classes.get(*player).cloned().unwrap_or_default();
                         let class = classes.first().cloned().unwrap_or_default();
                         let level = self.player_levels.get(*player).copied().unwrap_or(0);
                         json!({
@@ -457,23 +380,11 @@ impl CombatState {
                 let arr: Vec<Value> = healers
                     .iter()
                     .map(|(healer, stats)| {
-                        let heals_by_spell: Vec<Value> = {
-                            let mut rows: Vec<_> = stats.heals_by_spell.iter().collect();
-                            rows.sort_by(|a, b| b.1.cmp(a.1));
-                            rows.iter()
-                                .map(|(s, &h)| {
-                                    json!({
-                                        "spell": s, "healed": h,
-                                        "hps": (h as f64 / elapsed).round() as u64,
-                                    })
-                                })
-                                .collect()
-                        };
-                        let classes = self
-                            .player_classes
-                            .get(*healer)
-                            .cloned()
-                            .unwrap_or_default();
+                        let heals_by_spell: Vec<Value> = sort_map_desc(&stats.heals_by_spell)
+                            .into_iter()
+                            .map(|(s, &h)| json!({ "spell": s, "healed": h, "hps": (h as f64 / elapsed).round() as u64 }))
+                            .collect();
+                        let classes = self.player_classes.get(*healer).cloned().unwrap_or_default();
                         let class = classes.first().cloned().unwrap_or_default();
                         let level = self.player_levels.get(*healer).copied().unwrap_or(0);
                         json!({
@@ -493,44 +404,42 @@ impl CombatState {
         };
 
         // ── Per-mob-instance heals received during encounter ──
-        let mob_healed: Value =
-            {
-                let mut map = serde_json::Map::new();
-                for (mob_id, by_healee) in &self.mob_healed {
-                    let mut healees: Vec<_> = by_healee.iter().collect();
-                    healees.sort_by_key(|b| std::cmp::Reverse(b.1.total_healed_received));
-                    let arr: Vec<Value> = healees.iter().map(|(healee, stats)| {
-                    let healed_received_by_spell: Vec<Value> = {
-                        let mut rows: Vec<_> = stats.healed_received_by_spell.iter().collect();
-                        rows.sort_by(|a, b| b.1.cmp(a.1));
-                        rows.iter().map(|(s, &h)| json!({
-                            "spell": s, "healed": h,
-                            "hps": (h as f64 / elapsed).round() as u64,
-                        })).collect()
-                    };
-                    let classes = self.player_classes.get(*healee).cloned().unwrap_or_default();
-                    let class  = classes.first().cloned().unwrap_or_default();
-                    let level = self.player_levels.get(*healee).copied().unwrap_or(0);
-                    json!({
-                        "name": *healee,
-                        "class": class,
-                        "classes": classes,
-                        "level": level,
-                        "total_healed_received": stats.total_healed_received,
-                        "hps": (stats.total_healed_received as f64 / elapsed).round() as u64,
-                        "healed_received_by_spell": healed_received_by_spell,
-                    })
-                }).collect();
-                    map.insert(mob_id.to_string(), Value::Array(arr));
-                }
-                Value::Object(map)
-            };
+        let mob_healed: Value = {
+            let mut map = serde_json::Map::new();
+            for (mob_id, by_healee) in &self.mob_healed {
+                let mut healees: Vec<_> = by_healee.iter().collect();
+                healees.sort_by_key(|b| std::cmp::Reverse(b.1.total_healed_received));
+                let arr: Vec<Value> = healees.iter().map(|(healee, stats)| {
+                        let healed_received_by_spell: Vec<Value> = sort_map_desc(&stats.healed_received_by_spell)
+                            .into_iter()
+                            .map(|(s, &h)| json!({ "spell": s, "healed": h, "hps": (h as f64 / elapsed).round() as u64 }))
+                            .collect();
+                        let classes = self.player_classes.get(*healee).cloned().unwrap_or_default();
+                        let class = classes.first().cloned().unwrap_or_default();
+                        let level = self.player_levels.get(*healee).copied().unwrap_or(0);
+                        json!({
+                            "name": *healee,
+                            "class": class,
+                            "classes": classes,
+                            "level": level,
+                            "total_healed_received": stats.total_healed_received,
+                            "hps": (stats.total_healed_received as f64 / elapsed).round() as u64,
+                            "healed_received_by_spell": healed_received_by_spell,
+                        })
+                    }).collect();
+                map.insert(mob_id.to_string(), Value::Array(arr));
+            }
+            Value::Object(map)
+        };
 
         // ── Global aggregate tanking (across all mob instances) ──
         let tanked: Vec<Value> = {
             let mut agg: HashMap<String, EntityCombatStats> = HashMap::new();
             for by_player in self.mob_tanking.values() {
                 for (player, stats) in by_player {
+                    if self.confirmed_mobs.contains(player.as_str()) {
+                        continue;
+                    }
                     let e = agg.entry(player.clone()).or_default();
                     e.total_damage += stats.total_damage;
                     for (k, v) in &stats.damage_by_type {
@@ -545,30 +454,15 @@ impl CombatState {
             v.sort_by_key(|b| std::cmp::Reverse(b.1.total_damage));
             v.iter()
                 .map(|(name, stats)| {
-                    let by_type: Vec<Value> = {
-                        let mut rows: Vec<_> = stats.damage_by_type.iter().collect();
-                        rows.sort_by(|a, b| b.1.cmp(a.1));
-                        rows.iter()
-                            .map(|(t, &d)| {
-                                json!({
-                                    "type": t, "damage": d,
-                                    "dps": (d as f64 / elapsed).round() as u64,
-                                })
-                            })
-                            .collect()
-                    };
-                    let avoidance: Vec<Value> = {
-                        let mut rows: Vec<_> = stats.avoidance_by_type.iter().collect();
-                        rows.sort_by(|a, b| b.1.cmp(a.1));
-                        rows.iter()
-                            .map(|(t, &c)| json!({ "type": t, "count": c }))
-                            .collect()
-                    };
-                    let classes = self
-                        .player_classes
-                        .get(name.as_str())
-                        .cloned()
-                        .unwrap_or_default();
+                    let by_type: Vec<Value> = sort_map_desc(&stats.damage_by_type)
+                        .into_iter()
+                        .map(|(t, &d)| json!({ "type": t, "damage": d, "dps": (d as f64 / elapsed).round() as u64 }))
+                        .collect();
+                    let avoidance: Vec<Value> = sort_map_desc(&stats.avoidance_by_type)
+                        .into_iter()
+                        .map(|(t, &c)| json!({ "type": t, "count": c }))
+                        .collect();
+                    let classes = self.player_classes.get(name.as_str()).cloned().unwrap_or_default();
                     let class = classes.first().cloned().unwrap_or_default();
                     let level = self.player_levels.get(name.as_str()).copied().unwrap_or(0);
                     json!({
@@ -601,14 +495,13 @@ impl CombatState {
                     sb.cmp(&sa)
                 });
                 v.iter().map(|(name, stats)| {
-                let by_spell: Vec<Value> = {
-                    let mut rows: Vec<_> = stats.resists_by_spell.iter().collect();
-                    rows.sort_by(|a, b| b.1.cmp(a.1));
-                    rows.iter().map(|(s, &c)| json!({ "spell": s, "count": c })).collect()
-                };
-                let total: u64 = stats.resists_by_spell.values().sum();
-                json!({ "name": name, "total_resists": total, "resists_by_spell": by_spell })
-            }).collect()
+                    let by_spell: Vec<Value> = sort_map_desc(&stats.resists_by_spell)
+                        .into_iter()
+                        .map(|(s, &c)| json!({ "spell": s, "count": c }))
+                        .collect();
+                    let total: u64 = stats.resists_by_spell.values().sum();
+                    json!({ "name": name, "total_resists": total, "resists_by_spell": by_spell })
+                }).collect()
             };
 
         // ── Active casts (entries older than 10 s are dropped) ──
@@ -785,36 +678,6 @@ mod tests {
         let sorted = state.healees_sorted();
         assert_eq!(sorted.len(), 2);
         assert_eq!(sorted[0].1.total_healed_received, 8000);
-    }
-
-    // ── mob_players_by_damage / mob_players_by_tanking ────────────────────────────
-    #[test]
-    fn mob_players_by_damage_empty() {
-        assert!(CombatState::default().mob_players_by_damage(0).is_empty());
-    }
-    #[test]
-    fn mob_players_by_damage_sorted() {
-        let mut state = CombatState::default();
-        let p1 = EntityCombatStats {
-            total_damage: 1000,
-            ..Default::default()
-        };
-        let p2 = EntityCombatStats {
-            total_damage: 3000,
-            ..Default::default()
-        };
-        let mut by_player = HashMap::new();
-        by_player.insert("Rysk".to_owned(), p1);
-        by_player.insert("Talodar".to_owned(), p2);
-        state.mob_damage.insert(42, by_player);
-        let sorted = state.mob_players_by_damage(42);
-        assert_eq!(sorted.len(), 2);
-        assert_eq!(sorted[0].0, "Talodar");
-        assert_eq!(sorted[0].1.total_damage, 3000);
-    }
-    #[test]
-    fn mob_players_by_tanking_empty() {
-        assert!(CombatState::default().mob_players_by_tanking(99).is_empty());
     }
 
     // ── to_api_json ───────────────────────────────────────────────────────────────

@@ -183,19 +183,21 @@ pub fn run(
                     state.confirmed_mobs.insert(src.clone());
                 }
                 let mob_id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state
-                    .mob_tanking
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(tgt.clone())
-                    .or_default();
-                tank.total_damage += dmg;
-                *tank.damage_by_type.entry("hit".to_owned()).or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let tank = state
+                        .mob_tanking
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(tgt.clone())
+                        .or_default();
+                    tank.total_damage += dmg;
+                    *tank.damage_by_type.entry("hit".to_owned()).or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Spell {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src,
                         tgt,
                         dmg: dmg as u32,
@@ -219,19 +221,21 @@ pub fn run(
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state
-                    .mob_damage
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(src.clone())
-                    .or_default();
-                mob_p.total_damage += dmg;
-                *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let mob_p = state
+                        .mob_damage
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(src.clone())
+                        .or_default();
+                    mob_p.total_damage += dmg;
+                    *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Spell {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src,
                         tgt,
                         dmg: dmg as u32,
@@ -271,19 +275,21 @@ pub fn run(
             if src_is_mob {
                 // Tanking: mob (src) damages player (tgt)
                 let mob_id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state
-                    .mob_tanking
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(tgt.clone())
-                    .or_default();
-                tank.total_damage += dmg;
-                *tank.damage_by_type.entry(typ.clone()).or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let tank = state
+                        .mob_tanking
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(tgt.clone())
+                        .or_default();
+                    tank.total_damage += dmg;
+                    *tank.damage_by_type.entry(typ.clone()).or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Melee {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src: src.clone(),
                         tgt,
                         dmg: dmg as u32,
@@ -310,19 +316,21 @@ pub fn run(
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state
-                    .mob_damage
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(src.clone())
-                    .or_default();
-                mob_p.total_damage += dmg;
-                *mob_p.damage_by_type.entry(typ.clone()).or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let mob_p = state
+                        .mob_damage
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(src.clone())
+                        .or_default();
+                    mob_p.total_damage += dmg;
+                    *mob_p.damage_by_type.entry(typ.clone()).or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Melee {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src,
                         tgt,
                         dmg: dmg as u32,
@@ -372,19 +380,21 @@ pub fn run(
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state
-                    .mob_damage
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(src.clone())
-                    .or_default();
-                mob_p.total_damage += dmg;
-                *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let mob_p = state
+                        .mob_damage
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(src.clone())
+                        .or_default();
+                    mob_p.total_damage += dmg;
+                    *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Spell {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src,
                         tgt,
                         dmg: dmg as u32,
@@ -428,19 +438,21 @@ pub fn run(
 
                     track_mob_candidate(&mut mob_candidates, tgt.clone(), &caster);
                     let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                    let mob_p = state
-                        .mob_damage
-                        .entry(mob_id)
-                        .or_default()
-                        .entry(caster.clone())
-                        .or_default();
-                    mob_p.total_damage += dmg;
-                    *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+                    if let Some(mob_id) = mob_id {
+                        let mob_p = state
+                            .mob_damage
+                            .entry(mob_id)
+                            .or_default()
+                            .entry(caster.clone())
+                            .or_default();
+                        mob_p.total_damage += dmg;
+                        *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+                    }
                     emit(
                         &event_tx,
                         CombatEvent::Spell {
                             ts: current_ts,
-                            mob: mob_id as u32,
+                            mob: mob_id.unwrap_or(0) as u32,
                             src: caster,
                             tgt,
                             dmg: dmg as u32,
@@ -475,20 +487,22 @@ pub fn run(
 
             track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
             let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-            let mob_p = state
-                .mob_damage
-                .entry(mob_id)
-                .or_default()
-                .entry(src.clone())
-                .or_default();
-            mob_p.total_damage += dmg;
-            *mob_p.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
-            *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+            if let Some(mob_id) = mob_id {
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
+                mob_p.total_damage += dmg;
+                *mob_p.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
+                *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+            }
             emit(
                 &event_tx,
                 CombatEvent::Dot {
                     ts: current_ts,
-                    mob: mob_id as u32,
+                    mob: mob_id.unwrap_or(0) as u32,
                     src,
                     tgt,
                     dmg: dmg as u32,
@@ -517,19 +531,21 @@ pub fn run(
                     state.confirmed_mobs.insert(src.clone());
                 }
                 let mob_id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state
-                    .mob_tanking
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(tgt.clone())
-                    .or_default();
-                tank.total_damage += dmg;
-                *tank.damage_by_type.entry("riposte".to_owned()).or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let tank = state
+                        .mob_tanking
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(tgt.clone())
+                        .or_default();
+                    tank.total_damage += dmg;
+                    *tank.damage_by_type.entry("riposte".to_owned()).or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Spell {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src,
                         tgt,
                         dmg: dmg as u32,
@@ -552,22 +568,24 @@ pub fn run(
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state
-                    .mob_damage
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(src.clone())
-                    .or_default();
-                mob_p.total_damage += dmg;
-                *mob_p
-                    .damage_by_type
-                    .entry("riposte".to_owned())
-                    .or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let mob_p = state
+                        .mob_damage
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(src.clone())
+                        .or_default();
+                    mob_p.total_damage += dmg;
+                    *mob_p
+                        .damage_by_type
+                        .entry("riposte".to_owned())
+                        .or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Rip {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src,
                         tgt,
                         dmg: dmg as u32,
@@ -596,19 +614,21 @@ pub fn run(
                     state.confirmed_mobs.insert(src.clone());
                 }
                 let mob_id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state
-                    .mob_tanking
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(tgt.clone())
-                    .or_default();
-                tank.total_damage += dmg;
-                *tank.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let tank = state
+                        .mob_tanking
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(tgt.clone())
+                        .or_default();
+                    tank.total_damage += dmg;
+                    *tank.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Spell {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src,
                         tgt,
                         dmg: dmg as u32,
@@ -625,19 +645,21 @@ pub fn run(
 
                 track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                 let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                let mob_p = state
-                    .mob_damage
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(src.clone())
-                    .or_default();
-                mob_p.total_damage += dmg;
-                *mob_p.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
+                if let Some(mob_id) = mob_id {
+                    let mob_p = state
+                        .mob_damage
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(src.clone())
+                        .or_default();
+                    mob_p.total_damage += dmg;
+                    *mob_p.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
+                }
                 emit(
                     &event_tx,
                     CombatEvent::Ds {
                         ts: current_ts,
-                        mob: mob_id as u32,
+                        mob: mob_id.unwrap_or(0) as u32,
                         src,
                         tgt,
                         dmg: dmg as u32,
@@ -665,20 +687,22 @@ pub fn run(
 
             track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
             let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-            let mob_p = state
-                .mob_damage
-                .entry(mob_id)
-                .or_default()
-                .entry(src.clone())
-                .or_default();
-            mob_p.total_damage += dmg;
-            *mob_p.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
+            if let Some(mob_id) = mob_id {
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
+                mob_p.total_damage += dmg;
+                *mob_p.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
+            }
 
             emit(
                 &event_tx,
                 CombatEvent::Ds {
                     ts: current_ts,
-                    mob: mob_id as u32,
+                    mob: mob_id.unwrap_or(0) as u32,
                     src,
                     tgt,
                     dmg: dmg as u32,
@@ -751,14 +775,7 @@ pub fn run(
         } else if let Some(caps) = RE_LOOT_KEPT.captures(line) {
             let item = caps["item"].to_owned();
             let mob_name = normalize_article_case(&caps["mob"]);
-            let mob = state
-                .mob_list
-                .iter()
-                .rev()
-                .find(|m| m.name == mob_name)
-                .map(|m| m.id as u32)
-                .or(state.pending_loot_mob)
-                .unwrap_or(0);
+            let mob = resolve_loot_mob(&mut state, &mob_name, current_ts);
             emit(
                 &event_tx,
                 CombatEvent::ItemLoot {
@@ -783,14 +800,7 @@ pub fn run(
             } else {
                 parse_copper(price_str)
             };
-            let mob = state
-                .mob_list
-                .iter()
-                .rev()
-                .find(|m| m.name == mob_name)
-                .map(|m| m.id as u32)
-                .or(state.pending_loot_mob)
-                .unwrap_or(0);
+            let mob = resolve_loot_mob(&mut state, &mob_name, current_ts);
             emit(
                 &event_tx,
                 CombatEvent::ItemSell {
@@ -806,14 +816,7 @@ pub fn run(
         } else if let Some(caps) = RE_LOOT_HOARD.captures(line) {
             let item = caps["item"].to_owned();
             let mob_name = normalize_article_case(&caps["mob"]);
-            let mob = state
-                .mob_list
-                .iter()
-                .rev()
-                .find(|m| m.name == mob_name)
-                .map(|m| m.id as u32)
-                .or(state.pending_loot_mob)
-                .unwrap_or(0);
+            let mob = resolve_loot_mob(&mut state, &mob_name, current_ts);
             emit(
                 &event_tx,
                 CombatEvent::ItemHoard {
@@ -827,14 +830,7 @@ pub fn run(
         } else if let Some(caps) = RE_LOOT_ENHANCE.captures(line) {
             let item = caps["item"].to_owned();
             let mob_name = normalize_article_case(&caps["mob"]);
-            let mob = state
-                .mob_list
-                .iter()
-                .rev()
-                .find(|m| m.name == mob_name)
-                .map(|m| m.id as u32)
-                .or(state.pending_loot_mob)
-                .unwrap_or(0);
+            let mob = resolve_loot_mob(&mut state, &mob_name, current_ts);
             emit(
                 &event_tx,
                 CombatEvent::ItemEnhance {
@@ -887,19 +883,21 @@ pub fn run(
                         state.confirmed_mobs.insert(src.clone());
                     }
                     let mob_id = update_mob_list(&mut state, &src, current_ts);
-                    let tank = state
-                        .mob_tanking
-                        .entry(mob_id)
-                        .or_default()
-                        .entry(tgt.clone())
-                        .or_default();
-                    tank.total_damage += dmg;
-                    *tank.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
+                    if let Some(mob_id) = mob_id {
+                        let tank = state
+                            .mob_tanking
+                            .entry(mob_id)
+                            .or_default()
+                            .entry(tgt.clone())
+                            .or_default();
+                        tank.total_damage += dmg;
+                        *tank.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
+                    }
                     emit(
                         &event_tx,
                         CombatEvent::Spell {
                             ts: current_ts,
-                            mob: mob_id as u32,
+                            mob: mob_id.unwrap_or(0) as u32,
                             src,
                             tgt,
                             dmg: dmg as u32,
@@ -924,20 +922,22 @@ pub fn run(
 
                     track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
                     let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-                    let mob_p = state
-                        .mob_damage
-                        .entry(mob_id)
-                        .or_default()
-                        .entry(src.clone())
-                        .or_default();
-                    mob_p.total_damage += dmg;
-                    *mob_p.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
-                    *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+                    if let Some(mob_id) = mob_id {
+                        let mob_p = state
+                            .mob_damage
+                            .entry(mob_id)
+                            .or_default()
+                            .entry(src.clone())
+                            .or_default();
+                        mob_p.total_damage += dmg;
+                        *mob_p.damage_by_type.entry("dot".to_owned()).or_default() += dmg;
+                        *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+                    }
                     emit(
                         &event_tx,
                         CombatEvent::Dot {
                             ts: current_ts,
-                            mob: mob_id as u32,
+                            mob: mob_id.unwrap_or(0) as u32,
                             src,
                             tgt,
                             dmg: dmg as u32,
@@ -976,19 +976,21 @@ pub fn run(
 
             track_mob_candidate(&mut mob_candidates, tgt.clone(), &src);
             let mob_id = update_mob_list(&mut state, &tgt, current_ts);
-            let mob_p = state
-                .mob_damage
-                .entry(mob_id)
-                .or_default()
-                .entry(src.clone())
-                .or_default();
-            mob_p.total_damage += dmg;
-            *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+            if let Some(mob_id) = mob_id {
+                let mob_p = state
+                    .mob_damage
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(src.clone())
+                    .or_default();
+                mob_p.total_damage += dmg;
+                *mob_p.damage_by_spell.entry(spell.clone()).or_default() += dmg;
+            }
             emit(
                 &event_tx,
                 CombatEvent::Spell {
                     ts: current_ts,
-                    mob: mob_id as u32,
+                    mob: mob_id.unwrap_or(0) as u32,
                     src,
                     tgt,
                     dmg: dmg as u32,
@@ -1018,19 +1020,21 @@ pub fn run(
                 || state.confirmed_mobs.contains(&src)
                 || state.known_players.contains(tgt.as_str())
                 || tgt == player_name;
-            let mob_id = if src_is_mob {
+            let mob_id: u64 = if src_is_mob {
                 if !state.known_players.contains(&src) {
                     state.confirmed_mobs.insert(src.clone());
                 }
                 let id = update_mob_list(&mut state, &src, current_ts);
-                let tank = state
-                    .mob_tanking
-                    .entry(id)
-                    .or_default()
-                    .entry(tgt.clone())
-                    .or_default();
-                *tank.avoidance_by_type.entry(miss_type.clone()).or_default() += 1;
-                id
+                if let Some(id) = id {
+                    let tank = state
+                        .mob_tanking
+                        .entry(id)
+                        .or_default()
+                        .entry(tgt.clone())
+                        .or_default();
+                    *tank.avoidance_by_type.entry(miss_type.clone()).or_default() += 1;
+                }
+                id.unwrap_or(0)
             } else {
                 state.active_mob_id.unwrap_or(0)
             };
@@ -1249,17 +1253,20 @@ fn handle_slay(
     );
 }
 
-fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> u64 {
-    // Corpses ("X's corpse") are dead mobs and must never enter the mob list.
+/// Returns `Some(id)` when `tgt` is a real mob, `None` when it's a corpse or a known player.
+/// Callers must skip `mob_damage`/`mob_tanking` updates on `None`; they may still emit
+/// events using `mob: 0`.
+fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> Option<u64> {
+    // Corpses ("X's corpse") must never enter the mob list.
     if tgt.ends_with("'s corpse") {
-        return state.active_mob_id.unwrap_or(u64::MAX);
+        return None;
     }
     // If this entity is a known player (has dealt damage), never add it to the mob list,
     // and remove it if it somehow got there. Use known_players rather than entities
     // because entities is also populated by mob healers.
     if state.known_players.contains(tgt) {
         state.mob_list.retain(|m| m.name != tgt);
-        return state.active_mob_id.unwrap_or(u64::MAX);
+        return None;
     }
 
     let now = Instant::now();
@@ -1271,31 +1278,21 @@ fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> u64 {
     // "encounter".  Clear the dead flag so the new sighting renders as alive.
     let was_dead = state.dead_mobs.remove(tgt);
 
-    let id = if !was_dead {
-        if let Some(s) = state
-            .mob_list
-            .iter_mut()
-            .find(|m| m.name == tgt && now.duration_since(m.last_seen) < GAP)
-        {
-            s.last_seen = now;
-            if log_ts != 0 {
-                s.last_log_ts = log_ts;
+    let id = 'find: {
+        if !was_dead {
+            if let Some(s) = state
+                .mob_list
+                .iter_mut()
+                .find(|m| m.name == tgt && now.duration_since(m.last_seen) < GAP)
+            {
+                s.last_seen = now;
+                if log_ts != 0 {
+                    s.last_log_ts = log_ts;
+                }
+                break 'find s.id;
             }
-            s.id
-        } else {
-            let id = state.next_mob_id;
-            state.next_mob_id += 1;
-            state.mob_list.push(MobSighting {
-                id,
-                name: tgt.to_owned(),
-                first_seen: now,
-                last_seen: now,
-                first_log_ts: log_ts,
-                last_log_ts: log_ts,
-            });
-            id
         }
-    } else {
+        // New instance: either mob was dead, or no recent sighting found.
         let id = state.next_mob_id;
         state.next_mob_id += 1;
         state.mob_list.push(MobSighting {
@@ -1309,15 +1306,29 @@ fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> u64 {
         id
     };
 
-    state
-        .mob_list
-        .sort_unstable_by_key(|b| std::cmp::Reverse(b.last_seen));
     state.active_mob_id = Some(id);
-    id
+    Some(id)
 }
 
 fn entity_stats<'a>(state: &'a mut CombatState, name: &str) -> &'a mut EntityCombatStats {
     state.entities.entry(name.to_owned()).or_default()
+}
+
+/// Resolve the mob-instance ID for a loot event. Prefers a name-matched sighting in
+/// mob_list (most recently inserted wins), falls back to pending_loot_mob if the
+/// pending attribution is still fresh (< 120 s old).
+fn resolve_loot_mob(state: &mut CombatState, mob_name: &str, current_ts: u32) -> u32 {
+    if current_ts != 0 && current_ts.saturating_sub(state.pending_loot_ts) > 120 {
+        state.pending_loot_mob = None;
+    }
+    state
+        .mob_list
+        .iter()
+        .rev()
+        .find(|m| m.name == mob_name)
+        .map(|m| m.id as u32)
+        .or(state.pending_loot_mob)
+        .unwrap_or(0)
 }
 
 fn track_mob_candidate(candidates: &mut HashMap<String, HashSet<String>>, tgt: String, src: &str) {

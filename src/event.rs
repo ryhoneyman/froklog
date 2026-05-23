@@ -195,21 +195,22 @@ impl CombatEvent {
 }
 
 #[cfg(test)]
+fn melee_event(ts: u32) -> CombatEvent {
+    CombatEvent::Melee {
+        ts,
+        mob: 0,
+        src: "A".into(),
+        tgt: "B".into(),
+        dmg: 10,
+        typ: "slash".into(),
+        tank: false,
+        mods: 0,
+    }
+}
+
+#[cfg(test)]
 mod batch_tests {
     use super::*;
-
-    fn melee(ts: u32) -> CombatEvent {
-        CombatEvent::Melee {
-            ts,
-            mob: 0,
-            src: "A".into(),
-            tgt: "B".into(),
-            dmg: 10,
-            typ: "slash".into(),
-            tank: false,
-            mods: 0,
-        }
-    }
 
     #[test]
     fn max_log_ts_empty() {
@@ -227,7 +228,7 @@ mod batch_tests {
         assert_eq!(
             EventBatch {
                 seq: 0,
-                events: vec![melee(100)]
+                events: vec![melee_event(100)]
             }
             .max_log_ts(),
             Some(100)
@@ -237,7 +238,7 @@ mod batch_tests {
     fn max_log_ts_multiple() {
         let batch = EventBatch {
             seq: 1,
-            events: vec![melee(100), melee(300), melee(200)],
+            events: vec![melee_event(100), melee_event(300), melee_event(200)],
         };
         assert_eq!(batch.max_log_ts(), Some(300));
     }
@@ -247,22 +248,9 @@ mod batch_tests {
 mod ts_tests {
     use super::*;
 
-    fn melee(ts: u32) -> CombatEvent {
-        CombatEvent::Melee {
-            ts,
-            mob: 0,
-            src: "A".into(),
-            tgt: "B".into(),
-            dmg: 10,
-            typ: "slash".into(),
-            tank: false,
-            mods: 0,
-        }
-    }
-
     #[test]
     fn ts_melee() {
-        assert_eq!(melee(100).ts(), 100);
+        assert_eq!(melee_event(100).ts(), 100);
     }
     #[test]
     fn ts_spell() {

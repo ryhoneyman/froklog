@@ -369,6 +369,21 @@ pub async fn admin_panel_handler(
 
     // Script lives outside the format! template to avoid escaping every brace.
     let script = r#"<script>
+let _autoRefreshTimer = null;
+function setAutoRefresh(on) {
+    clearInterval(_autoRefreshTimer);
+    const btn = document.getElementById('auto-refresh-btn');
+    if (on) {
+        _autoRefreshTimer = setInterval(() => location.reload(), 30000);
+        btn.textContent = 'Auto-refresh: ON';
+        btn.style.color = '#a6e3a1';
+        sessionStorage.setItem('adminAutoRefresh', '1');
+    } else {
+        btn.textContent = 'Auto-refresh: OFF';
+        btn.style.color = '';
+        sessionStorage.removeItem('adminAutoRefresh');
+    }
+}
 const collapsed = {};
 const expandedStreams = {};
 function updateVisibility() {
@@ -466,6 +481,7 @@ async function deleteStream(id) {
 }
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('search').addEventListener('input', updateVisibility);
+    if (sessionStorage.getItem('adminAutoRefresh')) setAutoRefresh(true);
 });
 </script>"#;
 
@@ -539,8 +555,9 @@ tr.session-row:hover td{{background:#1a1a2a}}
     <h1>froklog <span>admin</span></h1>
     <p class="count" id="count-line" data-full="{total_streams} stream(s) across {total_players} player(s)">{total_streams} stream(s) across {total_players} player(s)</p>
   </div>
-  <div>
+  <div style="display:flex;align-items:center;gap:.6rem">
     <input type="search" id="search" placeholder="Filter by player, server, stream ID, live, recorded, public&#8230;" autocomplete="off" spellcheck="false">
+    <button id="auto-refresh-btn" onclick="setAutoRefresh(!_autoRefreshTimer)" style="background:#1e1e2e;color:#6c7086;border:1px solid #45475a;border-radius:6px;padding:.45rem .8rem;font-size:.85rem;cursor:pointer;white-space:nowrap;font-family:inherit">Auto-refresh: OFF</button>
   </div>
 </div>
 <table>
@@ -607,4 +624,5 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }

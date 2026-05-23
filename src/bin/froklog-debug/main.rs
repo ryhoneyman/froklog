@@ -127,16 +127,18 @@ struct MobInstance {
 
 // ── Display helpers ───────────────────────────────────────────────────────────
 
-fn update_mob_list(state: &mut DebugState, tgt: &str) -> (u64, bool) {
-    // Corpses ("X's corpse") are dead mobs and must never enter the mob list.
+/// Returns `(Some(id), is_new)` for real mobs, `(None, false)` for corpses/known-players.
+/// Callers must skip mob_damage/mob_tanking updates on None.
+fn update_mob_list(state: &mut DebugState, tgt: &str) -> (Option<u64>, bool) {
+    // Corpses ("X's corpse") must never enter the mob list.
     if tgt.ends_with("'s corpse") {
-        return (state.active_mob_id.unwrap_or(u64::MAX), false);
+        return (None, false);
     }
     // Use known_players (damage-dealers only) to decide if tgt is a player.
     // entities is also populated by mob healers and cannot be used here.
     if state.known_players.contains(tgt) {
         state.mob_list.retain(|m| m.name != tgt);
-        return (state.active_mob_id.unwrap_or(u64::MAX), false);
+        return (None, false);
     }
 
     const GAP: Duration = Duration::from_secs(15);
@@ -146,25 +148,17 @@ fn update_mob_list(state: &mut DebugState, tgt: &str) -> (u64, bool) {
     // even if it re-appears within the 15-second gap window.
     let was_dead = state.dead_mobs.remove(tgt);
 
-    let (id, is_new) = if !was_dead {
-        if let Some(s) = state
-            .mob_list
-            .iter_mut()
-            .find(|m| m.name == tgt && now.duration_since(m.last_seen) < GAP)
-        {
-            s.last_seen = now;
-            (s.id, false)
-        } else {
-            let id = state.next_mob_id;
-            state.next_mob_id += 1;
-            state.mob_list.push(MobInstance {
-                id,
-                name: tgt.to_owned(),
-                last_seen: now,
-            });
-            (id, true)
+    let (id, is_new) = 'find: {
+        if !was_dead {
+            if let Some(s) = state
+                .mob_list
+                .iter_mut()
+                .find(|m| m.name == tgt && now.duration_since(m.last_seen) < GAP)
+            {
+                s.last_seen = now;
+                break 'find (s.id, false);
+            }
         }
-    } else {
         let id = state.next_mob_id;
         state.next_mob_id += 1;
         state.mob_list.push(MobInstance {
@@ -176,7 +170,7 @@ fn update_mob_list(state: &mut DebugState, tgt: &str) -> (u64, bool) {
     };
 
     state.active_mob_id = Some(id);
-    (id, is_new)
+    (Some(id), is_new)
 }
 
 fn track_mob_candidate(state: &mut DebugState, tgt: String, src: &str) -> bool {
@@ -331,7 +325,8 @@ fn main() {
                         format!("{src:?} is in known_players — skipping confirmed_mobs.insert")
                     );
                 }
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &src);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
@@ -378,7 +373,8 @@ fn main() {
                         format!("{tgt:?} tracked as mob candidate (attacked by {src:?})")
                     );
                 }
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
@@ -440,7 +436,8 @@ fn main() {
                     src.contains(' '), state.confirmed_mobs.contains(&src),
                     state.mob_candidates.contains_key(src.as_str()),
                     state.known_players.contains(tgt.as_str())));
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &src);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
@@ -498,7 +495,8 @@ fn main() {
                         format!("{tgt:?} tracked as mob candidate (attacked by {src:?})")
                     );
                 }
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
@@ -582,7 +580,8 @@ fn main() {
                         format!("{tgt:?} tracked as mob candidate (proc from {src:?})")
                     );
                 }
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
@@ -686,7 +685,8 @@ fn main() {
                             )
                         );
                     }
-                    let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+                    let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+                    let mob_id = mob_id_opt.unwrap_or(0);
                     if is_new_instance {
                         t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                     } else {
@@ -756,7 +756,8 @@ fn main() {
                     format!("{tgt:?} tracked as mob candidate (DoT'd by {src:?})")
                 );
             }
-            let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+            let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+            let mob_id = mob_id_opt.unwrap_or(0);
             if is_new_instance {
                 t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
             } else {
@@ -821,7 +822,8 @@ fn main() {
                         t!("CONFIRM", format!("mob confirmed: {src:?}"));
                     }
                 }
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &src);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
@@ -866,7 +868,8 @@ fn main() {
                     format!("entities[{src:?}].total_damage += {dmg} (riposte)")
                 );
 
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
@@ -932,7 +935,8 @@ fn main() {
                         t!("CONFIRM", format!("mob confirmed: {src:?}"));
                     }
                 }
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &src);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
@@ -980,7 +984,8 @@ fn main() {
                         format!("{tgt:?} tracked as mob candidate (DS'd by {src:?})")
                     );
                 }
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                 } else {
@@ -1054,7 +1059,8 @@ fn main() {
                     format!("{tgt:?} tracked as mob candidate (DS proc from {src:?})")
                 );
             }
-            let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+            let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+            let mob_id = mob_id_opt.unwrap_or(0);
             if is_new_instance {
                 t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
             } else {
@@ -1123,7 +1129,8 @@ fn main() {
                         t!("CONFIRM", format!("mob confirmed: {src:?}"));
                     }
                 }
-                let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
+                let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &src);
+                let mob_id = mob_id_opt.unwrap_or(0);
                 if is_new_instance {
                     t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                 } else {
@@ -1418,7 +1425,8 @@ fn main() {
                             t!("CONFIRM", format!("mob confirmed: {src:?}"));
                         }
                     }
-                    let (mob_id, is_new_instance) = update_mob_list(&mut state, &src);
+                    let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &src);
+                    let mob_id = mob_id_opt.unwrap_or(0);
                     if is_new_instance {
                         t!("NEW", format!("mob instance #{mob_id} created for {src:?}"));
                     } else {
@@ -1463,7 +1471,8 @@ fn main() {
                     if is_new_candidate {
                         t!("TRACK", format!("{tgt:?} tracked as mob candidate"));
                     }
-                    let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+                    let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+                    let mob_id = mob_id_opt.unwrap_or(0);
                     if is_new_instance {
                         t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
                     } else {
@@ -1535,7 +1544,8 @@ fn main() {
                     format!("{tgt:?} tracked as mob candidate (extra dmg from {src:?})")
                 );
             }
-            let (mob_id, is_new_instance) = update_mob_list(&mut state, &tgt);
+            let (mob_id_opt, is_new_instance) = update_mob_list(&mut state, &tgt);
+            let mob_id = mob_id_opt.unwrap_or(0);
             if is_new_instance {
                 t!("NEW", format!("mob instance #{mob_id} created for {tgt:?}"));
             } else {
