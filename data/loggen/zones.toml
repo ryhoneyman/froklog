@@ -1,0 +1,581 @@
+# ── Loot tables ───────────────────────────────────────────────────────────────
+
+[[loot_tables]]
+id = "hate_common"
+[[loot_tables.entries]]
+item = "Sapphire Necklace +3"
+sell_value = 13270
+keep_chance = 15
+enhanceable = false
+[[loot_tables.entries]]
+item = "Ruby Crown +4"
+sell_value = 15170
+keep_chance = 20
+enhanceable = false
+[[loot_tables.entries]]
+item = "Star Ruby Earring +3"
+sell_value = 9480
+keep_chance = 15
+enhanceable = false
+[[loot_tables.entries]]
+item = "Shrieking Ahlspiess +4"
+sell_value = 25000
+keep_chance = 70
+enhanceable = true
+[[loot_tables.entries]]
+item = "Mace of the Shadowed Soul +3"
+sell_value = 18000
+keep_chance = 65
+enhanceable = true
+[[loot_tables.entries]]
+item = "Darkbrood Mask +2"
+sell_value = 12000
+keep_chance = 55
+enhanceable = true
+[[loot_tables.entries]]
+item = "Crystallized Sulfur"
+sell_value = 620
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Rune of Rathe"
+sell_value = 1240
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Diamond"
+sell_value = 15170
+keep_chance = 0
+enhanceable = false
+
+[[loot_tables]]
+id = "karnors_common"
+[[loot_tables.entries]]
+item = "Dusty Tome"
+sell_value = 800
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Drolvarg Paw"
+sell_value = 400
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Blade of the Black Dragon Eye +3"
+sell_value = 22000
+keep_chance = 60
+enhanceable = true
+[[loot_tables.entries]]
+item = "Holgresh Elder Beads +2"
+sell_value = 16000
+keep_chance = 50
+enhanceable = true
+[[loot_tables.entries]]
+item = "Crystallized Sulfur"
+sell_value = 620
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Rune of Impetus"
+sell_value = 2480
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Star Ruby"
+sell_value = 8200
+keep_chance = 0
+enhanceable = false
+
+[[loot_tables]]
+id = "burning_common"
+[[loot_tables.entries]]
+item = "Giant Bat Fur"
+sell_value = 84
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Fire Goblin Blood"
+sell_value = 120
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Goblin Skin Drum"
+sell_value = 1500
+keep_chance = 5
+enhanceable = false
+[[loot_tables.entries]]
+item = "Serpentine Bracer +2"
+sell_value = 14000
+keep_chance = 55
+enhanceable = true
+[[loot_tables.entries]]
+item = "Lava Spider Carapace"
+sell_value = 300
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Jacinth"
+sell_value = 11370
+keep_chance = 0
+enhanceable = false
+
+[[loot_tables]]
+id = "velk_common"
+[[loot_tables.entries]]
+item = "Velium Gem Dusted Rune"
+sell_value = 2870
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Velium Chunk"
+sell_value = 350
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Crystalline Blade +3"
+sell_value = 20000
+keep_chance = 60
+enhanceable = true
+[[loot_tables.entries]]
+item = "Frost Giant Hide Armor +2"
+sell_value = 15000
+keep_chance = 45
+enhanceable = true
+[[loot_tables.entries]]
+item = "Diamond"
+sell_value = 15170
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Rune of Frost"
+sell_value = 2480
+keep_chance = 0
+enhanceable = false
+
+[[loot_tables]]
+id = "mist_common"
+[[loot_tables.entries]]
+item = "Spectral Parchment"
+sell_value = 900
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Words of Bondage"
+sell_value = 1214
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Mist Golem Fragment"
+sell_value = 450
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Shroud of the Spiroc +3"
+sell_value = 19000
+keep_chance = 55
+enhanceable = true
+[[loot_tables.entries]]
+item = "Nilitim's Grimoire Pg. 449"
+sell_value = 910
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Jacinth"
+sell_value = 11370
+keep_chance = 0
+enhanceable = false
+
+[[loot_tables]]
+id = "seb_common"
+[[loot_tables.entries]]
+item = "Sebilite Scale"
+sell_value = 280
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Iksar Hide"
+sell_value = 160
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Warlord's Medallion +3"
+sell_value = 21000
+keep_chance = 60
+enhanceable = true
+[[loot_tables.entries]]
+item = "Swiftclaw Sash +2"
+sell_value = 17500
+keep_chance = 50
+enhanceable = true
+[[loot_tables.entries]]
+item = "Ancient Sebilite Fragment"
+sell_value = 550
+keep_chance = 0
+enhanceable = false
+[[loot_tables.entries]]
+item = "Emerald"
+sell_value = 9800
+keep_chance = 0
+enhanceable = false
+
+# ── Zones ─────────────────────────────────────────────────────────────────────
+
+[[zones]]
+key = "hateplane"
+name = "The Plane of Hate"
+vendor = "Tonsia"
+min_level = 46
+
+[[zones.mobs]]
+article = "an"
+name = "abhorrent"
+hp_lo = 4000
+hp_hi = 7000
+dmg_lo = 90
+dmg_hi = 220
+attack_delay = 3
+spells = ["Barrier of Combustion", "Feedback"]
+loot_table = "hate_common"
+
+[[zones.mobs]]
+article = "a"
+name = "forsaken revenant"
+hp_lo = 5000
+hp_hi = 8500
+dmg_lo = 100
+dmg_hi = 240
+attack_delay = 3
+spells = ["Celerity", "Barrier of Combustion", "Steelskin", "Feedback"]
+loot_table = "hate_common"
+
+[[zones.mobs]]
+article = "an"
+name = "ire ghast"
+hp_lo = 4500
+hp_hi = 7500
+dmg_lo = 80
+dmg_hi = 200
+attack_delay = 2
+spells = ["Shock of Spikes", "Feedback"]
+loot_table = "hate_common"
+
+[[zones.mobs]]
+article = "a"
+name = "haunted chest"
+hp_lo = 3000
+hp_hi = 5000
+dmg_lo = 70
+dmg_hi = 170
+attack_delay = 3
+spells = ["Shield of Spikes"]
+loot_table = "hate_common"
+
+[[zones.mobs]]
+article = "a"
+name = "spite golem"
+hp_lo = 6000
+hp_hi = 10000
+dmg_lo = 120
+dmg_hi = 280
+attack_delay = 3
+spells = ["Barrier of Combustion", "Celerity", "Steelskin"]
+loot_table = "hate_common"
+
+[[zones.mobs]]
+article = "a"
+name = "Cleric of Innoruuk"
+hp_lo = 8000
+hp_hi = 14000
+dmg_lo = 120
+dmg_hi = 280
+attack_delay = 3
+spells = ["Celerity", "Barrier of Combustion", "Feedback", "Inner Fire"]
+loot_table = "hate_common"
+
+# ── Karnor's Castle ───────────────────────────────────────────────────────────
+
+[[zones]]
+key = "karnors"
+name = "Karnor's Castle"
+vendor = "Franlor"
+
+[[zones.mobs]]
+article = "a"
+name = "drolvarg warlord"
+hp_lo = 5000
+hp_hi = 9000
+dmg_lo = 110
+dmg_hi = 250
+attack_delay = 3
+spells = ["Howl of Despair", "Barrier of Combustion"]
+loot_table = "karnors_common"
+
+[[zones.mobs]]
+article = "a"
+name = "drolvarg"
+hp_lo = 3500
+hp_hi = 6000
+dmg_lo = 80
+dmg_hi = 190
+attack_delay = 3
+spells = []
+loot_table = "karnors_common"
+
+[[zones.mobs]]
+article = "a"
+name = "rotting skeleton"
+hp_lo = 2500
+hp_hi = 4500
+dmg_lo = 60
+dmg_hi = 160
+attack_delay = 2
+spells = ["Fear", "Drain Spirit"]
+loot_table = "karnors_common"
+
+[[zones.mobs]]
+article = "a"
+name = "skeleton knight"
+hp_lo = 3000
+hp_hi = 5500
+dmg_lo = 75
+dmg_hi = 180
+attack_delay = 3
+spells = ["Fear"]
+loot_table = "karnors_common"
+
+[[zones.mobs]]
+article = "a"
+name = "vampire"
+hp_lo = 4500
+hp_hi = 7500
+dmg_lo = 90
+dmg_hi = 220
+attack_delay = 3
+spells = ["Drain Spirit", "Fear"]
+loot_table = "karnors_common"
+
+# ── Burning Woods ─────────────────────────────────────────────────────────────
+
+[[zones]]
+key = "burning"
+name = "Burning Woods"
+vendor = "Kembal"
+
+[[zones.mobs]]
+article = "a"
+name = "sonic bat"
+hp_lo = 2000
+hp_hi = 4000
+dmg_lo = 55
+dmg_hi = 140
+attack_delay = 2
+spells = ["Sonic Scream"]
+loot_table = "burning_common"
+
+[[zones.mobs]]
+article = "a"
+name = "fire goblin wizard"
+hp_lo = 3000
+hp_hi = 5000
+dmg_lo = 65
+dmg_hi = 150
+attack_delay = 3
+spells = ["Instill", "Cinder Bolt"]
+loot_table = "burning_common"
+
+[[zones.mobs]]
+article = "a"
+name = "greater kobold"
+hp_lo = 2500
+hp_hi = 4500
+dmg_lo = 60
+dmg_hi = 150
+attack_delay = 3
+spells = []
+loot_table = "burning_common"
+
+[[zones.mobs]]
+article = "a"
+name = "greater kobold shaman"
+hp_lo = 3000
+hp_hi = 5500
+dmg_lo = 60
+dmg_hi = 140
+attack_delay = 3
+spells = ["Inner Fire", "Spirit of Wolf"]
+loot_table = "burning_common"
+
+[[zones.mobs]]
+article = "a"
+name = "lava spider"
+hp_lo = 3000
+hp_hi = 5500
+dmg_lo = 70
+dmg_hi = 175
+attack_delay = 2
+spells = ["Lava Breath"]
+loot_table = "burning_common"
+
+# ── Velketor's Labyrinth ──────────────────────────────────────────────────────
+
+[[zones]]
+key = "velk"
+name = "Velketor's Labyrinth"
+vendor = "Seralynn"
+
+[[zones.mobs]]
+article = "a"
+name = "frost giant warrior"
+hp_lo = 8000
+hp_hi = 14000
+dmg_lo = 150
+dmg_hi = 340
+attack_delay = 4
+spells = ["Avalanche"]
+loot_table = "velk_common"
+
+[[zones.mobs]]
+article = "a"
+name = "crystal spider"
+hp_lo = 3000
+hp_hi = 5500
+dmg_lo = 70
+dmg_hi = 175
+attack_delay = 2
+spells = ["Crystal Spray"]
+loot_table = "velk_common"
+
+[[zones.mobs]]
+article = "a"
+name = "crystal gargoyle"
+hp_lo = 4500
+hp_hi = 8000
+dmg_lo = 100
+dmg_hi = 235
+attack_delay = 3
+spells = []
+loot_table = "velk_common"
+
+[[zones.mobs]]
+article = "a"
+name = "goblin skier"
+hp_lo = 2500
+hp_hi = 4500
+dmg_lo = 55
+dmg_hi = 145
+attack_delay = 3
+spells = []
+loot_table = "velk_common"
+
+# ── City of Mist ──────────────────────────────────────────────────────────────
+
+[[zones]]
+key = "mist"
+name = "City of Mist"
+vendor = "Vastex"
+
+[[zones.mobs]]
+article = "a"
+name = "spectral courier"
+hp_lo = 3000
+hp_hi = 5500
+dmg_lo = 70
+dmg_hi = 170
+attack_delay = 2
+spells = ["Fear", "Gather Shadows"]
+loot_table = "mist_common"
+
+[[zones.mobs]]
+article = "a"
+name = "reanimated hand"
+hp_lo = 2500
+hp_hi = 4500
+dmg_lo = 60
+dmg_hi = 155
+attack_delay = 2
+spells = []
+loot_table = "mist_common"
+
+[[zones.mobs]]
+article = "a"
+name = "mist golem"
+hp_lo = 5000
+hp_hi = 9000
+dmg_lo = 110
+dmg_hi = 265
+attack_delay = 3
+spells = ["Barrier of Combustion", "Shock of Swords"]
+loot_table = "mist_common"
+
+[[zones.mobs]]
+article = "a"
+name = "mist leech"
+hp_lo = 2000
+hp_hi = 3500
+dmg_lo = 45
+dmg_hi = 130
+attack_delay = 2
+spells = ["Drain Spirit"]
+loot_table = "mist_common"
+
+# ── Sebilis ───────────────────────────────────────────────────────────────────
+
+[[zones]]
+key = "seb"
+name = "Old Sebilis"
+vendor = "Valthek"
+
+[[zones.mobs]]
+article = "a"
+name = "froglok knight"
+hp_lo = 5000
+hp_hi = 9000
+dmg_lo = 110
+dmg_hi = 255
+attack_delay = 3
+spells = ["Stun", "Fear"]
+loot_table = "seb_common"
+
+[[zones.mobs]]
+article = "a"
+name = "froglok wizard"
+hp_lo = 3500
+hp_hi = 6000
+dmg_lo = 65
+dmg_hi = 155
+attack_delay = 3
+spells = ["Ice Comet", "Concussion"]
+loot_table = "seb_common"
+
+[[zones.mobs]]
+article = "a"
+name = "froglok necromancer"
+hp_lo = 3500
+hp_hi = 6500
+dmg_lo = 60
+dmg_hi = 150
+attack_delay = 3
+spells = ["Drain Spirit", "Ignite Bones"]
+loot_table = "seb_common"
+
+[[zones.mobs]]
+article = "a"
+name = "froglok shaman"
+hp_lo = 4000
+hp_hi = 7000
+dmg_lo = 70
+dmg_hi = 170
+attack_delay = 3
+spells = ["Spirit of Wolf", "Inner Fire", "Turgur's Insects"]
+loot_table = "seb_common"
+
+[[zones.mobs]]
+article = "a"
+name = "Sebilite golem"
+hp_lo = 6000
+hp_hi = 11000
+dmg_lo = 130
+dmg_hi = 300
+attack_delay = 4
+spells = ["Barrier of Combustion"]
+loot_table = "seb_common"

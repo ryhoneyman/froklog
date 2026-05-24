@@ -1,0 +1,214 @@
+# Weapons and armor used for combat flavor text and loot table expansion.
+# classes: list of class names that can equip this item (empty = all)
+# slot values: MainHand, OffHand, TwoHand, Bow, Chest, Head, Legs, Arms, Feet, Hands, Waist, Wrist, Ear, Neck, Ring, Back, Shoulders
+
+# ── Weapons ───────────────────────────────────────────────────────────────────
+
+[[weapons]]
+name = "Mithril 2H Sword"
+slot = "TwoHand"
+dmg_lo = 90
+dmg_hi = 210
+delay = 40
+classes = ["Warrior", "Paladin", "Shadowknight"]
+lore = false
+
+[[weapons]]
+name = "Shimmering Falchion"
+slot = "MainHand"
+dmg_lo = 55
+dmg_hi = 140
+delay = 28
+classes = ["Warrior", "Paladin", "Shadowknight", "Ranger"]
+lore = false
+
+[[weapons]]
+name = "Cobalt Shortsword"
+slot = "MainHand"
+dmg_lo = 48
+dmg_hi = 120
+delay = 24
+classes = ["Warrior", "Paladin", "Shadowknight", "Ranger", "Bard"]
+lore = false
+
+[[weapons]]
+name = "Bone Blade of the Iksar"
+slot = "MainHand"
+dmg_lo = 58
+dmg_hi = 150
+delay = 28
+classes = ["Warrior", "Shadowknight"]
+lore = true
+
+[[weapons]]
+name = "Velium Battle Axe"
+slot = "TwoHand"
+dmg_lo = 85
+dmg_hi = 200
+delay = 38
+classes = ["Warrior"]
+lore = false
+
+[[weapons]]
+name = "Jade Mace"
+slot = "MainHand"
+dmg_lo = 40
+dmg_hi = 100
+delay = 28
+classes = ["Cleric", "Paladin", "Shaman"]
+lore = false
+
+[[weapons]]
+name = "Flowing Black Silk Sash +3"
+slot = "Waist"
+dmg_lo = 0
+dmg_hi = 0
+delay = 0
+classes = []
+lore = false
+
+[[weapons]]
+name = "Rogue's Blade of the Sly"
+slot = "MainHand"
+dmg_lo = 38
+dmg_hi = 95
+delay = 20
+classes = ["Rogue"]
+lore = false
+
+[[weapons]]
+name = "Sarnak Battle Shield"
+slot = "OffHand"
+dmg_lo = 10
+dmg_hi = 30
+delay = 0
+classes = ["Warrior", "Paladin", "Shadowknight", "Cleric"]
+lore = false
+
+[[weapons]]
+name = "Ancient Elm Longbow"
+slot = "Bow"
+dmg_lo = 50
+dmg_hi = 130
+delay = 40
+classes = ["Ranger"]
+lore = false
+
+[[weapons]]
+name = "Staff of the Four"
+slot = "TwoHand"
+dmg_lo = 35
+dmg_hi = 90
+delay = 30
+classes = ["Monk", "Druid"]
+lore = false
+
+[[weapons]]
+name = "Wu's Quivering Staff"
+slot = "TwoHand"
+dmg_lo = 40
+dmg_hi = 110
+delay = 28
+classes = ["Monk"]
+lore = false
+
+[[weapons]]
+name = "Etched Black Staff"
+slot = "TwoHand"
+dmg_lo = 38
+dmg_hi = 95
+delay = 32
+classes = ["Necromancer", "Wizard", "Magician", "Enchanter"]
+lore = false
+
+[[weapons]]
+name = "Velium Crystalline Dagger"
+slot = "MainHand"
+dmg_lo = 42
+dmg_hi = 105
+delay = 22
+classes = ["Rogue", "Bard", "Ranger"]
+lore = false
+
+[[weapons]]
+name = "Drolvarg Warlord's Axe"
+slot = "MainHand"
+dmg_lo = 60
+dmg_hi = 155
+delay = 30
+classes = ["Warrior", "Shadowknight", "Ranger"]
+lore = false
+
+# ── Armor ─────────────────────────────────────────────────────────────────────
+
+[[armor]]
+name = "Cobalt Breastplate"
+slot = "Chest"
+ac = 45
+classes = ["Warrior", "Paladin", "Shadowknight", "Ranger"]
+
+[[armor]]
+name = "Velium Infused Robe"
+slot = "Chest"
+ac = 18
+classes = ["Wizard", "Necromancer", "Magician", "Enchanter"]
+
+[[armor]]
+name = "Runed Circlet"
+slot = "Head"
+ac = 22
+classes = ["Cleric", "Druid", "Shaman"]
+
+[[armor]]
+name = "Drolvarg Hide Leggings"
+slot = "Legs"
+ac = 30
+classes = ["Warrior", "Paladin", "Shadowknight", "Ranger", "Monk"]
+
+[[armor]]
+name = "Sebilite Scale Armor"
+slot = "Chest"
+ac = 38
+classes = ["Warrior", "Paladin", "Shadowknight"]
+
+[[armor]]
+name = "Bone Breastplate"
+slot = "Chest"
+ac = 28
+classes = ["Shadowknight", "Necromancer"]
+
+[[armor]]
+name = "Monk's Silken Handwraps"
+slot = "Hands"
+ac = 15
+classes = ["Monk"]
+
+[[armor]]
+name = "Sarnak Hide Boots"
+slot = "Feet"
+ac = 24
+classes = ["Warrior", "Paladin", "Shadowknight", "Ranger", "Bard"]
+
+[[armor]]
+name = "Midnight Silk Belt"
+slot = "Waist"
+ac = 12
+classes = ["Wizard", "Necromancer", "Magician", "Enchanter", "Bard"]
+
+[[armor]]
+name = "Intricate Velium Cloak"
+slot = "Back"
+ac = 20
+classes = []
+
+[[armor]]
+name = "Frostreave Pauldrons"
+slot = "Shoulders"
+ac = 35
+classes = ["Warrior", "Paladin", "Shadowknight"]
+
+[[armor]]
+name = "Iksar Scaled Gloves"
+slot = "Hands"
+ac = 22
+classes = ["Warrior", "Paladin", "Shadowknight", "Ranger", "Monk"]

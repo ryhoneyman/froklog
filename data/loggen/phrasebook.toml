@@ -1,0 +1,1144 @@
+# froklog NPC phrasebook
+#
+# Single source of truth for all NPC chat content.
+# Lookup priority: (kind + archetype + register) → (kind + archetype) → (kind generic)
+#
+# Archetype values: QuietAnchor, ChaoticNarrator, RaidLeader, ReactiveObserver,
+#                   TacticalFocused, Custom
+# Register values:  Neutral, Elated, Frustrated, Tired, Engaged
+#
+# Slot syntax:     {slot_name}   — filled at emit time
+# Fragment syntax: {$pool_name}  — randomly expanded from [fragments] below
+
+# ── Fragment pools ────────────────────────────────────────────────────────────
+
+[fragments]
+wow        = ["lol", "lmao", "omg", "haha", "holy", "dude", "geez", "sheesh",
+              "okay wow", "my dude", "yooo", "I mean", "okay okay", "seriously",
+              "bruh", "not gonna lie", "I can't", "dead"]
+easy       = ["ez", "easy", "clean", "stomp", "no contest", "like nothing",
+              "absolute cleanup", "not even a sweat", "effortless",
+              "over before it started"]
+rough      = ["rough", "oof", "ouch", "yikes", "brutal", "messy",
+              "painful", "not great", "that sucked", "ugly",
+              "okay that was bad", "rip"]
+hype       = ["let's go", "that's what I'm talking about", "we're cooking",
+              "this is the run", "no stopping us now", "on a roll tonight",
+              "absolutely sending it", "unstoppable", "in the zone",
+              "best group I've been in", "peak performance"]
+miss_jab   = ["can't buy a hit tonight", "hitting with their eyes closed",
+              "swinging at ghosts", "forgot how combat works",
+              "might as well be afk", "found a new way to miss",
+              "hitting like a wet noodle", "apparently on a different server",
+              "in invisible mode apparently", "allergic to hitting things",
+              "has never heard of making contact", "is just vibing"]
+carry      = ["carrying", "doing work", "cooking", "going off", "on fire right now",
+              "absolutely cooking", "built different", "in their zone",
+              "not messing around tonight", "going crazy"]
+close      = ["close", "too close", "nearly", "almost", "right on the edge",
+              "way too close for comfort", "millimeters from dying",
+              "barely made it", "by a thread", "that was it"]
+
+# ── Generic (idle/banter) ─────────────────────────────────────────────────────
+
+[[events]]
+kind = "Generic"
+templates = [
+    "ready when you are",
+    "pulling one",
+    "oom, need a minute",
+    "full mana, lets go",
+    "nice",
+    "lol",
+    "how's everyone's health?",
+    "back",
+    "brb getting water",
+    "ok back",
+    "good fight",
+    "that was close",
+    "healing up",
+    "watch aggro",
+    "clear, moving up",
+    "okay med break",
+    "full, ready",
+    "this is a good camp",
+    "pull whenever",
+    "afk 2 min",
+    "one more before break",
+    "incoming, two up",
+    "ez",
+    "these mobs give good exp",
+    "fd, brb",
+    "this mob hits like a truck",
+    "anyone need a port after this?",
+    "got time for one more?",
+    "almost oom",
+    "sitting",
+    "back at full",
+    "need more mana",
+    "buff me?",
+    "slowing now",
+    "tank is good",
+    "we got this",
+    "stay focused",
+    "okay who pulled that?",
+    "not it",
+    "I love this camp",
+    "good group tonight",
+    "we're in the zone",
+    "stay on target",
+    "you ever just... love your class?",
+    "I swear this mob is cheating",
+    "does anyone else feel like we're being watched?",
+    "what time is it even",
+    "I need sleep but one more pull",
+    "okay THAT was clean",
+    "comp is looking good tonight",
+    "I feel unstoppable right now",
+    "who trained into us last time",
+    "this zone stresses me out",
+    "these respawns are fast",
+    "okay let's not get cocky",
+    "good positioning everyone",
+    "I could do this all night",
+    "can we talk about how good that last fight was",
+    "lmao classic",
+    "that's why you're the tank",
+    "honestly impressive",
+    "okay I'm actually having fun",
+    "{$wow}",
+    "{$hype}",
+    "{$rough} lol",
+    "honestly {$hype}",
+    "{$wow}, what a fight",
+    "what's the count?",
+    "pull when ready",
+    "eyes open people",
+    "careful, more around the corner",
+    "good pace tonight",
+    "anyone low on supplies?",
+    "this group is tight",
+    "I haven't died yet and that surprises me",
+    "how's everyone holding up?",
+    "solid group tonight",
+    "keep it up",
+    "stay together",
+    "I love a clean pull",
+    "we're clicking tonight",
+    "nice tanking",
+    "good heals all around",
+    "stay on main assist",
+    "anyone need anything before next pull?",
+    "okay seriously great group",
+    "I could do this camp for hours",
+    "no unnecessary deaths is a win",
+    "group synergy is real tonight",
+    "anyone need buffs?",
+    "I trust this group",
+    "exp is going to be great tonight",
+    "still alive, still here",
+    "okay who's next",
+    "got mana?",
+    "honestly having fun tonight",
+    "{$rough} pulls are still good exp",
+    "nice maneuvering",
+    "not bad for a pickup group",
+    "focused",
+    "this zone is actually fun",
+    "exp is looking good tonight",
+    "one more",
+    "good pace",
+    "this is a good camp",
+    "eyes open",
+]
+
+[[events]]
+kind = "Generic"
+archetype = "ChaoticNarrator"
+templates = [
+    "yeah buddy",
+    "this is the run",
+    "I love a clean pull",
+    "okay seriously having fun tonight",
+    "lol classic",
+    "best group I've been in",
+    "I trust this group",
+    "I feel unstoppable right now",
+    "not gonna lie, this is a great session",
+    "I live for pulls like that",
+    "okay okay, we're actually good at this",
+    "no deaths? unheard of for us honestly",
+]
+
+[[events]]
+kind = "Generic"
+archetype = "ChaoticNarrator"
+register = "Elated"
+templates = [
+    "I am having the BEST time right now",
+    "this is exactly why I play this game",
+    "okay we are legitimately unstoppable",
+    "every pull just goes, it's beautiful",
+    "I want to screenshot this group",
+    "I would pay for this group to run forever",
+]
+
+[[events]]
+kind = "Generic"
+archetype = "ChaoticNarrator"
+register = "Tired"
+templates = [
+    "okay I might be falling asleep lol",
+    "one more then I really gotta sleep",
+    "wife's gonna kill me, one more pull",
+    "my eyes are literally closing",
+    "I keep zoning out, sorry",
+    "it's fine I'll sleep when I'm dead",
+]
+
+[[events]]
+kind = "Generic"
+archetype = "QuietAnchor"
+templates = ["heh", "nice", "yeah", "ready", "good", "on it"]
+
+[[events]]
+kind = "Generic"
+archetype = "RaidLeader"
+templates = [
+    "good job everyone",
+    "keep the pace",
+    "nice work",
+    "stay on target",
+    "eyes open",
+    "stay focused",
+    "good group tonight",
+]
+
+# ── MobKilled ─────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "MobKilled"
+templates = [
+    "nice",
+    "gg",
+    "next",
+    "good fight",
+    "{mob} down",
+    "that was a good one",
+    "easy mode",
+    "another one bites the dust",
+    "rip {mob}",
+    "not so tough now huh",
+    "see ya {mob}",
+    "told you we'd get it",
+    "and stay dead",
+    "clean kill",
+    "we're getting better at this",
+    "one down",
+    "smooth",
+    "that's how you do it",
+    "nice execution everyone",
+    "who's next",
+    "{$easy}",
+    "{mob} down, {$easy}",
+    "{$hype}",
+    "next target?",
+    "looting and moving",
+    "back to it",
+    "one less to worry about",
+    "on to the next",
+    "down goes {mob}",
+    "that's how it's done",
+    "{mob} had no chance",
+    "keep the pace up",
+    "boom, {mob}",
+    "didn't even sweat",
+    "{$hype}, let's go",
+    "still in the zone",
+    "another one",
+]
+
+[[events]]
+kind = "MobKilled"
+archetype = "ChaoticNarrator"
+templates = [
+    "yeah buddy",
+    "hell yeah",
+    "got em",
+    "nice kill",
+    "told you we'd get it",
+    "{mob} had no chance",
+    "that's how you do it",
+    "one down, {$hype}",
+    "okay THAT was satisfying",
+    "I love when it just dies like that",
+]
+
+[[events]]
+kind = "MobKilled"
+archetype = "ChaoticNarrator"
+register = "Elated"
+templates = [
+    "YEAH BUDDY",
+    "lets go!!",
+    "we are COOKING",
+    "absolutely unstoppable right now",
+    "hell yeah brother",
+    "I CALLED IT",
+]
+
+[[events]]
+kind = "MobKilled"
+archetype = "ChaoticNarrator"
+register = "Frustrated"
+templates = ["finally", "took long enough", "ok", "bout time", "FINALLY"]
+
+[[events]]
+kind = "MobKilled"
+archetype = "QuietAnchor"
+templates = ["nice", "gg", "{mob} down", "good"]
+
+[[events]]
+kind = "MobKilled"
+archetype = "RaidLeader"
+templates = [
+    "next target",
+    "good, moving on",
+    "looting and moving",
+    "on to the next",
+    "clean, keep pace",
+]
+
+[[events]]
+kind = "MobKilled"
+archetype = "ReactiveObserver"
+templates = ["gg", "nice", "good one"]
+
+# ── MultiKill ─────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "MultiKill"
+templates = [
+    "clean sweep",
+    "all down",
+    "handled",
+    "that's how you deal with a full pull",
+    "nice work on the pack",
+    "no casualties, perfect",
+    "count that as a win",
+    "and they're all dead",
+    "okay that was actually impressive",
+    "see? totally fine",
+    "we do not wipe",
+    "group pull, zero deaths",
+    "all mobs down, nice execution",
+    "I love when a full pull goes clean",
+    "{$easy}",
+    "{$hype}",
+    "{$wow}, clean sweep",
+    "pack cleared, {$hype}",
+]
+
+[[events]]
+kind = "MultiKill"
+archetype = "ChaoticNarrator"
+templates = [
+    "yeah buddy!! ALL of them",
+    "we absolutely handled that pack",
+    "clean sweep, that's what I'm talking about",
+    "every. single. one.",
+    "okay we do not wipe, I said what I said",
+]
+
+[[events]]
+kind = "MultiKill"
+archetype = "ChaoticNarrator"
+register = "Elated"
+templates = [
+    "WE ARE UNTOUCHABLE",
+    "nothing can stop us right now",
+    "entire pack, zero effort, YEAH BUDDY",
+    "I am losing my mind right now this is so clean",
+]
+
+[[events]]
+kind = "MultiKill"
+archetype = "QuietAnchor"
+templates = ["handled", "clean", "gg"]
+
+[[events]]
+kind = "MultiKill"
+archetype = "RaidLeader"
+templates = ["good, moving on", "all down, next", "pack cleared"]
+
+# ── BigHit ────────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "BigHit"
+templates = [
+    "holy {ability}!!",
+    "nice one {src}",
+    "{dmg} to {tgt}?? damn",
+    "that {ability} hurt it",
+    "woah, {src} pulling out the big guns",
+    "{src} you absolute monster lol",
+    "get rekt {tgt}",
+    "dayum {src}",
+    "nice {ability} {src}!",
+    "{src} carrying rn",
+    "that's what I'm talking about",
+    "BOOM",
+    "{src} is on fire tonight",
+    "okay {src} calm down lol",
+    "show off",
+    "we brought {src} for exactly this",
+    "{dmg}?? I didn't know that was possible",
+    "{src} said goodnight to {tgt}",
+    "I felt that from here",
+    "{$wow} {src}",
+    "{src} is {$carry}",
+    "{dmg}?? {$wow}",
+    "{$wow}, {src} just {$carry}",
+    "{$hype}",
+    "{src} said delete {tgt}, {$wow}",
+    "that {ability} was {$easy}",
+    "nice {ability}!",
+    "{src} with the big hit",
+    "{src} cooking",
+    "BOOM",
+]
+
+[[events]]
+kind = "BigHit"
+archetype = "ChaoticNarrator"
+templates = [
+    "{src} you absolute monster",
+    "okay {src} calm down lol",
+    "{src} said delete {tgt}",
+    "I felt that from here",
+    "yeah buddy {src}!!",
+    "{src} is {$hype}",
+    "{dmg}?? are you kidding me",
+    "I want to be {src} when I grow up",
+    "that's embarrassing for {tgt}",
+]
+
+[[events]]
+kind = "BigHit"
+archetype = "QuietAnchor"
+templates = ["nice", "{$wow} {src}", "damn"]
+
+# ── NearDeathSave ─────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "NearDeathSave"
+templates = [
+    "that was WAY too close",
+    "good heal {healer}",
+    "{target} living on the edge",
+    "nice clutch {healer}!",
+    "whew, close one",
+    "{target} say thank you to {healer}",
+    "good save {healer}",
+    "{healer} with the clutch",
+    "jesus {target}",
+    "nearly lost you there {target}",
+    "maybe stay out of the front row {target}",
+    "{target} has 9 lives",
+    "{target} trying to give me a heart attack",
+    "okay I saw my life flash before my eyes just then",
+    "less dying please {target}",
+    "{healer} is carrying this group",
+    "respect to {healer} for keeping eyes on everyone",
+    "stay behind the tank {target}",
+    "{target} you got a death wish?",
+    "good eyes {healer}, I almost missed that",
+    "{$wow}... {healer} with the save",
+    "{$close}, {target}",
+    "{healer} is {$carry}",
+    "{$rough}... good save {healer}",
+    "{$wow} {target}, that was {$close}",
+    "{target} playing on {$close} mode apparently",
+    "{healer} said not today, {$wow}",
+    "nice save {healer}",
+]
+
+[[events]]
+kind = "NearDeathSave"
+archetype = "ChaoticNarrator"
+templates = [
+    "jesus {target}",
+    "nearly lost you there {target}",
+    "{healer} is carrying this group",
+    "good eyes {healer}",
+    "okay I saw my life flash before my eyes just then",
+    "{target} give me a heart attack why don't you",
+    "if {healer} goes oom we're all dead lol",
+]
+
+[[events]]
+kind = "NearDeathSave"
+archetype = "QuietAnchor"
+templates = ["nice", "good heal", "close"]
+
+# ── PlayerNearDeath ───────────────────────────────────────────────────────────
+
+[[events]]
+kind = "PlayerNearDeath"
+templates = [
+    "HEAL {player}!",
+    "{player}!!",
+    "hp {player}!",
+    "watch {player}!",
+    "healer on {player} now",
+    "{player} is going to die",
+    "someone heal {player}",
+    "{player} incoming on healer",
+    "LOW {player}",
+    "oh no {player}",
+    "{player} red??",
+    "heals on {player}!!",
+    "{$rough} {player}!!",
+    "{$wow} HEAL {player}",
+]
+
+[[events]]
+kind = "PlayerNearDeath"
+archetype = "ChaoticNarrator"
+templates = [
+    "HEAL {player}!",
+    "oh no {player}",
+    "{player} is going down!",
+    "someone on {player}!",
+    "{$rough} {player}!!",
+    "HEALER ON {player} RIGHT NOW",
+]
+
+# ── TankDying ─────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "TankDying"
+templates = [
+    "TANK IS DYING",
+    "healer wake up",
+    "TANK!!",
+    "we're gonna wipe",
+    "oh no",
+    "someone help the tank",
+    "uh oh",
+    "HEAL {player}!!",
+    "{player} is dying!",
+    "EMERGENCY HEALS {player}",
+    "healer on {player} NOW",
+    "someone save {player}!!",
+    "{player} going down!",
+    "tank is red!!",
+    "CLR on the tank!",
+    "healer, {player}!",
+    "{$rough} {player} needs heals!",
+]
+
+[[events]]
+kind = "TankDying"
+archetype = "ChaoticNarrator"
+templates = [
+    "TANK IS DYING",
+    "oh no oh no oh no",
+    "CLR NOW",
+    "{player} is going down!!",
+    "EMERGENCY HEALS {player}",
+    "HEAL HIM HEAL HIM",
+]
+
+[[events]]
+kind = "TankDying"
+archetype = "QuietAnchor"
+templates = ["HEAL {player}", "tank", "CH {player}"]
+
+[[events]]
+kind = "TankDying"
+archetype = "RaidLeader"
+templates = ["CLR on {player} NOW", "healer on tank", "all heals on {player}"]
+
+# ── SpellResisted (SlowResisted) ──────────────────────────────────────────────
+
+[[events]]
+kind = "SpellResisted"
+templates = [
+    "it resisted again??",
+    "slow is not landing",
+    "this mob is immune?",
+    "keep trying slow",
+    "slow is broken tonight",
+    "what is this mob made of",
+    "every single time",
+    "is it even worth trying slow on this one",
+    "we might just have to tank it full speed",
+    "the slow curse continues",
+    "I've never seen a mob this resistant",
+    "okay forget slow, just burn it",
+    "{$rough}, resisted again",
+    "{$wow} this mob is immune to slow or something",
+    "{$rough}... slow just isn't happening tonight",
+    "it resisted again??",
+    "slow is not landing",
+    "this mob is immune or something",
+    "keep trying",
+]
+
+[[events]]
+kind = "SpellResisted"
+archetype = "ChaoticNarrator"
+templates = [
+    "oh come on",
+    "are you kidding me",
+    "every single time",
+    "this mob said no",
+    "we might just tank it",
+    "I am DONE with slow tonight",
+]
+
+[[events]]
+kind = "SpellResisted"
+archetype = "ChaoticNarrator"
+register = "Frustrated"
+templates = [
+    "I am DONE with this resist mechanic",
+    "forget it, just burn it down",
+    "this is actually insane",
+    "I have NEVER seen a mob resist this much",
+]
+
+[[events]]
+kind = "SpellResisted"
+archetype = "QuietAnchor"
+templates = ["heh", "resist", "again"]
+
+# ── ResistStreak ──────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "ResistStreak"
+templates = [
+    "that's {count} resists in a row",
+    "the slow curse continues",
+    "okay forget slow, just burn it",
+    "{count} resists? seriously?",
+]
+
+[[events]]
+kind = "ResistStreak"
+archetype = "ChaoticNarrator"
+templates = [
+    "{count} resists?? what is this mob made of",
+    "I've never seen anything this resistant",
+    "okay we are just tanking this full speed",
+]
+
+# ── CasterOom ─────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "CasterOom"
+templates = [
+    "oom",
+    "med please",
+    "oom, 1 sec",
+    "just a sec, going oom",
+    "need meds",
+    "med break after this?",
+    "clarity pls",
+    "running on fumes here",
+    "I have like 50 mana left lol",
+    "don't pull, I'm oom",
+    "seriously need to sit",
+    "if you pull right now I cannot help you",
+    "half a blue dot, hold on",
+    "just need a minute",
+    "I wish I had KEI right now",
+]
+
+[[events]]
+kind = "CasterOom"
+archetype = "ChaoticNarrator"
+templates = [
+    "oom, hang on",
+    "I have like zero mana left",
+    "don't pull, I'm oom",
+    "give me a sec to med",
+    "if you pull right now I literally cannot help you",
+]
+
+[[events]]
+kind = "CasterOom"
+archetype = "QuietAnchor"
+templates = ["oom", "sec", "med"]
+
+# ── HealerMana ────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "HealerMana"
+templates = [
+    "{pct}% mana",
+    "at {pct}% mana",
+    "I'm at {pct}% mana",
+    "{pct}m",
+    "running low on mana, {pct}%",
+    "mana at {pct}",
+    "getting low, {pct}%",
+    "{pct}% left",
+    "need to conserve, {pct}% mana",
+    "almost out, {pct}% mana",
+    "low mana",
+    "need to sit",
+    "conserving mana",
+]
+
+[[events]]
+kind = "HealerMana"
+archetype = "ChaoticNarrator"
+templates = [
+    "oom at {pct}%, hang on",
+    "I'm at {pct}%, need to conserve",
+    "running dry, {pct}%",
+    "almost out of mana lol",
+    "don't pull, I'm at {pct}%",
+]
+
+[[events]]
+kind = "HealerMana"
+archetype = "QuietAnchor"
+templates = ["{pct}m", "oom", "{pct}%"]
+
+[[events]]
+kind = "HealerMana"
+archetype = "RaidLeader"
+templates = ["{pct}% mana, slowing down", "healers conserve mana"]
+
+# ── RepeatMiss ────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "RepeatMiss"
+templates = [
+    "{player} hitting with eyes closed again?",
+    "maybe try actually swinging {player}",
+    "lol {player}",
+    "{mob} has a personal grudge against {player}",
+    "did you equip a weapon {player}",
+    "{player} can't hit the broad side of a barn",
+    "maybe {player} needs a different weapon",
+    "rough round {player}",
+    "{player} and {mob} are just dancing at this point",
+    "it's okay {player}, {mob} can't hit you either",
+    "have you tried hitting it with your face {player}",
+    "impressive miss streak {player}",
+    "is {mob} greased or something",
+    "{player} you're giving it too many chances lol",
+    "okay okay, {player} is just warming up",
+    "{$wow} {player}, {$miss_jab}",
+    "{player} {$miss_jab}",
+    "{$wow} is {player} okay?? {$miss_jab}",
+    "{$rough} round for {player}, {$miss_jab}",
+    "{mob} is literally untouchable to {player} apparently, {$wow}",
+    "{player} having a rough round",
+]
+
+[[events]]
+kind = "RepeatMiss"
+archetype = "ChaoticNarrator"
+templates = [
+    "did you equip a weapon {player}",
+    "lol {player} can't buy a hit",
+    "{player} and {mob} are just vibing at this point",
+    "maybe try actually swinging {player}",
+    "{player} {$miss_jab}",
+    "{$wow} {player} is {$miss_jab}",
+]
+
+[[events]]
+kind = "RepeatMiss"
+archetype = "QuietAnchor"
+templates = ["lol {player}", "heh", "{player}..."]
+
+# ── Wipe ──────────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "Wipe"
+templates = [
+    "gg",
+    "that happened",
+    "rip",
+    "we got destroyed lol",
+    "that was a wipe",
+    "f",
+    "well that sucked",
+    "lmao",
+]
+
+[[events]]
+kind = "Wipe"
+archetype = "ChaoticNarrator"
+templates = [
+    "okay that was a disaster lol",
+    "we got absolutely wrecked",
+    "alright, regroup",
+    "that sucked, let's go again",
+    "I'm not even mad, that was impressive",
+]
+
+[[events]]
+kind = "Wipe"
+archetype = "ChaoticNarrator"
+register = "Frustrated"
+templates = [
+    "I cannot believe that",
+    "come on guys, we're better than this",
+    "okay what went wrong there",
+]
+
+[[events]]
+kind = "Wipe"
+archetype = "QuietAnchor"
+templates = ["rip", "gg", "heh"]
+
+# ── CleanStreak ───────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "CleanStreak"
+templates = [
+    "clean sweep",
+    "nice work",
+    "we're in the zone",
+    "{$hype}",
+    "{count} clean, let's keep it going",
+]
+
+[[events]]
+kind = "CleanStreak"
+archetype = "ChaoticNarrator"
+templates = [
+    "{count} clean kills, yeah buddy",
+    "group is firing on all cylinders",
+    "I love when a session goes like this",
+    "okay seriously great group tonight",
+]
+
+# ── Incoming ──────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "Incoming"
+templates = [
+    "incoming",
+    "incoming {count}",
+    "pulling {count}",
+    "pulling {mob}",
+    "on the way, {count} up",
+    "got one, incoming",
+    "pulling now",
+    "heads up, incoming {count}",
+    "{mob} incoming",
+    "pulling {mob}, get ready",
+    "one incoming",
+    "inc",
+    "here it comes",
+    "incoming, {count} mobs",
+    "got {mob}, on the way",
+    "coming in hot",
+    "closing in on camp",
+    "almost here",
+    "got a live one",
+    "stay ready",
+    "single pull, clean",
+    "tight pull, hold positions",
+    "tagged {mob}, inbound",
+    "don't break CC",
+    "coming in, {count} up",
+]
+
+[[events]]
+kind = "Incoming"
+archetype = "ChaoticNarrator"
+templates = [
+    "pulling now",
+    "incoming {count}, get ready",
+    "{mob} incoming",
+    "pulling {mob}",
+]
+
+[[events]]
+kind = "Incoming"
+archetype = "QuietAnchor"
+templates = ["inc", "incoming", "pulling {count}", "got {mob}"]
+
+[[events]]
+kind = "Incoming"
+archetype = "RaidLeader"
+templates = [
+    "incoming {count}",
+    "on the way",
+    "heads up {count} up",
+    "pulling {mob}, hold positions",
+]
+
+# ── ExtraMobCC ────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "ExtraMobCC"
+templates = [
+    "I've got the add",
+    "mezzing the extra",
+    "CC on {mob}",
+    "holding {mob}",
+    "I'll mez the {mob}",
+    "got the extra, don't touch it",
+    "rooting {mob}",
+    "don't break mez",
+    "extra is CC'd",
+    "I got {mob}, focus the main",
+    "mez on {mob}, leave it",
+    "got the add covered",
+    "holding {mob} till main is dead",
+    "don't touch the mez'd one",
+    "rooted, focus main mob",
+    "pet on {mob}, it's handled",
+    "charmed {mob}, it's on our side now",
+    "CC chain going, stay focused",
+]
+
+[[events]]
+kind = "ExtraMobCC"
+archetype = "ChaoticNarrator"
+templates = [
+    "I got the add, don't touch it",
+    "mezzing {mob}, eyes off it",
+    "okay okay I got one, focusing",
+    "CC on the extra, focus main",
+]
+
+[[events]]
+kind = "ExtraMobCC"
+archetype = "QuietAnchor"
+templates = ["got {mob}", "cc'd", "mez on {mob}", "rooted"]
+
+[[events]]
+kind = "ExtraMobCC"
+archetype = "RaidLeader"
+templates = ["CC on {mob}", "hold {mob}, focus main", "extra is handled"]
+
+# ── BeingHit ──────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "BeingHit"
+templates = [
+    "I've got one on me!",
+    "{mob} is on me!",
+    "help, I'm taking hits",
+    "I've got an add!",
+    "one on me, need help",
+    "getting hit here",
+    "I need a heal",
+    "{mob} switched to me",
+    "someone get this off me",
+    "I'm being attacked!",
+    "add on me",
+    "healer!",
+    "I'm being focused!",
+    "off me please!",
+    "{mob} is ignoring the tank",
+    "off-tank on {mob}!",
+    "someone peel this",
+    "assist me!",
+    "{mob} broke from the group!",
+    "need a taunt here!",
+]
+
+[[events]]
+kind = "BeingHit"
+archetype = "ChaoticNarrator"
+templates = [
+    "HELP {mob} is on me",
+    "I have an add, someone please",
+    "{mob} ignored the tank entirely",
+    "oh god oh god {mob} is on me",
+    "off me off me off me",
+]
+
+[[events]]
+kind = "BeingHit"
+archetype = "QuietAnchor"
+templates = ["add on me", "one on me, need help", "{mob} on me"]
+
+# ── GoodLoot ─────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "GoodLoot"
+templates = ["nice drop", "ooh {item}", "good loot", "let's go"]
+
+[[events]]
+kind = "GoodLoot"
+archetype = "ChaoticNarrator"
+templates = [
+    "oh hell yeah {item}",
+    "that's what I'm talking about",
+    "{item} let's go!!",
+    "yeah buddy we're eating tonight",
+    "finally some good loot",
+]
+
+[[events]]
+kind = "GoodLoot"
+archetype = "ChaoticNarrator"
+register = "Elated"
+templates = [
+    "YEAH BUDDY {item}",
+    "okay this is the run",
+    "I called it, I called it",
+    "best session ever",
+]
+
+[[events]]
+kind = "GoodLoot"
+archetype = "QuietAnchor"
+templates = ["nice", "ooh", "good drop"]
+
+[[events]]
+kind = "GoodLoot"
+archetype = "RaidLeader"
+templates = ["{item}", "nice, who needs that", "good drop"]
+
+# ── BadLoot ───────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "BadLoot"
+templates = ["meh", "oof", "trash", "{item}... pass"]
+
+[[events]]
+kind = "BadLoot"
+archetype = "ChaoticNarrator"
+templates = [
+    "lol what is this {item}",
+    "garbage loot as usual",
+    "the loot gods hate us",
+    "okay moving on",
+    "{item} why is this even in the game",
+]
+
+[[events]]
+kind = "BadLoot"
+archetype = "ChaoticNarrator"
+register = "Frustrated"
+templates = [
+    "I'm done with this loot table",
+    "we genuinely cannot catch a break",
+    "whoever designed this loot table...",
+]
+
+[[events]]
+kind = "BadLoot"
+archetype = "QuietAnchor"
+templates = ["meh", "heh", "gg"]
+
+# ── LevelUp ───────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "LevelUp"
+templates = [
+    "grats {who}!",
+    "gz {who}",
+    "level {level}!",
+    "nice ding {who}",
+]
+
+[[events]]
+kind = "LevelUp"
+archetype = "ChaoticNarrator"
+templates = [
+    "yeah buddy {who} hit {level}!",
+    "LETS GO {who}",
+    "grats!! {level} is a good level",
+    "oh shit {who} dinged",
+    "{who} with the ding, yeah buddy",
+]
+
+[[events]]
+kind = "LevelUp"
+archetype = "QuietAnchor"
+templates = ["gz {who}", "grats", "nice"]
+
+# ── RlDeparture ───────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "RlDeparture"
+templates = ["brb", "sec", "one sec", "afk"]
+
+[[events]]
+kind = "RlDeparture"
+archetype = "ChaoticNarrator"
+templates = [
+    "brb one sec",
+    "gonna grab a snack real quick",
+    "afk a couple mins",
+    "brb {rl_reason}",
+    "sec, {rl_reason}",
+    "one sec, need to deal with something",
+]
+
+[[events]]
+kind = "RlDeparture"
+archetype = "QuietAnchor"
+templates = ["brb", "sec", "afk"]
+
+# ── RlReturn ─────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "RlReturn"
+templates = ["back", "ok back", "back, what I miss"]
+
+[[events]]
+kind = "RlReturn"
+archetype = "ChaoticNarrator"
+templates = [
+    "ok back",
+    "sorry, back",
+    "back, what happened",
+    "ok back, did we die?",
+    "back. she's {rl_context} lol",
+    "sorry about that, back now",
+]
+
+[[events]]
+kind = "RlReturn"
+archetype = "QuietAnchor"
+templates = ["back", "ok", "back."]
+
+# ── PlayerDied ────────────────────────────────────────────────────────────────
+
+[[events]]
+kind = "PlayerDied"
+templates = ["rip {player}", "gg {player}", "f", "rip", "ouch"]
+
+[[events]]
+kind = "PlayerDied"
+archetype = "ChaoticNarrator"
+templates = [
+    "rip {player} lol",
+    "oh no",
+    "f in chat for {player}",
+    "we'll get em next time {player}",
+    "{$rough} {player}",
+]
+
+[[events]]
+kind = "PlayerDied"
+archetype = "ChaoticNarrator"
+register = "Frustrated"
+templates = [
+    "come on guys",
+    "we gotta stop dying",
+    "that's on me, my bad",
+    "ugh",
+    "okay we need to tighten up",
+]
+
+[[events]]
+kind = "PlayerDied"
+archetype = "QuietAnchor"
+templates = ["rip", "f", "gg {player}"]

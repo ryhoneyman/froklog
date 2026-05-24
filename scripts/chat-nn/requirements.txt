@@ -1,0 +1,20 @@
+# Python dependencies for the froklog neural chat training pipeline
+#
+# Install:
+#   pip install -r scripts/requirements.txt
+#
+# GPU training (optional — CPU is sufficient for this corpus size):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# Core ML
+torch>=2.2.0
+numpy>=1.26.0
+
+# Tokeniser
+sentencepiece>=0.2.0
+
+# ONNX export
+onnx>=1.16.0
+
+# Optional: ONNX graph simplification (recommended before Rust deployment)
+# onnxsim>=0.4.36

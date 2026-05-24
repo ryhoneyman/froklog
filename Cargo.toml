@@ -27,10 +27,20 @@ path = "src/bin/froklog-debug/main.rs"
 name = "froklog-migrate"
 path = "src/bin/froklog-migrate/main.rs"
 
+[[bin]]
+name = "froklog-loggen"
+path = "src/bin/froklog-loggen/main.rs"
+
+[[bin]]
+name = "froklog-chatanalyze"
+path = "src/bin/froklog-chatanalyze/main.rs"
+
 [features]
 default = []
 # Windows systray client (no visible window; requires Windows cross-compile)
 tray = ["dep:tray-icon", "dep:winit", "dep:image"]
+# Neural chat backend — gates ort and serde_json (already a dep) usage in NeuralBackend
+neural = ["dep:tract-onnx", "dep:sentencepiece-rs"]
 [dependencies]
 # Systray — only makes sense on Windows; use `--features tray` when cross-compiling
 tray-icon = { version = "0.19", optional = true }
@@ -38,6 +48,9 @@ winit     = { version = "0.30", optional = true, default-features = false }
 image     = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 # Config file serialisation (always needed)
 toml = "0.8"
+
+# Pseudo-random number generation (froklog-loggen)
+rand = "0.8"
 
 # Async runtime — Tokio for the web server and file watcher
 tokio = { version = "1", features = ["full"] }
@@ -87,6 +100,11 @@ futures-util = "0.3"
 # HTTP client (used by froklog-replay for stream auto-registration)
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
+# Neural chat inference (gated on --features neural)
+# tract-onnx is a pure-Rust ONNX runtime — no prebuilt C++ libs, no AVX2 requirement.
+tract-onnx       = { version = "0.22", optional = true }
+sentencepiece-rs = { version = "0.2", optional = true }
+
 [target.'cfg(windows)'.dependencies]
 # Native Windows dialogs (file picker, message box)
 windows = { version = "0.58", features = [
@@ -105,6 +123,9 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
 ]}
 
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 tempfile = "3"
 
@@ -116,3 +137,7 @@ strip = true
 
 [profile.dev]
 opt-level = 1
+debug = 1             # line tables only — enough for backtraces, ~70% smaller binaries
+
+[profile.dev.package."*"]
+debug = false         # no debug symbols for dependencies — they go from 4 GB → ~400 MB

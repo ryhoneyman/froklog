@@ -1,0 +1,1733 @@
+# Spell tables keyed by class name.
+# kind values: Nuke, Dot, DirectHeal, HoT, PromisedHeal, Slow, Debuff, Buff,
+#              Snare, Root, Mez, Lifetap
+# level: minimum level required to use this spell (0 = always available)
+# Spells are sorted highest-level-first at load time; pick helpers return the
+# best spell the character's level allows.
+
+# ── Cleric ────────────────────────────────────────────────────────────────────
+# Heal line — CLR gets a new tier roughly every 10-12 levels
+[[spells]]
+class = "Cleric"
+name = "Light Healing"
+kind = "DirectHeal"
+level = 5
+mana_cost = 45
+cast_secs = 3
+min_val = 260
+max_val = 480
+
+[[spells]]
+class = "Cleric"
+name = "Healing"
+kind = "DirectHeal"
+level = 14
+mana_cost = 80
+cast_secs = 4
+min_val = 550
+max_val = 950
+
+[[spells]]
+class = "Cleric"
+name = "Greater Healing"
+kind = "DirectHeal"
+level = 24
+mana_cost = 150
+cast_secs = 5
+min_val = 900
+max_val = 1600
+
+[[spells]]
+class = "Cleric"
+name = "Superior Healing"
+kind = "DirectHeal"
+level = 34
+mana_cost = 200
+cast_secs = 6
+min_val = 1400
+max_val = 2200
+
+[[spells]]
+class = "Cleric"
+name = "Complete Healing"
+kind = "DirectHeal"
+level = 39
+mana_cost = 300
+cast_secs = 10
+min_val = 2200
+max_val = 4000
+
+[[spells]]
+class = "Cleric"
+name = "Word of Healing"
+kind = "DirectHeal"
+level = 49
+mana_cost = 250
+cast_secs = 6
+min_val = 1800
+max_val = 2800
+
+# HoT line
+[[spells]]
+class = "Cleric"
+name = "Celestial Remedy"
+kind = "HoT"
+level = 19
+mana_cost = 150
+cast_secs = 4
+min_val = 180
+max_val = 320
+ticks = 5
+tick_secs = 6
+
+[[spells]]
+class = "Cleric"
+name = "Celestial Health"
+kind = "HoT"
+level = 29
+mana_cost = 220
+cast_secs = 5
+min_val = 280
+max_val = 450
+ticks = 6
+tick_secs = 6
+
+# Nukes (secondary — only cast when no healing needed)
+[[spells]]
+class = "Cleric"
+name = "Smite"
+kind = "Nuke"
+level = 14
+mana_cost = 100
+cast_secs = 3
+min_val = 200
+max_val = 380
+resist_pct = 20
+
+[[spells]]
+class = "Cleric"
+name = "Wrath"
+kind = "Nuke"
+level = 29
+mana_cost = 175
+cast_secs = 3
+min_val = 320
+max_val = 580
+resist_pct = 18
+
+[[spells]]
+class = "Cleric"
+name = "Tremor"
+kind = "Nuke"
+level = 34
+mana_cost = 250
+cast_secs = 4
+min_val = 420
+max_val = 750
+resist_pct = 15
+
+[[spells]]
+class = "Cleric"
+name = "Earthquake"
+kind = "Nuke"
+level = 44
+mana_cost = 350
+cast_secs = 4
+min_val = 600
+max_val = 1050
+resist_pct = 12
+
+# Buffs — never cast in combat (SpellKind::Buff is a no-op in encounters)
+[[spells]]
+class = "Cleric"
+name = "Holy Armor"
+kind = "Buff"
+level = 5
+mana_cost = 100
+cast_secs = 4
+
+[[spells]]
+class = "Cleric"
+name = "Symbol of Transal"
+kind = "Buff"
+level = 30
+mana_cost = 200
+cast_secs = 5
+
+[[spells]]
+class = "Cleric"
+name = "Symbol of Ryltan"
+kind = "Buff"
+level = 39
+mana_cost = 300
+cast_secs = 6
+
+# ── Druid ─────────────────────────────────────────────────────────────────────
+# Heal line
+[[spells]]
+class = "Druid"
+name = "Light Healing"
+kind = "DirectHeal"
+level = 9
+mana_cost = 45
+cast_secs = 3
+min_val = 280
+max_val = 520
+
+[[spells]]
+class = "Druid"
+name = "Healing"
+kind = "DirectHeal"
+level = 19
+mana_cost = 80
+cast_secs = 4
+min_val = 550
+max_val = 950
+
+[[spells]]
+class = "Druid"
+name = "Greater Healing"
+kind = "DirectHeal"
+level = 29
+mana_cost = 150
+cast_secs = 5
+min_val = 900
+max_val = 1600
+
+# HoT
+[[spells]]
+class = "Druid"
+name = "Regeneration"
+kind = "HoT"
+level = 34
+mana_cost = 120
+cast_secs = 4
+min_val = 160
+max_val = 280
+ticks = 6
+tick_secs = 6
+
+[[spells]]
+class = "Druid"
+name = "Chloroplast"
+kind = "HoT"
+level = 44
+mana_cost = 180
+cast_secs = 4
+min_val = 250
+max_val = 400
+ticks = 7
+tick_secs = 6
+
+# Snare line
+[[spells]]
+class = "Druid"
+name = "Snare"
+kind = "Snare"
+level = 1
+mana_cost = 50
+cast_secs = 2
+resist_pct = 18
+land_msg = "has been ensnared"
+
+[[spells]]
+class = "Druid"
+name = "Ensnare"
+kind = "Snare"
+level = 29
+mana_cost = 120
+cast_secs = 3
+resist_pct = 10
+land_msg = "has been ensnared"
+
+# Root line
+[[spells]]
+class = "Druid"
+name = "Grasping Roots"
+kind = "Root"
+level = 5
+mana_cost = 50
+cast_secs = 3
+resist_pct = 25
+land_msg = "is held fast by grasping roots"
+
+[[spells]]
+class = "Druid"
+name = "Ensnaring Roots"
+kind = "Root"
+level = 24
+mana_cost = 100
+cast_secs = 3
+resist_pct = 18
+land_msg = "is bound by ensnaring roots"
+
+[[spells]]
+class = "Druid"
+name = "Enveloping Roots"
+kind = "Root"
+level = 39
+mana_cost = 160
+cast_secs = 3
+resist_pct = 12
+land_msg = "is enveloped by roots"
+
+# DoT line
+[[spells]]
+class = "Druid"
+name = "Stinging Swarm"
+kind = "Dot"
+level = 14
+mana_cost = 120
+cast_secs = 4
+min_val = 80
+max_val = 140
+ticks = 6
+tick_secs = 6
+resist_pct = 12
+land_msg = "is swarmed by stinging insects"
+
+[[spells]]
+class = "Druid"
+name = "Creeping Crud"
+kind = "Dot"
+level = 24
+mana_cost = 180
+cast_secs = 4
+min_val = 110
+max_val = 185
+ticks = 7
+tick_secs = 6
+resist_pct = 11
+land_msg = "is covered in creeping crud"
+
+[[spells]]
+class = "Druid"
+name = "Drones of Doom"
+kind = "Dot"
+level = 34
+mana_cost = 250
+cast_secs = 5
+min_val = 160
+max_val = 270
+ticks = 7
+tick_secs = 6
+resist_pct = 10
+land_msg = "is consumed by a drone of doom"
+
+[[spells]]
+class = "Druid"
+name = "Drifting Death"
+kind = "Dot"
+level = 44
+mana_cost = 320
+cast_secs = 5
+min_val = 220
+max_val = 370
+ticks = 8
+tick_secs = 6
+resist_pct = 10
+land_msg = "is engulfed by drifting death"
+
+# Nuke line
+[[spells]]
+class = "Druid"
+name = "Cascade of Hail"
+kind = "Nuke"
+level = 14
+mana_cost = 150
+cast_secs = 3
+min_val = 300
+max_val = 540
+resist_pct = 15
+
+[[spells]]
+class = "Druid"
+name = "Pogonip"
+kind = "Nuke"
+level = 24
+mana_cost = 200
+cast_secs = 4
+min_val = 420
+max_val = 720
+resist_pct = 13
+
+[[spells]]
+class = "Druid"
+name = "Combust"
+kind = "Nuke"
+level = 29
+mana_cost = 240
+cast_secs = 4
+min_val = 500
+max_val = 850
+resist_pct = 12
+
+[[spells]]
+class = "Druid"
+name = "Firestrike"
+kind = "Nuke"
+level = 39
+mana_cost = 320
+cast_secs = 5
+min_val = 700
+max_val = 1150
+resist_pct = 10
+
+[[spells]]
+class = "Druid"
+name = "Lightning Blast"
+kind = "Nuke"
+level = 49
+mana_cost = 420
+cast_secs = 5
+min_val = 900
+max_val = 1450
+resist_pct = 10
+
+# Buffs
+[[spells]]
+class = "Druid"
+name = "Spirit of Wolf"
+kind = "Buff"
+level = 14
+mana_cost = 100
+cast_secs = 4
+
+[[spells]]
+class = "Druid"
+name = "Skin like Steel"
+kind = "Buff"
+level = 24
+mana_cost = 120
+cast_secs = 4
+
+# ── Shaman ────────────────────────────────────────────────────────────────────
+# Heal line
+[[spells]]
+class = "Shaman"
+name = "Light Healing"
+kind = "DirectHeal"
+level = 9
+mana_cost = 45
+cast_secs = 3
+min_val = 280
+max_val = 520
+
+[[spells]]
+class = "Shaman"
+name = "Healing"
+kind = "DirectHeal"
+level = 19
+mana_cost = 80
+cast_secs = 4
+min_val = 550
+max_val = 950
+
+[[spells]]
+class = "Shaman"
+name = "Greater Healing"
+kind = "DirectHeal"
+level = 29
+mana_cost = 150
+cast_secs = 5
+min_val = 900
+max_val = 1600
+
+# Malo (MR debuff) line — cast before slow to increase slow land rate
+[[spells]]
+class = "Shaman"
+name = "Malaise"
+kind = "Debuff"
+level = 19
+mana_cost = 100
+cast_secs = 3
+resist_pct = 18
+land_msg = "is afflicted by malaise"
+
+[[spells]]
+class = "Shaman"
+name = "Malaisement"
+kind = "Debuff"
+level = 34
+mana_cost = 175
+cast_secs = 3
+resist_pct = 12
+land_msg = "is weakened by malaisement"
+
+[[spells]]
+class = "Shaman"
+name = "Malosi"
+kind = "Debuff"
+level = 49
+mana_cost = 250
+cast_secs = 4
+resist_pct = 8
+land_msg = "is sapped by malosi"
+
+# Slow line
+[[spells]]
+class = "Shaman"
+name = "Drowsy"
+kind = "Slow"
+level = 5
+mana_cost = 60
+cast_secs = 3
+resist_pct = 35
+
+[[spells]]
+class = "Shaman"
+name = "Walking Sleep"
+kind = "Slow"
+level = 14
+mana_cost = 100
+cast_secs = 3
+resist_pct = 28
+
+[[spells]]
+class = "Shaman"
+name = "Tagar's Insects"
+kind = "Slow"
+level = 29
+mana_cost = 180
+cast_secs = 4
+resist_pct = 22
+
+[[spells]]
+class = "Shaman"
+name = "Togor's Insects"
+kind = "Slow"
+level = 39
+mana_cost = 250
+cast_secs = 4
+resist_pct = 16
+
+# DoT line
+[[spells]]
+class = "Shaman"
+name = "Tainted Breath"
+kind = "Dot"
+level = 9
+mana_cost = 100
+cast_secs = 3
+min_val = 75
+max_val = 130
+ticks = 6
+tick_secs = 6
+resist_pct = 15
+land_msg = "is wracked by tainted breath"
+
+[[spells]]
+class = "Shaman"
+name = "Spirit Strike"
+kind = "Dot"
+level = 14
+mana_cost = 120
+cast_secs = 3
+min_val = 85
+max_val = 150
+ticks = 6
+tick_secs = 6
+resist_pct = 14
+land_msg = "is struck by the spirit"
+
+[[spells]]
+class = "Shaman"
+name = "Frost Strike"
+kind = "Dot"
+level = 24
+mana_cost = 180
+cast_secs = 4
+min_val = 120
+max_val = 200
+ticks = 6
+tick_secs = 6
+resist_pct = 13
+land_msg = "shivers from frost strike"
+
+[[spells]]
+class = "Shaman"
+name = "Winter's Roar"
+kind = "Dot"
+level = 34
+mana_cost = 250
+cast_secs = 4
+min_val = 170
+max_val = 280
+ticks = 7
+tick_secs = 6
+resist_pct = 11
+land_msg = "howls in pain from winter's roar"
+
+[[spells]]
+class = "Shaman"
+name = "Blizzard Blast"
+kind = "Dot"
+level = 44
+mana_cost = 330
+cast_secs = 5
+min_val = 230
+max_val = 370
+ticks = 7
+tick_secs = 6
+resist_pct = 10
+land_msg = "is blasted by blizzard"
+
+# Buffs
+[[spells]]
+class = "Shaman"
+name = "Spirit of Wolf"
+kind = "Buff"
+level = 9
+mana_cost = 100
+cast_secs = 4
+
+[[spells]]
+class = "Shaman"
+name = "Alacrity"
+kind = "Buff"
+level = 44
+mana_cost = 200
+cast_secs = 5
+
+# ── Enchanter ─────────────────────────────────────────────────────────────────
+# Tash (MR debuff) line — cast first to help slow land
+[[spells]]
+class = "Enchanter"
+name = "Tashan"
+kind = "Debuff"
+level = 4
+mana_cost = 60
+cast_secs = 3
+resist_pct = 25
+land_msg = "has been tashaned"
+
+[[spells]]
+class = "Enchanter"
+name = "Tashani"
+kind = "Debuff"
+level = 20
+mana_cost = 140
+cast_secs = 3
+resist_pct = 18
+land_msg = "has been tashani'd"
+
+[[spells]]
+class = "Enchanter"
+name = "Tashania"
+kind = "Debuff"
+level = 44
+mana_cost = 280
+cast_secs = 4
+resist_pct = 10
+land_msg = "has been tashania'd"
+
+# Slow line
+[[spells]]
+class = "Enchanter"
+name = "Languid Pace"
+kind = "Slow"
+level = 12
+mana_cost = 100
+cast_secs = 3
+resist_pct = 32
+
+[[spells]]
+class = "Enchanter"
+name = "Tepid Deeds"
+kind = "Slow"
+level = 24
+mana_cost = 200
+cast_secs = 4
+resist_pct = 25
+
+[[spells]]
+class = "Enchanter"
+name = "Shiftless Deeds"
+kind = "Slow"
+level = 44
+mana_cost = 350
+cast_secs = 4
+resist_pct = 18
+
+# Mez line
+[[spells]]
+class = "Enchanter"
+name = "Mesmerize"
+kind = "Mez"
+level = 4
+mana_cost = 60
+cast_secs = 3
+resist_pct = 30
+land_msg = "is mesmerized"
+
+[[spells]]
+class = "Enchanter"
+name = "Enthrall"
+kind = "Mez"
+level = 16
+mana_cost = 150
+cast_secs = 3
+resist_pct = 22
+land_msg = "has been enthralled"
+
+[[spells]]
+class = "Enchanter"
+name = "Entrance"
+kind = "Mez"
+level = 34
+mana_cost = 280
+cast_secs = 4
+resist_pct = 15
+land_msg = "has been entranced"
+
+[[spells]]
+class = "Enchanter"
+name = "Dazzle"
+kind = "Mez"
+level = 49
+mana_cost = 400
+cast_secs = 4
+resist_pct = 8
+land_msg = "is dazzled"
+
+# Nuke line
+[[spells]]
+class = "Enchanter"
+name = "Chaotic Feedback"
+kind = "Nuke"
+level = 8
+mana_cost = 120
+cast_secs = 3
+min_val = 200
+max_val = 380
+resist_pct = 20
+
+[[spells]]
+class = "Enchanter"
+name = "Sanity Warp"
+kind = "Nuke"
+level = 16
+mana_cost = 200
+cast_secs = 3
+min_val = 320
+max_val = 560
+resist_pct = 18
+
+[[spells]]
+class = "Enchanter"
+name = "Chaos Flux"
+kind = "Nuke"
+level = 24
+mana_cost = 280
+cast_secs = 4
+min_val = 420
+max_val = 720
+resist_pct = 15
+
+[[spells]]
+class = "Enchanter"
+name = "Anarchy"
+kind = "Nuke"
+level = 34
+mana_cost = 380
+cast_secs = 4
+min_val = 560
+max_val = 940
+resist_pct = 12
+
+[[spells]]
+class = "Enchanter"
+name = "Discordant Mind"
+kind = "Nuke"
+level = 44
+mana_cost = 480
+cast_secs = 5
+min_val = 720
+max_val = 1180
+resist_pct = 10
+
+# Rune (damage absorption — modelled as DirectHeal on caster)
+[[spells]]
+class = "Enchanter"
+name = "Rune I"
+kind = "DirectHeal"
+level = 16
+mana_cost = 100
+cast_secs = 3
+min_val = 200
+max_val = 280
+
+[[spells]]
+class = "Enchanter"
+name = "Rune II"
+kind = "DirectHeal"
+level = 24
+mana_cost = 150
+cast_secs = 4
+min_val = 300
+max_val = 420
+
+[[spells]]
+class = "Enchanter"
+name = "Rune III"
+kind = "DirectHeal"
+level = 34
+mana_cost = 200
+cast_secs = 4
+min_val = 420
+max_val = 580
+
+[[spells]]
+class = "Enchanter"
+name = "Rune IV"
+kind = "DirectHeal"
+level = 44
+mana_cost = 280
+cast_secs = 4
+min_val = 550
+max_val = 750
+
+# Buffs — no-op in combat
+[[spells]]
+class = "Enchanter"
+name = "Clarity"
+kind = "Buff"
+level = 29
+mana_cost = 200
+cast_secs = 5
+
+[[spells]]
+class = "Enchanter"
+name = "Celerity"
+kind = "Buff"
+level = 39
+mana_cost = 200
+cast_secs = 5
+
+[[spells]]
+class = "Enchanter"
+name = "Brilliance"
+kind = "Buff"
+level = 44
+mana_cost = 300
+cast_secs = 5
+
+# ── Wizard ────────────────────────────────────────────────────────────────────
+# Fire nuke line
+[[spells]]
+class = "Wizard"
+name = "Firestorm"
+kind = "Nuke"
+level = 12
+mana_cost = 150
+cast_secs = 3
+min_val = 250
+max_val = 450
+resist_pct = 12
+
+[[spells]]
+class = "Wizard"
+name = "Pillar of Fire"
+kind = "Nuke"
+level = 16
+mana_cost = 200
+cast_secs = 3
+min_val = 320
+max_val = 560
+resist_pct = 11
+
+[[spells]]
+class = "Wizard"
+name = "Fire Spiral of Al'Kabor"
+kind = "Nuke"
+level = 20
+mana_cost = 260
+cast_secs = 4
+min_val = 400
+max_val = 680
+resist_pct = 10
+
+[[spells]]
+class = "Wizard"
+name = "Inferno Shock"
+kind = "Nuke"
+level = 29
+mana_cost = 360
+cast_secs = 4
+min_val = 560
+max_val = 900
+resist_pct = 10
+
+[[spells]]
+class = "Wizard"
+name = "Lava Storm"
+kind = "Nuke"
+level = 34
+mana_cost = 450
+cast_secs = 5
+min_val = 700
+max_val = 1100
+resist_pct = 10
+
+[[spells]]
+class = "Wizard"
+name = "Conflagration"
+kind = "Nuke"
+level = 44
+mana_cost = 560
+cast_secs = 5
+min_val = 900
+max_val = 1400
+resist_pct = 9
+
+# Ice nuke (alternate)
+[[spells]]
+class = "Wizard"
+name = "Ice Comet"
+kind = "Nuke"
+level = 49
+mana_cost = 650
+cast_secs = 6
+min_val = 1050
+max_val = 1650
+resist_pct = 8
+
+[[spells]]
+class = "Wizard"
+name = "Frost Shock"
+kind = "Nuke"
+level = 24
+mana_cost = 240
+cast_secs = 4
+min_val = 380
+max_val = 640
+resist_pct = 11
+
+[[spells]]
+class = "Wizard"
+name = "Shock of Ice"
+kind = "Nuke"
+level = 8
+mana_cost = 120
+cast_secs = 3
+min_val = 200
+max_val = 380
+resist_pct = 12
+
+# Root line
+[[spells]]
+class = "Wizard"
+name = "Root"
+kind = "Root"
+level = 4
+mana_cost = 50
+cast_secs = 3
+resist_pct = 25
+land_msg = "is rooted"
+
+[[spells]]
+class = "Wizard"
+name = "Instill"
+kind = "Root"
+level = 20
+mana_cost = 120
+cast_secs = 3
+resist_pct = 18
+land_msg = "is held in place"
+
+[[spells]]
+class = "Wizard"
+name = "Immobilize"
+kind = "Root"
+level = 39
+mana_cost = 220
+cast_secs = 4
+resist_pct = 12
+land_msg = "is immobilized"
+
+# Buffs
+[[spells]]
+class = "Wizard"
+name = "Shielding"
+kind = "Buff"
+level = 16
+mana_cost = 80
+cast_secs = 3
+
+[[spells]]
+class = "Wizard"
+name = "Greater Shielding"
+kind = "Buff"
+level = 34
+mana_cost = 150
+cast_secs = 4
+
+# ── Magician ──────────────────────────────────────────────────────────────────
+# Fire nuke line
+[[spells]]
+class = "Magician"
+name = "Column of Fire"
+kind = "Nuke"
+level = 12
+mana_cost = 120
+cast_secs = 3
+min_val = 200
+max_val = 380
+resist_pct = 12
+
+[[spells]]
+class = "Magician"
+name = "Shock of Flame"
+kind = "Nuke"
+level = 16
+mana_cost = 160
+cast_secs = 3
+min_val = 280
+max_val = 500
+resist_pct = 11
+
+[[spells]]
+class = "Magician"
+name = "Flame Flux"
+kind = "Nuke"
+level = 24
+mana_cost = 220
+cast_secs = 4
+min_val = 380
+max_val = 660
+resist_pct = 10
+
+[[spells]]
+class = "Magician"
+name = "Cinder Bolt"
+kind = "Nuke"
+level = 34
+mana_cost = 320
+cast_secs = 4
+min_val = 540
+max_val = 900
+resist_pct = 10
+
+[[spells]]
+class = "Magician"
+name = "Rain of Lava"
+kind = "Nuke"
+level = 39
+mana_cost = 380
+cast_secs = 4
+min_val = 650
+max_val = 1050
+resist_pct = 10
+
+[[spells]]
+class = "Magician"
+name = "Lava Bolt"
+kind = "Nuke"
+level = 49
+mana_cost = 480
+cast_secs = 5
+min_val = 850
+max_val = 1350
+resist_pct = 9
+
+# Blade/magic nuke line (alternate)
+[[spells]]
+class = "Magician"
+name = "Shock of Blades"
+kind = "Nuke"
+level = 8
+mana_cost = 100
+cast_secs = 3
+min_val = 180
+max_val = 340
+resist_pct = 12
+
+[[spells]]
+class = "Magician"
+name = "Shock of Spikes"
+kind = "Nuke"
+level = 24
+mana_cost = 220
+cast_secs = 4
+min_val = 380
+max_val = 660
+resist_pct = 11
+
+# Burnout buffs — no-op in combat
+[[spells]]
+class = "Magician"
+name = "Burnout"
+kind = "Buff"
+level = 12
+mana_cost = 100
+cast_secs = 4
+
+[[spells]]
+class = "Magician"
+name = "Burnout II"
+kind = "Buff"
+level = 29
+mana_cost = 175
+cast_secs = 4
+
+[[spells]]
+class = "Magician"
+name = "Burnout III"
+kind = "Buff"
+level = 49
+mana_cost = 300
+cast_secs = 5
+
+# ── Necromancer ───────────────────────────────────────────────────────────────
+# Lifetap line
+[[spells]]
+class = "Necromancer"
+name = "Lifedraw"
+kind = "Lifetap"
+level = 12
+mana_cost = 65
+cast_secs = 3
+min_val = 90
+max_val = 160
+resist_pct = 18
+
+[[spells]]
+class = "Necromancer"
+name = "Siphon Life"
+kind = "Lifetap"
+level = 20
+mana_cost = 110
+cast_secs = 4
+min_val = 160
+max_val = 280
+resist_pct = 16
+
+[[spells]]
+class = "Necromancer"
+name = "Spirit Tap"
+kind = "Lifetap"
+level = 29
+mana_cost = 170
+cast_secs = 4
+min_val = 260
+max_val = 440
+resist_pct = 14
+
+[[spells]]
+class = "Necromancer"
+name = "Drain Spirit"
+kind = "Lifetap"
+level = 39
+mana_cost = 240
+cast_secs = 5
+min_val = 380
+max_val = 640
+resist_pct = 12
+
+[[spells]]
+class = "Necromancer"
+name = "Drain Soul"
+kind = "Lifetap"
+level = 49
+mana_cost = 320
+cast_secs = 5
+min_val = 520
+max_val = 860
+resist_pct = 10
+
+# DoT line
+[[spells]]
+class = "Necromancer"
+name = "Engulfing Darkness"
+kind = "Dot"
+level = 12
+mana_cost = 100
+cast_secs = 3
+min_val = 45
+max_val = 80
+ticks = 6
+tick_secs = 6
+resist_pct = 15
+land_msg = "is engulfed by darkness"
+
+[[spells]]
+class = "Necromancer"
+name = "Heat Blood"
+kind = "Dot"
+level = 12
+mana_cost = 110
+cast_secs = 3
+min_val = 50
+max_val = 85
+ticks = 6
+tick_secs = 6
+resist_pct = 14
+land_msg = "writhes as blood boils"
+
+[[spells]]
+class = "Necromancer"
+name = "Boil Blood"
+kind = "Dot"
+level = 29
+mana_cost = 200
+cast_secs = 4
+min_val = 90
+max_val = 155
+ticks = 7
+tick_secs = 6
+resist_pct = 12
+land_msg = "screams as blood boils"
+
+[[spells]]
+class = "Necromancer"
+name = "Venom of the Snake"
+kind = "Dot"
+level = 34
+mana_cost = 250
+cast_secs = 4
+min_val = 110
+max_val = 185
+ticks = 7
+tick_secs = 6
+resist_pct = 11
+land_msg = "writhes in agony from snake venom"
+
+[[spells]]
+class = "Necromancer"
+name = "Scourge"
+kind = "Dot"
+level = 39
+mana_cost = 300
+cast_secs = 5
+min_val = 140
+max_val = 235
+ticks = 7
+tick_secs = 6
+resist_pct = 10
+land_msg = "is scourged"
+
+[[spells]]
+class = "Necromancer"
+name = "Asystole"
+kind = "Dot"
+level = 44
+mana_cost = 360
+cast_secs = 5
+min_val = 180
+max_val = 300
+ticks = 8
+tick_secs = 6
+resist_pct = 10
+land_msg = "clutches its chest as its heart stops"
+
+# Snare/Darkness line
+[[spells]]
+class = "Necromancer"
+name = "Clinging Darkness"
+kind = "Snare"
+level = 4
+mana_cost = 50
+cast_secs = 2
+resist_pct = 20
+land_msg = "is enveloped by clinging darkness"
+
+[[spells]]
+class = "Necromancer"
+name = "Engulfing Darkness"
+kind = "Snare"
+level = 12
+mana_cost = 90
+cast_secs = 3
+resist_pct = 16
+land_msg = "is held by engulfing darkness"
+
+[[spells]]
+class = "Necromancer"
+name = "Dooming Darkness"
+kind = "Snare"
+level = 29
+mana_cost = 160
+cast_secs = 3
+resist_pct = 12
+land_msg = "is doomed by darkness"
+
+# ── Shadowknight ──────────────────────────────────────────────────────────────
+# Snare/Darkness line
+[[spells]]
+class = "Shadowknight"
+name = "Clinging Darkness"
+kind = "Snare"
+level = 15
+mana_cost = 70
+cast_secs = 3
+resist_pct = 25
+land_msg = "is enveloped by clinging darkness"
+
+[[spells]]
+class = "Shadowknight"
+name = "Engulfing Darkness"
+kind = "Snare"
+level = 22
+mana_cost = 130
+cast_secs = 3
+resist_pct = 20
+land_msg = "is held by engulfing darkness"
+
+[[spells]]
+class = "Shadowknight"
+name = "Dooming Darkness"
+kind = "Snare"
+level = 49
+mana_cost = 220
+cast_secs = 4
+resist_pct = 12
+land_msg = "is doomed by darkness"
+
+# Lifetap line
+[[spells]]
+class = "Shadowknight"
+name = "Lifetap"
+kind = "Lifetap"
+level = 9
+mana_cost = 50
+cast_secs = 3
+min_val = 60
+max_val = 110
+resist_pct = 22
+
+[[spells]]
+class = "Shadowknight"
+name = "Lifespike"
+kind = "Lifetap"
+level = 15
+mana_cost = 85
+cast_secs = 3
+min_val = 100
+max_val = 180
+resist_pct = 20
+
+[[spells]]
+class = "Shadowknight"
+name = "Lifedraw"
+kind = "Lifetap"
+level = 30
+mana_cost = 150
+cast_secs = 4
+min_val = 220
+max_val = 380
+resist_pct = 16
+
+# DoT line
+[[spells]]
+class = "Shadowknight"
+name = "Disease Cloud"
+kind = "Dot"
+level = 9
+mana_cost = 60
+cast_secs = 2
+min_val = 25
+max_val = 45
+ticks = 6
+tick_secs = 6
+resist_pct = 18
+land_msg = "is covered in disease"
+
+[[spells]]
+class = "Shadowknight"
+name = "Heat Blood"
+kind = "Dot"
+level = 30
+mana_cost = 160
+cast_secs = 4
+min_val = 70
+max_val = 120
+ticks = 6
+tick_secs = 6
+resist_pct = 14
+land_msg = "writhes as blood boils"
+
+[[spells]]
+class = "Shadowknight"
+name = "Heart Flutter"
+kind = "Dot"
+level = 39
+mana_cost = 220
+cast_secs = 4
+min_val = 100
+max_val = 170
+ticks = 6
+tick_secs = 6
+resist_pct = 12
+land_msg = "clutches its chest"
+
+# Debuff line
+[[spells]]
+class = "Shadowknight"
+name = "Siphon Strength"
+kind = "Debuff"
+level = 9
+mana_cost = 70
+cast_secs = 3
+resist_pct = 30
+land_msg = "staggers as strength is siphoned"
+
+[[spells]]
+class = "Shadowknight"
+name = "Wave of Enfeeblement"
+kind = "Debuff"
+level = 30
+mana_cost = 150
+cast_secs = 3
+resist_pct = 22
+land_msg = "is enveloped in a wave of enfeeblement"
+
+[[spells]]
+class = "Shadowknight"
+name = "Terror of Darkness"
+kind = "Debuff"
+level = 34
+mana_cost = 200
+cast_secs = 3
+resist_pct = 18
+land_msg = "is terrorized by darkness"
+
+# Buffs
+[[spells]]
+class = "Shadowknight"
+name = "Grim Aura"
+kind = "Buff"
+level = 22
+mana_cost = 100
+cast_secs = 3
+
+# ── Ranger ────────────────────────────────────────────────────────────────────
+# Snare line
+[[spells]]
+class = "Ranger"
+name = "Snare"
+kind = "Snare"
+level = 9
+mana_cost = 50
+cast_secs = 2
+resist_pct = 18
+land_msg = "has been snared"
+
+[[spells]]
+class = "Ranger"
+name = "Tangling Weeds"
+kind = "Snare"
+level = 9
+mana_cost = 50
+cast_secs = 2
+resist_pct = 20
+land_msg = "is tangled in weeds"
+
+[[spells]]
+class = "Ranger"
+name = "Grasping Roots"
+kind = "Root"
+level = 15
+mana_cost = 80
+cast_secs = 3
+resist_pct = 22
+land_msg = "is held fast by grasping roots"
+
+[[spells]]
+class = "Ranger"
+name = "Ensnaring Roots"
+kind = "Root"
+level = 49
+mana_cost = 150
+cast_secs = 3
+resist_pct = 8
+land_msg = "is bound by ensnaring roots"
+
+# DoT line
+[[spells]]
+class = "Ranger"
+name = "Flame Lick"
+kind = "Dot"
+level = 9
+mana_cost = 60
+cast_secs = 3
+min_val = 40
+max_val = 70
+ticks = 5
+tick_secs = 6
+resist_pct = 16
+land_msg = "is licked by flames"
+
+[[spells]]
+class = "Ranger"
+name = "Stinging Swarm"
+kind = "Dot"
+level = 30
+mana_cost = 180
+cast_secs = 4
+min_val = 90
+max_val = 155
+ticks = 6
+tick_secs = 6
+resist_pct = 12
+land_msg = "is swarmed by stinging insects"
+
+# Nuke line
+[[spells]]
+class = "Ranger"
+name = "Burst of Fire"
+kind = "Nuke"
+level = 15
+mana_cost = 100
+cast_secs = 3
+min_val = 180
+max_val = 340
+resist_pct = 18
+
+[[spells]]
+class = "Ranger"
+name = "Ignite"
+kind = "Nuke"
+level = 22
+mana_cost = 150
+cast_secs = 3
+min_val = 280
+max_val = 500
+resist_pct = 15
+
+[[spells]]
+class = "Ranger"
+name = "Flaming Arrow"
+kind = "Nuke"
+level = 29
+mana_cost = 200
+cast_secs = 4
+min_val = 360
+max_val = 620
+resist_pct = 13
+
+[[spells]]
+class = "Ranger"
+name = "Careless Lightning"
+kind = "Nuke"
+level = 39
+mana_cost = 280
+cast_secs = 4
+min_val = 500
+max_val = 840
+resist_pct = 12
+
+# Buffs
+[[spells]]
+class = "Ranger"
+name = "Spirit of Wolf"
+kind = "Buff"
+level = 30
+mana_cost = 100
+cast_secs = 4
+
+[[spells]]
+class = "Ranger"
+name = "Strength of Earth"
+kind = "Buff"
+level = 30
+mana_cost = 100
+cast_secs = 4
+
+# ── Paladin ───────────────────────────────────────────────────────────────────
+# Heal line
+[[spells]]
+class = "Paladin"
+name = "Minor Healing"
+kind = "DirectHeal"
+level = 9
+mana_cost = 30
+cast_secs = 3
+min_val = 200
+max_val = 380
+
+[[spells]]
+class = "Paladin"
+name = "Light Healing"
+kind = "DirectHeal"
+level = 15
+mana_cost = 55
+cast_secs = 3
+min_val = 320
+max_val = 580
+
+[[spells]]
+class = "Paladin"
+name = "Healing"
+kind = "DirectHeal"
+level = 30
+mana_cost = 90
+cast_secs = 4
+min_val = 550
+max_val = 950
+
+[[spells]]
+class = "Paladin"
+name = "Greater Healing"
+kind = "DirectHeal"
+level = 39
+mana_cost = 160
+cast_secs = 5
+min_val = 900
+max_val = 1600
+
+# Undead nukes
+[[spells]]
+class = "Paladin"
+name = "Ward Undead"
+kind = "Nuke"
+level = 15
+mana_cost = 100
+cast_secs = 3
+min_val = 220
+max_val = 420
+resist_pct = 25
+
+[[spells]]
+class = "Paladin"
+name = "Expulse Undead"
+kind = "Nuke"
+level = 30
+mana_cost = 175
+cast_secs = 3
+min_val = 380
+max_val = 680
+resist_pct = 20
+
+[[spells]]
+class = "Paladin"
+name = "Dismiss Undead"
+kind = "Nuke"
+level = 49
+mana_cost = 280
+cast_secs = 4
+min_val = 600
+max_val = 1050
+resist_pct = 15
+
+# Stun/debuff line
+[[spells]]
+class = "Paladin"
+name = "Cease"
+kind = "Debuff"
+level = 9
+mana_cost = 60
+cast_secs = 2
+resist_pct = 35
+land_msg = "is stunned"
+
+[[spells]]
+class = "Paladin"
+name = "Desist"
+kind = "Debuff"
+level = 15
+mana_cost = 100
+cast_secs = 3
+resist_pct = 28
+land_msg = "is stunned"
+
+[[spells]]
+class = "Paladin"
+name = "Stun"
+kind = "Debuff"
+level = 30
+mana_cost = 150
+cast_secs = 3
+resist_pct = 22
+land_msg = "is stunned"
+
+[[spells]]
+class = "Paladin"
+name = "Holy Might"
+kind = "Debuff"
+level = 49
+mana_cost = 220
+cast_secs = 3
+resist_pct = 15
+land_msg = "is stunned by holy might"
+
+# Buffs
+[[spells]]
+class = "Paladin"
+name = "Holy Armor"
+kind = "Buff"
+level = 15
+mana_cost = 100
+cast_secs = 4
+
+[[spells]]
+class = "Paladin"
+name = "Symbol of Transal"
+kind = "Buff"
+level = 30
+mana_cost = 200
+cast_secs = 5
+
+[[spells]]
+class = "Paladin"
+name = "Symbol of Ryltan"
+kind = "Buff"
+level = 39
+mana_cost = 300
+cast_secs = 6
+
+[[spells]]
+class = "Paladin"
+name = "Symbol of Pinzarn"
+kind = "Buff"
+level = 49
+mana_cost = 400
+cast_secs = 6
+
+# ── Bard ──────────────────────────────────────────────────────────────────────
+# Bard songs have 0 mana cost; they are always available regardless of level
+[[spells]]
+class = "Bard"
+name = "Fufil's Curtailing Chant"
+kind = "Slow"
+level = 9
+mana_cost = 0
+cast_secs = 3
+resist_pct = 30
+
+[[spells]]
+class = "Bard"
+name = "Brusco's Boastful Bellow"
+kind = "Nuke"
+level = 6
+mana_cost = 0
+cast_secs = 3
+min_val = 160
+max_val = 330
+resist_pct = 20
+
+[[spells]]
+class = "Bard"
+name = "Anthem de Arms"
+kind = "Buff"
+level = 1
+mana_cost = 0
+cast_secs = 3
+
+[[spells]]
+class = "Bard"
+name = "Cantata of Soothing"
+kind = "Buff"
+level = 4
+mana_cost = 0
+cast_secs = 3
+
+[[spells]]
+class = "Bard"
+name = "Selo's Accelerating Chorus"
+kind = "Buff"
+level = 9
+mana_cost = 0
+cast_secs = 3
+
+# ── Monk / Rogue / Warrior have no spells ─────────────────────────────────────
+# (omit entries — empty pool means no spell casting)

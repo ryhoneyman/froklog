@@ -70,6 +70,14 @@ struct Args {
     #[arg(long, value_name = "EQSERVER")]
     eq_server: Option<String>,
 
+    /// Player (character) name.
+    /// When --admin-token is used this is auto-extracted from the log filename
+    /// (eqlog_<Player>_<Server>.txt) if not provided here.  Supplying both
+    /// --player and --eq-server lets you replay any log file regardless of
+    /// its filename format.
+    #[arg(long)]
+    player: Option<String>,
+
     /// Stream ID (from `POST /stream` registration).
     /// Required when --admin-token is not provided.
     #[arg(long)]
@@ -125,7 +133,10 @@ fn main() {
 
     let args = Args::parse();
 
-    let player_name = extract_player_name(&args.log);
+    let player_name = args
+        .player
+        .clone()
+        .unwrap_or_else(|| extract_player_name(&args.log));
 
     // Resolve stream_id + stream_token — either from args or via auto-registration.
     let (stream_id, stream_token) = match &args.admin_token {
@@ -136,6 +147,7 @@ fn main() {
                     args.log
                 );
                 eprintln!("       Expected format: eqlog_<PlayerName>_<Server>.txt");
+                eprintln!("       Alternatively, supply --player <name>");
                 std::process::exit(1);
             }
             let eq_server = args

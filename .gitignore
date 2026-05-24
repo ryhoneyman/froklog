@@ -1,6 +1,9 @@
 # Rust build artifacts
 /target/
 
+# Precompiled glibc compat shim — built by build.rs via cc crate
+/compat/*.o
+
 # EQ log files (contain personal character/server names)
 /logs/
 

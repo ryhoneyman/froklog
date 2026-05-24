@@ -24,9 +24,16 @@ setup: install-rust setup-windows-target
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
-# Native Linux debug build (fast iteration)
+# Native Linux debug build (fast iteration); sweeps incremental cache if target/debug > 1 GB
 dev:
+    #!/usr/bin/env bash
+    set -e
     cargo build
+    size=$(du -sb target/debug | cut -f1)
+    if [ "$size" -gt 1073741824 ]; then
+        echo "target/debug is $((size/1024/1024)) MB — sweeping stale artifacts..."
+        cargo sweep -t 7
+    fi
 
 # Native Linux release build
 build:
@@ -95,3 +102,11 @@ run-window from:
 
 clean:
     cargo clean
+
+# Manually prune stale incremental artifacts older than 7 days
+sweep:
+    cargo sweep -t 7
+
+# Wipe only debug artifacts, keep release
+clean-debug:
+    rm -rf target/debug
