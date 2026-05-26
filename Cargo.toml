@@ -31,10 +31,6 @@ path = "src/bin/froklog-migrate/main.rs"
 name = "froklog-loggen"
 path = "src/bin/froklog-loggen/main.rs"
 
-[[bin]]
-name = "froklog-chatanalyze"
-path = "src/bin/froklog-chatanalyze/main.rs"
-
 [features]
 default = []
 # Windows systray client (no visible window; requires Windows cross-compile)

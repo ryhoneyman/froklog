@@ -96,19 +96,68 @@ pub mod neural_impl {
         }
     }
 
-    /// Build the prefix token sequence: `[ARCH] <arch> [REG] <reg> [TRIG] <trig> [RESPONSE]`.
-    fn build_prefix(meta: &ModelMeta, ctx: &SituationContext) -> Vec<i64> {
+    /// Return the most contextually useful slot value for the model to condition on.
+    /// Priority: mob/target entity names first, then spell names, then actor names.
+    fn pick_primary_slot<'a>(slots: &'a HashMap<String, String>) -> Option<&'a str> {
+        for key in &["mob", "player", "healer", "target", "spell", "ability", "caster", "src"] {
+            if let Some(v) = slots.get(*key) {
+                return Some(v.as_str());
+            }
+        }
+        None
+    }
+
+    /// Build the prefix token sequence:
+    /// `[ARCH] <arch> [REG] <reg> [TRIG] <trig> [personality…] <slot_text> [RESPONSE]`
+    ///
+    /// Personality bucket tokens and SP-encoded slot text are appended when
+    /// the relevant control tokens exist in `meta.ctrl` (graceful degradation
+    /// against models trained without them).
+    fn build_prefix(meta: &ModelMeta, sp: &SentencePieceProcessor, ctx: &SituationContext) -> Vec<i64> {
         let arch_tag = format!("[{}]", archetype_tag(&ctx.archetype));
         let reg_tag  = format!("[{}]", register_tag(&ctx.register));
         let trig_tag = format!("[{}]", ctx.trigger_kind.replace(' ', "_"));
 
-        let mut ids = Vec::with_capacity(8);
+        let mut ids = Vec::with_capacity(16);
         for tag in &["[ARCH]", arch_tag.as_str(), "[REG]", reg_tag.as_str(),
-                     "[TRIG]", trig_tag.as_str(), "[RESPONSE]"] {
+                     "[TRIG]", trig_tag.as_str()] {
             if let Some(&id) = meta.ctrl.get(*tag) {
                 ids.push(id);
             }
         }
+
+        // Personality bucket tokens (thresholds mirror build_dataset.py build_prefix_ids)
+        let verbosity_tag = if ctx.verbosity > 0.55 { Some("[VERBOSE]") }
+                            else if ctx.verbosity < 0.40 { Some("[TERSE]") }
+                            else { None };
+        let humor_tag = if ctx.humor > 0.55 { Some("[HUMOROUS]") }
+                        else if ctx.humor < 0.35 { Some("[SERIOUS]") }
+                        else { None };
+        let patience_tag = if ctx.patience > 0.65 { Some("[PATIENT]") }
+                           else if ctx.patience < 0.50 { Some("[IMPATIENT]") }
+                           else { None };
+        for opt_tag in [verbosity_tag, humor_tag, patience_tag] {
+            if let Some(tag) = opt_tag {
+                if let Some(&id) = meta.ctrl.get(tag) {
+                    ids.push(id);
+                }
+            }
+        }
+
+        // SP-encode the primary slot entity name so the model can reference it
+        if let Some(slot_val) = pick_primary_slot(&ctx.slots) {
+            if let Ok(sp_ids) = sp.encode_to_ids(slot_val) {
+                for sp_id in sp_ids {
+                    ids.push(sp_id as i64);
+                }
+            }
+        }
+
+        // [RESPONSE] delimiter — everything after this is generated
+        if let Some(&id) = meta.ctrl.get("[RESPONSE]") {
+            ids.push(id);
+        }
+
         ids
     }
 
@@ -232,17 +281,21 @@ pub mod neural_impl {
 
     impl ChatBackend for NeuralBackend {
         fn generate(&mut self, ctx: &SituationContext, rng: &mut StdRng) -> Option<String> {
-            let mut ids = build_prefix(&self.meta, ctx);
+            let mut ids = build_prefix(&self.meta, &self.sp, ctx);
             tracing::debug!(
                 trigger_kind  = ctx.trigger_kind,
                 archetype     = archetype_tag(&ctx.archetype),
                 register      = register_tag(&ctx.register),
+                verbosity     = ctx.verbosity,
+                humor         = ctx.humor,
+                patience      = ctx.patience,
+                primary_slot  = ?pick_primary_slot(&ctx.slots),
                 prefix_len    = ids.len(),
                 prefix_ids    = ?ids,
                 temperature   = self.temperature,
                 top_k         = self.top_k,
                 max_new       = self.max_new,
-                "NeuralBackend prefix — slots NOT encoded (only control tokens)"
+                "NeuralBackend prefix built"
             );
             if ids.is_empty() {
                 tracing::warn!("NeuralBackend: no control tokens matched — skipping");

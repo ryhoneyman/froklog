@@ -44,7 +44,21 @@ CONTROL_TOKENS: list[str] = [
     "[MobKilled]", "[PlayerDied]", "[SpellResisted]", "[BigHit]",
     "[NearDeath]", "[CasterOom]", "[Incoming]", "[Loot]", "[LevelUp]",
     "[Wipe]", "[Banter]",
+    # Personality bucket tokens (mirrors thresholds in neural.rs build_prefix)
+    "[VERBOSE]", "[TERSE]",
+    "[HUMOROUS]", "[SERIOUS]",
+    "[PATIENT]", "[IMPATIENT]",
 ]
+
+# Personality trait values per archetype — mirrors PersonalityProfile presets in personality.rs.
+# Used to derive bucketed personality control tokens during dataset construction.
+ARCHETYPE_PERSONALITY: dict[str, dict[str, float]] = {
+    "QuietAnchor":      {"verbosity": 0.28, "humor": 0.40, "patience": 0.78},
+    "ChaoticNarrator":  {"verbosity": 0.78, "humor": 0.65, "patience": 0.58},
+    "RaidLeader":       {"verbosity": 0.48, "humor": 0.30, "patience": 0.72},
+    "ReactiveObserver": {"verbosity": 0.18, "humor": 0.25, "patience": 0.80},
+    "TacticalFocused":  {"verbosity": 0.50, "humor": 0.20, "patience": 0.70},
+}
 
 MAX_LEN = 128
 
@@ -107,20 +121,77 @@ def classify_register(context: list[dict]) -> str:
     return "Neutral"
 
 
+# ── Slot extraction ───────────────────────────────────────────────────────────
+
+def extract_slot_text(context: list[dict], trigger_kind: str) -> str | None:
+    """Extract the primary entity name for trigger_kind from the context event list."""
+    for ev in reversed(context):
+        kind    = ev.get("kind", "")
+        summary = ev.get("summary", "")
+        if trigger_kind == "MobKilled" and kind == "slay":
+            if " slew " in summary:
+                return summary.split(" slew ", 1)[1]
+        elif trigger_kind in ("BigHit", "NearDeath") and kind == "big_hit":
+            if " hit " in summary and " for " in summary:
+                return summary.split(" hit ", 1)[1].split(" for ")[0]
+        elif trigger_kind in ("PlayerDied", "Wipe") and kind in ("death", "death_self"):
+            if " slain by " in summary:
+                return summary.split(" slain by ", 1)[1]
+        elif trigger_kind == "SpellResisted" and kind == "resist":
+            if ": " in summary:
+                return summary.split(": ", 1)[1]
+        elif trigger_kind == "CasterOom" and kind == "oom":
+            if summary.endswith(" OOM"):
+                return summary[:-4]
+        elif trigger_kind == "Incoming" and kind == "cast":
+            if " casting " in summary:
+                return summary.split(" casting ", 1)[1]
+    return None
+
+
 # ── Prefix construction ───────────────────────────────────────────────────────
 
-def build_prefix_ids(rec: dict, ctrl: dict[str, int]) -> list[int]:
+def build_prefix_ids(rec: dict, ctrl: dict[str, int], sp: "spm.SentencePieceProcessor") -> list[int]:
     """Return the integer control-token list that prefixes the response."""
     arch = rec.get("archetype", "Unknown")
-    ctx = rec.get("context", [])
-    reg = classify_register(ctx)
+    ctx  = rec.get("context", [])
+    reg  = classify_register(ctx)
     trig = classify_trigger(ctx)
-    return [
-        ctrl["[ARCH]"],     ctrl.get(f"[{arch}]",  ctrl["[Unknown]"]),
-        ctrl["[REG]"],      ctrl.get(f"[{reg}]",   ctrl["[Neutral]"]),
-        ctrl["[TRIG]"],     ctrl.get(f"[{trig}]",  ctrl["[Banter]"]),
-        ctrl["[RESPONSE]"],
+
+    ids: list[int] = [
+        ctrl["[ARCH]"],  ctrl.get(f"[{arch}]",  ctrl["[Unknown]"]),
+        ctrl["[REG]"],   ctrl.get(f"[{reg}]",   ctrl["[Neutral]"]),
+        ctrl["[TRIG]"],  ctrl.get(f"[{trig}]",  ctrl["[Banter]"]),
     ]
+
+    # Personality bucket tokens (thresholds mirror neural.rs build_prefix)
+    profile   = ARCHETYPE_PERSONALITY.get(arch, {})
+    verbosity = profile.get("verbosity", 0.50)
+    humor     = profile.get("humor",     0.40)
+    patience  = profile.get("patience",  0.65)
+
+    if verbosity > 0.55:
+        ids.append(ctrl["[VERBOSE]"])
+    elif verbosity < 0.40:
+        ids.append(ctrl["[TERSE]"])
+
+    if humor > 0.55:
+        ids.append(ctrl["[HUMOROUS]"])
+    elif humor < 0.35:
+        ids.append(ctrl["[SERIOUS]"])
+
+    if patience > 0.65:
+        ids.append(ctrl["[PATIENT]"])
+    elif patience < 0.50:
+        ids.append(ctrl["[IMPATIENT]"])
+
+    # SP-encoded primary entity name from context
+    slot_text = extract_slot_text(ctx, trig)
+    if slot_text:
+        ids.extend(sp.encode(slot_text, out_type=int))
+
+    ids.append(ctrl["[RESPONSE]"])
+    return ids
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -161,7 +232,7 @@ def main() -> None:
     prefix_lens: list[int] = []
 
     for rec in records:
-        prefix_ids = build_prefix_ids(rec, ctrl)
+        prefix_ids = build_prefix_ids(rec, ctrl, sp)
         response_ids: list[int] = sp.encode(rec["text"], out_type=int)
         response_ids.append(sp.eos_id())
 

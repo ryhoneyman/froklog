@@ -1,5 +1,5 @@
 {
-  "vocab_size": 1048,
+  "vocab_size": 1054,
   "base_vocab": 1024,
   "control_tokens": {
     "[ARCH]": 1024,
@@ -25,7 +25,13 @@
     "[Loot]": 1044,
     "[LevelUp]": 1045,
     "[Wipe]": 1046,
-    "[Banter]": 1047
+    "[Banter]": 1047,
+    "[VERBOSE]": 1048,
+    "[TERSE]": 1049,
+    "[HUMOROUS]": 1050,
+    "[SERIOUS]": 1051,
+    "[PATIENT]": 1052,
+    "[IMPATIENT]": 1053
   },
   "max_len": 128,
   "pad_id": 0,

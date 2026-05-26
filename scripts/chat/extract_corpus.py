@@ -29,15 +29,6 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-# ── Archetype map ──────────────────────────────────────────────────────────────
-
-# Maps character name → archetype label.  Extend as new speakers are identified.
-ARCHETYPE_MAP: dict[str, str] = {
-    "Icestorm": "QuietAnchor",
-    "Talodar": "ChaoticNarrator",
-    "Xackery": "RaidLeader",
-}
-
 # ── Regex patterns ─────────────────────────────────────────────────────────────
 
 # EQ log timestamp: [Day Mon DD HH:MM:SS YYYY]
@@ -45,6 +36,12 @@ _TS = r"\[(?P<ts>[A-Za-z]+ [A-Za-z]+ +\d+ \d+:\d+:\d+ \d+)\]"
 
 # Chat line patterns — order matters (most specific first)
 CHAT_PATTERNS: list[tuple[str, str, re.Pattern]] = [
+    # Guild chat: Playername tells the guild, '...'
+    ("guild", "other",
+     re.compile(_TS + r" (?P<speaker>\w+) tells the guild, ['\"](?P<text>.+?)['\"]$")),
+    # Self guild chat: You say to your guild, '...'
+    ("guild", "self",
+     re.compile(_TS + r" You say to your guild, ['\"](?P<text>.+?)['\"]$")),
     # Other player group chat: Talodar tells the group, '...'
     ("group", "other",
      re.compile(_TS + r" (?P<speaker>\w+) tells the group, ['\"](?P<text>.+?)['\"]$")),
@@ -124,6 +121,7 @@ def extract_from_file(
     path: Path,
     window_secs: int,
     include_unknown: bool,
+    archetype_map: dict[str, str],
 ) -> list[dict]:
     """Extract all labelled chat triples from a single log file."""
     owner = player_from_filename(path)
@@ -175,7 +173,7 @@ def extract_from_file(
                     break
 
                 # Archetype label
-                archetype = ARCHETYPE_MAP.get(speaker, "Unknown")
+                archetype = archetype_map.get(speaker, "Unknown")
                 if archetype == "Unknown" and not include_unknown:
                     break
 
@@ -245,7 +243,7 @@ def collect_log_files(path: Path) -> list[Path]:
 
 # ── Stats output ───────────────────────────────────────────────────────────────
 
-def print_stats(records: list[dict]) -> None:
+def print_stats(records: list[dict], archetype_map: dict[str, str]) -> None:
     from collections import Counter
     total = len(records)
     by_arch = Counter(r["archetype"] for r in records)
@@ -264,7 +262,7 @@ def print_stats(records: list[dict]) -> None:
     print()
     print("Top speakers:")
     for spk, n in by_speaker.most_common(15):
-        arch = ARCHETYPE_MAP.get(spk, "Unknown")
+        arch = archetype_map.get(spk, "Unknown")
         print(f"  {spk:<20} {n:>6,}  [{arch}]")
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -274,18 +272,28 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--logs", required=True,
                     help="Path to a log file or directory of log files")
+    ap.add_argument("--archetype-map", default="data/chat/build/archetype_map.json",
+                    help="JSON file mapping speaker names to archetypes (default: data/chat/build/archetype_map.json)")
     ap.add_argument("--output", default="-",
                     help="Output JSONL path (default: stdout)")
-    ap.add_argument("--window", type=int, default=30,
-                    help="Context window in seconds before each chat line (default: 30)")
+    ap.add_argument("--window", type=int, default=60,
+                    help="Context window in seconds before each chat line (default: 60)")
     ap.add_argument("--include-unknown", action="store_true",
-                    help="Include utterances from speakers not in ARCHETYPE_MAP")
+                    help="Include utterances from speakers not in the archetype map")
     ap.add_argument("--stats", action="store_true",
                     help="Print per-archetype statistics instead of writing JSONL")
     ap.add_argument("--channels", nargs="+",
-                    default=["group", "say", "voice"],
-                    help="Channels to include (default: group say voice)")
+                    default=["guild", "group", "say", "voice", "ooc"],
+                    help="Channels to include (default: guild group say voice ooc)")
     args = ap.parse_args()
+
+    map_path = Path(args.archetype_map)
+    if map_path.exists():
+        archetype_map: dict[str, str] = json.loads(map_path.read_text(encoding="utf-8"))
+    else:
+        archetype_map = {}
+        print(f"note: {map_path} not found — all speakers treated as Unknown", file=sys.stderr)
+        print(f"      run with --include-unknown, then use analyze_speakers.py --update-map to create it", file=sys.stderr)
 
     log_path = Path(args.logs)
     if not log_path.exists():
@@ -299,7 +307,7 @@ def main() -> None:
 
     all_records: list[dict] = []
     for f in files:
-        recs = extract_from_file(f, args.window, args.include_unknown)
+        recs = extract_from_file(f, args.window, args.include_unknown, archetype_map)
         # Filter by channel
         recs = [r for r in recs if r["channel"] in args.channels]
         all_records.extend(recs)
@@ -308,7 +316,7 @@ def main() -> None:
     print(f"Total: {len(all_records):,} records", file=sys.stderr)
 
     if args.stats:
-        print_stats(all_records)
+        print_stats(all_records, archetype_map)
         return
 
     if args.output == "-":
