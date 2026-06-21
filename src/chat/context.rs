@@ -31,7 +31,6 @@ pub struct RecentMessage {
 #[derive(Debug)]
 pub struct SituationContext {
     // ── Phrasebook compat (required by PhrasebookBackend) ─────────────────────
-
     /// Canonical trigger kind string (e.g. `"MobKilled"`, `"SpellResisted"`).
     pub trigger_kind: &'static str,
 
@@ -39,7 +38,6 @@ pub struct SituationContext {
     pub slots: HashMap<String, String>,
 
     // ── Personality ───────────────────────────────────────────────────────────
-
     /// The speaking character's named archetype.
     pub archetype: Archetype,
 
@@ -55,20 +53,17 @@ pub struct SituationContext {
     pub expression_mode: ExpressionMode,
 
     // ── Emotional state ───────────────────────────────────────────────────────
-
     pub frustration: f32,
     pub morale: f32,
     pub fatigue: f32,
 
     // ── Social context ────────────────────────────────────────────────────────
-
     /// Structural dynamic of the speaker's relationship to the trigger's
     /// primary other participant (healer, killer, target, etc.).
     /// `None` when the trigger has no obvious other participant.
     pub relationship: Option<RelDynamic>,
 
     // ── Game state ────────────────────────────────────────────────────────────
-
     /// Current zone name. `None` if the caller has not provided it.
     pub zone: Option<String>,
 

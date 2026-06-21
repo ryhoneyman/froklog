@@ -11,8 +11,8 @@ pub mod tray;
 pub mod triggers;
 
 #[cfg(feature = "tray")]
-pub mod settings_win;
-#[cfg(feature = "tray")]
 pub mod overlay;
 #[cfg(feature = "tray")]
 pub mod overlay_config_win;
+#[cfg(feature = "tray")]
+pub mod settings_win;

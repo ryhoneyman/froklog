@@ -24,9 +24,9 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
-use chatmod::{ChatCtx, ChatDispatch, ChatTrigger, Personality, SimChatState};
 #[cfg(feature = "neural")]
-use chatmod::{NeuralCtx, try_load_neural_backend};
+use chatmod::{try_load_neural_backend, NeuralCtx};
+use chatmod::{ChatCtx, ChatDispatch, ChatTrigger, Personality, SimChatState};
 use config::{GameConfig, LootEntry, MobDef, SpellDef, SpellKind, ZoneDef};
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -1159,7 +1159,8 @@ fn run_encounter(sim: &mut Sim, ctx: &mut Ctx, cfg: &GameConfig) {
                     }
 
                     // Context chat: player near death / tank dying
-                    let tgt_pct = (sim.players[tgt].hp.saturating_mul(100)) / sim.players[tgt].hp_max;
+                    let tgt_pct =
+                        (sim.players[tgt].hp.saturating_mul(100)) / sim.players[tgt].hp_max;
                     if tgt_pct < 15 {
                         sim.players[tgt].sim_state.on_near_death();
                         if sim.roll(60) {

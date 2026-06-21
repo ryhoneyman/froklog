@@ -45,12 +45,9 @@ pub mod neural_impl {
 
     impl ModelMeta {
         pub fn from_json(text: &str) -> Result<Self, String> {
-            let v: serde_json::Value =
-                serde_json::from_str(text).map_err(|e| e.to_string())?;
+            let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
 
-            let base_vocab = v["base_vocab"]
-                .as_u64()
-                .ok_or("missing base_vocab")? as usize;
+            let base_vocab = v["base_vocab"].as_u64().ok_or("missing base_vocab")? as usize;
             let ctrl_obj = v["control_tokens"]
                 .as_object()
                 .ok_or("missing control_tokens")?;
@@ -65,9 +62,9 @@ pub mod neural_impl {
                 base_vocab,
                 control_tokens,
                 max_len: v["max_len"].as_u64().ok_or("missing max_len")? as usize,
-                pad_id:  v["pad_id"].as_i64().ok_or("missing pad_id")?,
-                bos_id:  v["bos_id"].as_i64().ok_or("missing bos_id")?,
-                eos_id:  v["eos_id"].as_i64().ok_or("missing eos_id")?,
+                pad_id: v["pad_id"].as_i64().ok_or("missing pad_id")?,
+                bos_id: v["bos_id"].as_i64().ok_or("missing bos_id")?,
+                eos_id: v["eos_id"].as_i64().ok_or("missing eos_id")?,
                 ctrl,
             })
         }
@@ -77,29 +74,31 @@ pub mod neural_impl {
 
     fn archetype_tag(arch: &Archetype) -> &'static str {
         match arch {
-            Archetype::QuietAnchor      => "QuietAnchor",
-            Archetype::ChaoticNarrator  => "ChaoticNarrator",
-            Archetype::RaidLeader       => "RaidLeader",
+            Archetype::QuietAnchor => "QuietAnchor",
+            Archetype::ChaoticNarrator => "ChaoticNarrator",
+            Archetype::RaidLeader => "RaidLeader",
             Archetype::ReactiveObserver => "ReactiveObserver",
-            Archetype::TacticalFocused  => "TacticalFocused",
-            Archetype::Custom           => "Generic",
+            Archetype::TacticalFocused => "TacticalFocused",
+            Archetype::Custom => "Generic",
         }
     }
 
     fn register_tag(reg: &EmotionalRegister) -> &'static str {
         match reg {
-            EmotionalRegister::Neutral    => "Neutral",
-            EmotionalRegister::Engaged    => "Engaged",
-            EmotionalRegister::Elated     => "Elated",
+            EmotionalRegister::Neutral => "Neutral",
+            EmotionalRegister::Engaged => "Engaged",
+            EmotionalRegister::Elated => "Elated",
             EmotionalRegister::Frustrated => "Frustrated",
-            EmotionalRegister::Tired      => "Tired",
+            EmotionalRegister::Tired => "Tired",
         }
     }
 
     /// Return the most contextually useful slot value for the model to condition on.
     /// Priority: mob/target entity names first, then spell names, then actor names.
     fn pick_primary_slot<'a>(slots: &'a HashMap<String, String>) -> Option<&'a str> {
-        for key in &["mob", "player", "healer", "target", "spell", "ability", "caster", "src"] {
+        for key in &[
+            "mob", "player", "healer", "target", "spell", "ability", "caster", "src",
+        ] {
             if let Some(v) = slots.get(*key) {
                 return Some(v.as_str());
             }
@@ -113,29 +112,51 @@ pub mod neural_impl {
     /// Personality bucket tokens and SP-encoded slot text are appended when
     /// the relevant control tokens exist in `meta.ctrl` (graceful degradation
     /// against models trained without them).
-    fn build_prefix(meta: &ModelMeta, sp: &SentencePieceProcessor, ctx: &SituationContext) -> Vec<i64> {
+    fn build_prefix(
+        meta: &ModelMeta,
+        sp: &SentencePieceProcessor,
+        ctx: &SituationContext,
+    ) -> Vec<i64> {
         let arch_tag = format!("[{}]", archetype_tag(&ctx.archetype));
-        let reg_tag  = format!("[{}]", register_tag(&ctx.register));
+        let reg_tag = format!("[{}]", register_tag(&ctx.register));
         let trig_tag = format!("[{}]", ctx.trigger_kind.replace(' ', "_"));
 
         let mut ids = Vec::with_capacity(16);
-        for tag in &["[ARCH]", arch_tag.as_str(), "[REG]", reg_tag.as_str(),
-                     "[TRIG]", trig_tag.as_str()] {
+        for tag in &[
+            "[ARCH]",
+            arch_tag.as_str(),
+            "[REG]",
+            reg_tag.as_str(),
+            "[TRIG]",
+            trig_tag.as_str(),
+        ] {
             if let Some(&id) = meta.ctrl.get(*tag) {
                 ids.push(id);
             }
         }
 
         // Personality bucket tokens (thresholds mirror build_dataset.py build_prefix_ids)
-        let verbosity_tag = if ctx.verbosity > 0.55 { Some("[VERBOSE]") }
-                            else if ctx.verbosity < 0.40 { Some("[TERSE]") }
-                            else { None };
-        let humor_tag = if ctx.humor > 0.55 { Some("[HUMOROUS]") }
-                        else if ctx.humor < 0.35 { Some("[SERIOUS]") }
-                        else { None };
-        let patience_tag = if ctx.patience > 0.65 { Some("[PATIENT]") }
-                           else if ctx.patience < 0.50 { Some("[IMPATIENT]") }
-                           else { None };
+        let verbosity_tag = if ctx.verbosity > 0.55 {
+            Some("[VERBOSE]")
+        } else if ctx.verbosity < 0.40 {
+            Some("[TERSE]")
+        } else {
+            None
+        };
+        let humor_tag = if ctx.humor > 0.55 {
+            Some("[HUMOROUS]")
+        } else if ctx.humor < 0.35 {
+            Some("[SERIOUS]")
+        } else {
+            None
+        };
+        let patience_tag = if ctx.patience > 0.65 {
+            Some("[PATIENT]")
+        } else if ctx.patience < 0.50 {
+            Some("[IMPATIENT]")
+        } else {
+            None
+        };
         for opt_tag in [verbosity_tag, humor_tag, patience_tag] {
             if let Some(tag) = opt_tag {
                 if let Some(&id) = meta.ctrl.get(tag) {
@@ -199,12 +220,12 @@ pub mod neural_impl {
 
     /// ONNX-backed chat generation via tract-onnx (pure Rust, no AVX2 required).
     pub struct NeuralBackend {
-        model:       TractPlan,
-        sp:          SentencePieceProcessor,
-        meta:        ModelMeta,
+        model: TractPlan,
+        sp: SentencePieceProcessor,
+        meta: ModelMeta,
         temperature: f32,
-        top_k:       usize,
-        max_new:     usize,
+        top_k: usize,
+        max_new: usize,
     }
 
     impl NeuralBackend {
@@ -215,7 +236,7 @@ pub mod neural_impl {
         pub fn from_dir(dir: &Path) -> Result<Self, String> {
             let model_path = dir.join("model.onnx");
             let vocab_path = dir.join("vocab.model");
-            let meta_path  = dir.join("model_meta.json");
+            let meta_path = dir.join("model_meta.json");
 
             let meta_text = std::fs::read_to_string(&meta_path)
                 .map_err(|e| format!("cannot read {}: {e}", meta_path.display()))?;
@@ -237,27 +258,24 @@ pub mod neural_impl {
                 sp,
                 meta,
                 temperature: 0.9,
-                top_k:       40,
-                max_new:     64,
+                top_k: 40,
+                max_new: 64,
             })
         }
 
         /// Adjust generation hyper-parameters at runtime.
         pub fn set_params(&mut self, temperature: f32, top_k: usize, max_new: usize) {
             self.temperature = temperature;
-            self.top_k       = top_k;
-            self.max_new     = max_new;
+            self.top_k = top_k;
+            self.max_new = max_new;
         }
 
         fn run_forward(&mut self, token_ids: &[i64]) -> Result<Vec<f32>, String> {
             let seq_len = token_ids.len();
 
             // Build a [1, seq_len] i64 tensor via tract's bundled ndarray.
-            let arr = tract_ndarray::Array2::from_shape_vec(
-                (1usize, seq_len),
-                token_ids.to_vec(),
-            )
-            .map_err(|e| e.to_string())?;
+            let arr = tract_ndarray::Array2::from_shape_vec((1usize, seq_len), token_ids.to_vec())
+                .map_err(|e| e.to_string())?;
 
             let tensor: Tensor = arr.into();
             let outputs = self
@@ -310,7 +328,7 @@ pub mod neural_impl {
 
             while ids.len() < max {
                 let logits = match self.run_forward(&ids) {
-                    Ok(l)  => l,
+                    Ok(l) => l,
                     Err(e) => {
                         tracing::warn!("NeuralBackend inference error: {e}");
                         return None;
@@ -327,7 +345,8 @@ pub mod neural_impl {
 
             tracing::debug!(
                 response_token_count = response_ids.len(),
-                hit_eos = response_ids.last().copied() == Some(eos) || response_ids.last().copied() == Some(self.meta.pad_id),
+                hit_eos = response_ids.last().copied() == Some(eos)
+                    || response_ids.last().copied() == Some(self.meta.pad_id),
                 "NeuralBackend generation complete"
             );
             if response_ids.is_empty() {
@@ -339,7 +358,11 @@ pub mod neural_impl {
                 Ok(text) => {
                     let t = text.trim().to_owned();
                     tracing::debug!(decoded = %t, "NeuralBackend decoded output");
-                    if t.is_empty() { None } else { Some(t) }
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t)
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("NeuralBackend decode error: {e}");

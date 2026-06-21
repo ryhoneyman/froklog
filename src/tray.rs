@@ -140,9 +140,13 @@ pub mod tray {
                             toggle_overlay(&handle_clone, &overlay_toggle_item);
                         }
                         ID_OVERLAY_SETTINGS
-                            if !handle_clone.overlay_config_open.swap(true, Ordering::Relaxed) =>
+                            if !handle_clone
+                                .overlay_config_open
+                                .swap(true, Ordering::Relaxed) =>
                         {
-                            crate::overlay_config_win::open_overlay_config(Arc::clone(&handle_clone));
+                            crate::overlay_config_win::open_overlay_config(Arc::clone(
+                                &handle_clone,
+                            ));
                         }
                         ID_SETTINGS
                             if !handle_clone.settings_open.swap(true, Ordering::Relaxed) =>
@@ -243,7 +247,11 @@ pub mod tray {
             cfg.save();
             v
         };
-        let label = if now_on { "Hide Overlay" } else { "Show Overlay" };
+        let label = if now_on {
+            "Hide Overlay"
+        } else {
+            "Show Overlay"
+        };
         overlay_toggle_item.lock().unwrap().set_text(label);
         // A restart picks up the new overlay_enabled flag.
         handle.restart.store(true, Ordering::Relaxed);
@@ -358,7 +366,14 @@ pub mod tray {
         cfg: &Config,
         logging_on: bool,
         overlay_on: bool,
-    ) -> (tray_icon::TrayIcon, MenuItem, MenuItem, MenuItem, MenuItem, MenuItem) {
+    ) -> (
+        tray_icon::TrayIcon,
+        MenuItem,
+        MenuItem,
+        MenuItem,
+        MenuItem,
+        MenuItem,
+    ) {
         let menu = Menu::new();
 
         let status_item = MenuItem::with_id(
@@ -375,7 +390,11 @@ pub mod tray {
         };
         let toggle_item = MenuItem::with_id(ID_TOGGLE_LOGGING, toggle_label, true, None);
 
-        let overlay_toggle_label = if overlay_on { "Hide Overlay" } else { "Show Overlay" };
+        let overlay_toggle_label = if overlay_on {
+            "Hide Overlay"
+        } else {
+            "Show Overlay"
+        };
         let overlay_toggle_item =
             MenuItem::with_id(ID_TOGGLE_OVERLAY, overlay_toggle_label, true, None);
         let overlay_settings_item =
@@ -408,7 +427,14 @@ pub mod tray {
             .build()
             .expect("tray icon");
 
-        (tray, toggle_item, overlay_toggle_item, status_item, copy_url_item, open_url_item)
+        (
+            tray,
+            toggle_item,
+            overlay_toggle_item,
+            status_item,
+            copy_url_item,
+            open_url_item,
+        )
     }
 
     fn make_status_text(

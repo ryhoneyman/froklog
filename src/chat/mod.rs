@@ -20,10 +20,10 @@ pub mod trigger;
 pub use backend::{ChatBackend, PhrasebookBackend};
 pub use context::{RecentMessage, SituationContext};
 pub use engine::{ChatEngine, EmittedMessage, PendingMessage};
+#[cfg(feature = "neural")]
+pub use neural::NeuralBackend;
 pub use personality::{Archetype, ExpressionMode, PersonalityProfile, StyleTraits};
 pub use phrasebook::{PhraseDb, PhrasebookFile};
 pub use relationship::{RelDynamic, Relationship, RelationshipGraph};
 pub use state::{CharacterState, ChatTopic, EmotionalRegister, RlEvent, RlKind};
 pub use trigger::{ChatTrigger, ReactionClass};
-#[cfg(feature = "neural")]
-pub use neural::NeuralBackend;

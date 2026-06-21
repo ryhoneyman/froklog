@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use rand::rngs::StdRng;
 use rand::Rng;
 
+#[cfg(feature = "neural")]
+use froklog::chat::SituationContext;
 use froklog::chat::{
     Archetype, ChatTopic, EmotionalRegister, ExpressionMode, PersonalityProfile, PhraseDb,
 };
-#[cfg(feature = "neural")]
-use froklog::chat::SituationContext;
 
 pub use froklog::chat::PersonalityProfile as Personality;
 
@@ -543,7 +543,9 @@ fn apply_style(msg: &str, personality: &PersonalityProfile, rng: &mut StdRng) ->
 /// Callers should fall back to `ChatCtx` (phrasebook) when this returns `None`.
 #[cfg(feature = "neural")]
 #[allow(dead_code)]
-pub fn try_load_neural_backend(model_dir: Option<&std::path::Path>) -> Option<froklog::chat::NeuralBackend> {
+pub fn try_load_neural_backend(
+    model_dir: Option<&std::path::Path>,
+) -> Option<froklog::chat::NeuralBackend> {
     use std::path::PathBuf;
 
     let dir: PathBuf = if let Some(d) = model_dir {
@@ -556,7 +558,11 @@ pub fn try_load_neural_backend(model_dir: Option<&std::path::Path>) -> Option<fr
     };
 
     let required = ["model.onnx", "vocab.model", "model_meta.json"];
-    let missing: Vec<&str> = required.iter().filter(|f| !dir.join(f).exists()).copied().collect();
+    let missing: Vec<&str> = required
+        .iter()
+        .filter(|f| !dir.join(f).exists())
+        .copied()
+        .collect();
     if !missing.is_empty() {
         tracing::warn!(
             "Neural backend unavailable — missing from {}: {} (using phrasebook)",
@@ -568,10 +574,7 @@ pub fn try_load_neural_backend(model_dir: Option<&std::path::Path>) -> Option<fr
 
     match froklog::chat::NeuralBackend::from_dir(&dir) {
         Ok(backend) => {
-            tracing::info!(
-                "Neural chat backend loaded from {}",
-                dir.display()
-            );
+            tracing::info!("Neural chat backend loaded from {}", dir.display());
             Some(backend)
         }
         Err(e) => {
@@ -583,7 +586,9 @@ pub fn try_load_neural_backend(model_dir: Option<&std::path::Path>) -> Option<fr
 
 #[cfg(not(feature = "neural"))]
 #[allow(dead_code)]
-pub fn try_load_neural_backend(_model_dir: Option<&std::path::Path>) -> Option<std::convert::Infallible> {
+pub fn try_load_neural_backend(
+    _model_dir: Option<&std::path::Path>,
+) -> Option<std::convert::Infallible> {
     None
 }
 
@@ -599,8 +604,8 @@ use froklog::chat::ChatBackend;
 
 #[cfg(feature = "neural")]
 pub struct NeuralCtx<'a> {
-    neural:    froklog::chat::NeuralBackend,
-    fallback:  &'a PhraseDb,
+    neural: froklog::chat::NeuralBackend,
+    fallback: &'a PhraseDb,
     chat_level: u8,
 }
 
@@ -611,7 +616,11 @@ impl<'a> NeuralCtx<'a> {
         fallback: &'a PhraseDb,
         chat_level: u8,
     ) -> Self {
-        Self { neural, fallback, chat_level }
+        Self {
+            neural,
+            fallback,
+            chat_level,
+        }
     }
 
     /// Same interface as `ChatCtx::respond()`.
@@ -715,22 +724,22 @@ fn build_situation_context(
     SituationContext {
         trigger_kind,
         slots,
-        archetype:           personality.archetype.clone(),
-        register:            state.register(),
-        verbosity:           personality.verbosity,
-        humor:               personality.humor,
-        positivity:          personality.positivity,
-        patience:            personality.patience,
-        tactical_awareness:  personality.tactical_awareness,
-        social_investment:   personality.social_investment,
-        expression_mode:     personality.expression_mode.clone(),
-        frustration:         state.frustration,
-        morale:              state.morale,
-        fatigue:             state.fatigue,
-        relationship:        None,
-        zone:                zone.map(|s| s.to_owned()),
+        archetype: personality.archetype.clone(),
+        register: state.register(),
+        verbosity: personality.verbosity,
+        humor: personality.humor,
+        positivity: personality.positivity,
+        patience: personality.patience,
+        tactical_awareness: personality.tactical_awareness,
+        social_investment: personality.social_investment,
+        expression_mode: personality.expression_mode.clone(),
+        frustration: state.frustration,
+        morale: state.morale,
+        fatigue: state.fatigue,
+        relationship: None,
+        zone: zone.map(|s| s.to_owned()),
         group_size,
-        recent_messages:     Vec::new(),
+        recent_messages: Vec::new(),
     }
 }
 
@@ -740,15 +749,20 @@ fn build_situation_context(
 fn trigger_kind_and_slots(trigger: &ChatTrigger<'_>) -> (&'static str, HashMap<String, String>) {
     let mut slots = HashMap::new();
     let kind = match trigger {
-        ChatTrigger::BigSpellHit { caster, spell, mob, damage } => {
+        ChatTrigger::BigSpellHit {
+            caster,
+            spell,
+            mob,
+            damage,
+        } => {
             slots.insert("caster".into(), caster.to_string());
-            slots.insert("src".into(),    caster.to_string());
-            slots.insert("spell".into(),  spell.to_string());
+            slots.insert("src".into(), caster.to_string());
+            slots.insert("spell".into(), spell.to_string());
             slots.insert("ability".into(), spell.to_string());
-            slots.insert("mob".into(),    mob.to_string());
-            slots.insert("tgt".into(),    mob.to_string());
+            slots.insert("mob".into(), mob.to_string());
+            slots.insert("tgt".into(), mob.to_string());
             slots.insert("damage".into(), damage.to_string());
-            slots.insert("dmg".into(),    damage.to_string());
+            slots.insert("dmg".into(), damage.to_string());
             "BigHit"
         }
         ChatTrigger::NearDeathSave { healer, target } => {
@@ -770,20 +784,20 @@ fn trigger_kind_and_slots(trigger: &ChatTrigger<'_>) -> (&'static str, HashMap<S
         }
         ChatTrigger::RepeatMiss { player, mob } => {
             slots.insert("player".into(), player.to_string());
-            slots.insert("mob".into(),    mob.to_string());
+            slots.insert("mob".into(), mob.to_string());
             "RepeatMiss"
         }
-        ChatTrigger::SlowResisted      => "SpellResisted",
+        ChatTrigger::SlowResisted => "SpellResisted",
         ChatTrigger::Incoming { count, mob } => {
             slots.insert("count".into(), count.to_string());
-            slots.insert("mob".into(),   mob.to_string());
+            slots.insert("mob".into(), mob.to_string());
             "Incoming"
         }
         ChatTrigger::HealerMana { pct } => {
             slots.insert("pct".into(), pct.to_string());
             "HealerMana"
         }
-        ChatTrigger::Generic   => "Generic",
+        ChatTrigger::Generic => "Generic",
         ChatTrigger::MultiKill => "MultiKill",
         ChatTrigger::TankDying { player } => {
             slots.insert("player".into(), player.to_string());
@@ -805,6 +819,7 @@ pub enum ChatDispatch<'a> {
 }
 
 impl<'a> ChatDispatch<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn respond(
         &mut self,
         trigger: &ChatTrigger<'_>,

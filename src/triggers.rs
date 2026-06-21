@@ -60,9 +60,7 @@ pub mod engine {
             sound: Option<String>,
         },
         /// Silently cancel the active chain when this pattern is seen.
-        Cancel {
-            cancel: String,
-        },
+        Cancel { cancel: String },
     }
 
     /// Top-level trigger definition stored in triggers.toml.

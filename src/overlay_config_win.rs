@@ -26,16 +26,15 @@ pub mod overlay_config {
         IsDialogMessageW, LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW,
         SendMessageW, SetWindowLongPtrW, SetWindowTextW, TranslateMessage, CB_ADDSTRING,
         CB_GETCURSEL, CB_SETCURSEL, CREATESTRUCTW, GWLP_USERDATA, HMENU, IDC_ARROW, LB_ADDSTRING,
-        LB_GETCURSEL, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG,
-        SM_CXSCREEN, SM_CYSCREEN, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
-        WM_CREATE, WM_DESTROY, WM_NOTIFY, WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION,
-        WS_CHILD, WS_EX_APPWINDOW, WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU,
-        WS_TABSTOP, WS_VISIBLE,
+        LB_GETCURSEL, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG, SM_CXSCREEN,
+        SM_CYSCREEN, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
+        WM_NOTIFY, WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_APPWINDOW,
+        WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
     };
 
     use crate::config::Config;
-    use crate::triggers::engine::{TriggerConfig, TriggerDef, ChainStepDef};
     use crate::tray::tray::AppHandle;
+    use crate::triggers::engine::{ChainStepDef, TriggerConfig, TriggerDef};
 
     // ── Control IDs ───────────────────────────────────────────────────────────
 
@@ -139,7 +138,12 @@ pub mod overlay_config {
 
     // ── Step type labels ──────────────────────────────────────────────────────
 
-    const STEP_TYPES: &[&str] = &["Match (start pattern)", "Delay (timer)", "Complete (pattern)", "Cancel (pattern)"];
+    const STEP_TYPES: &[&str] = &[
+        "Match (start pattern)",
+        "Delay (timer)",
+        "Complete (pattern)",
+        "Cancel (pattern)",
+    ];
 
     // ── Main dialog state ─────────────────────────────────────────────────────
 
@@ -291,8 +295,8 @@ pub mod overlay_config {
                 if nmhdr.idFrom as i32 == IDC_TAB
                     && nmhdr.code == windows::Win32::UI::Controls::TCN_SELCHANGE
                 {
-                    let tab = SendMessageW(state.tab_hwnd, TCM_GETCURSEL, WPARAM(0), LPARAM(0)).0
-                        as i32;
+                    let tab =
+                        SendMessageW(state.tab_hwnd, TCM_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
                     switch_tab(state, tab);
                 }
                 LRESULT(0)
@@ -341,12 +345,7 @@ pub mod overlay_config {
                 state.triggers.triggers.push(new_def);
                 rebuild_trigger_list(state);
                 // Select the new entry and open editor.
-                SendMessageW(
-                    state.trigger_list,
-                    LB_SETCURSEL,
-                    WPARAM(idx),
-                    LPARAM(0),
-                );
+                SendMessageW(state.trigger_list, LB_SETCURSEL, WPARAM(idx), LPARAM(0));
                 refresh_trigger_buttons(state);
                 edit_selected_trigger(hwnd, state);
             }
@@ -356,8 +355,8 @@ pub mod overlay_config {
             }
 
             IDC_BTN_DELETE => {
-                let sel = SendMessageW(state.trigger_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0
-                    as i32;
+                let sel =
+                    SendMessageW(state.trigger_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
                 if sel < 0 || sel as usize >= state.triggers.triggers.len() {
                     return;
                 }
@@ -371,8 +370,8 @@ pub mod overlay_config {
             }
 
             IDC_BTN_MOVE_UP => {
-                let sel = SendMessageW(state.trigger_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0
-                    as i32;
+                let sel =
+                    SendMessageW(state.trigger_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
                 if sel <= 0 || sel as usize >= state.triggers.triggers.len() {
                     return;
                 }
@@ -388,8 +387,8 @@ pub mod overlay_config {
             }
 
             IDC_BTN_MOVE_DOWN => {
-                let sel = SendMessageW(state.trigger_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0
-                    as i32;
+                let sel =
+                    SendMessageW(state.trigger_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
                 let n = state.triggers.triggers.len();
                 if sel < 0 || sel as usize + 1 >= n {
                     return;
@@ -406,8 +405,8 @@ pub mod overlay_config {
             }
 
             IDC_BTN_TOGGLE => {
-                let sel = SendMessageW(state.trigger_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0
-                    as i32;
+                let sel =
+                    SendMessageW(state.trigger_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
                 if sel < 0 || sel as usize >= state.triggers.triggers.len() {
                     return;
                 }
@@ -439,7 +438,8 @@ pub mod overlay_config {
 
     unsafe fn save_and_close(hwnd: HWND, state: &mut ConfigState) {
         // Collect appearance fields.
-        let font_idx = SendMessageW(state.font_combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as usize;
+        let font_idx =
+            SendMessageW(state.font_combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as usize;
         let font_name = if font_idx < FONT_NAMES.len() {
             FONT_NAMES[font_idx].to_string()
         } else {
@@ -461,7 +461,9 @@ pub mod overlay_config {
             .unwrap_or(8)
             .max(1)
             .min(20);
-        let overlay_enabled = SendMessageW(state.chk_overlay_enabled, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize == BST_CHECKED;
+        let overlay_enabled =
+            SendMessageW(state.chk_overlay_enabled, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize
+                == BST_CHECKED;
 
         // Update live config.
         {
@@ -521,11 +523,7 @@ pub mod overlay_config {
             LPARAM(0),
         );
         for t in &state.triggers.triggers {
-            let label = format!(
-                "[{}] {}",
-                if t.enabled() { "✓" } else { " " },
-                t.name()
-            );
+            let label = format!("[{}] {}", if t.enabled() { "✓" } else { " " }, t.name());
             let lw = wide(&label);
             SendMessageW(
                 state.trigger_list,
@@ -543,7 +541,10 @@ pub mod overlay_config {
         let _ = EnableWindow(state.btn_edit, BOOL(if has_sel { 1 } else { 0 }));
         let _ = EnableWindow(state.btn_delete, BOOL(if has_sel { 1 } else { 0 }));
         let _ = EnableWindow(state.btn_toggle, BOOL(if has_sel { 1 } else { 0 }));
-        let _ = EnableWindow(state.btn_move_up, BOOL(if has_sel && sel > 0 { 1 } else { 0 }));
+        let _ = EnableWindow(
+            state.btn_move_up,
+            BOOL(if has_sel && sel > 0 { 1 } else { 0 }),
+        );
         let _ = EnableWindow(
             state.btn_move_down,
             BOOL(if has_sel && sel < n - 1 { 1 } else { 0 }),
@@ -716,11 +717,18 @@ pub mod overlay_config {
         }
     }
 
-    unsafe fn handle_trigger_edit_command(hwnd: HWND, state: &mut TriggerEditState, id: i32, notif: usize) {
+    unsafe fn handle_trigger_edit_command(
+        hwnd: HWND,
+        state: &mut TriggerEditState,
+        id: i32,
+        notif: usize,
+    ) {
         match id {
             IDC_EDIT_CHAINED => {
                 // Toggle between simple and chained mode.
-                let is_chained = SendMessageW(state.chk_chained, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize == BST_CHECKED;
+                let is_chained = SendMessageW(state.chk_chained, BM_GETCHECK, WPARAM(0), LPARAM(0))
+                    .0 as usize
+                    == BST_CHECKED;
                 update_chained_visibility(state, is_chained);
             }
 
@@ -752,7 +760,8 @@ pub mod overlay_config {
             }
 
             IDC_STEP_EDIT => {
-                let sel = SendMessageW(state.step_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
+                let sel =
+                    SendMessageW(state.step_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
                 if sel < 0 {
                     return;
                 }
@@ -765,7 +774,8 @@ pub mod overlay_config {
             }
 
             IDC_STEP_DELETE => {
-                let sel = SendMessageW(state.step_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
+                let sel =
+                    SendMessageW(state.step_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
                 if sel >= 0 {
                     delete_step_at(state, sel as usize);
                     rebuild_step_list(state);
@@ -773,7 +783,8 @@ pub mod overlay_config {
             }
 
             IDC_STEP_LIST if notif == LBN_DBLCLK => {
-                let sel = SendMessageW(state.step_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
+                let sel =
+                    SendMessageW(state.step_list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
                 if sel >= 0 {
                     if let Some(step) = get_step_at(state, sel as usize) {
                         if let Some(edited) = open_step_editor(hwnd, step) {
@@ -787,8 +798,12 @@ pub mod overlay_config {
             IDC_EDIT_OK => {
                 // Collect the edited trigger and store as result.
                 let name = get_text(state.edit_name);
-                let enabled = SendMessageW(state.chk_enabled, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize == BST_CHECKED;
-                let is_chained = SendMessageW(state.chk_chained, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 as usize == BST_CHECKED;
+                let enabled = SendMessageW(state.chk_enabled, BM_GETCHECK, WPARAM(0), LPARAM(0)).0
+                    as usize
+                    == BST_CHECKED;
+                let is_chained = SendMessageW(state.chk_chained, BM_GETCHECK, WPARAM(0), LPARAM(0))
+                    .0 as usize
+                    == BST_CHECKED;
 
                 let def = if is_chained {
                     // Reconstruct from the def's step list.
@@ -796,14 +811,29 @@ pub mod overlay_config {
                         TriggerDef::Chained { steps, .. } => steps.clone(),
                         _ => Vec::new(),
                     };
-                    TriggerDef::Chained { name, enabled, steps }
+                    TriggerDef::Chained {
+                        name,
+                        enabled,
+                        steps,
+                    }
                 } else {
                     let pattern = get_text(state.edit_pattern);
                     let icon = get_text(state.edit_icon);
                     let message = get_text(state.edit_message);
                     let sound_s = get_text(state.edit_sound);
-                    let sound = if sound_s.is_empty() { None } else { Some(sound_s) };
-                    TriggerDef::Simple { name, enabled, pattern, icon, message, sound }
+                    let sound = if sound_s.is_empty() {
+                        None
+                    } else {
+                        Some(sound_s)
+                    };
+                    TriggerDef::Simple {
+                        name,
+                        enabled,
+                        pattern,
+                        icon,
+                        message,
+                        sound,
+                    }
                 };
 
                 state.result = Some(def);
@@ -843,13 +873,21 @@ pub mod overlay_config {
 
     fn step_label(step: &ChainStepDef) -> String {
         match step {
-            ChainStepDef::Match { pattern, message, .. } => {
+            ChainStepDef::Match {
+                pattern, message, ..
+            } => {
                 format!("[Match] {} → {}", pattern, message)
             }
-            ChainStepDef::Delay { delay_secs, message, .. } => {
+            ChainStepDef::Delay {
+                delay_secs,
+                message,
+                ..
+            } => {
                 format!("[Delay {:.1}s] {}", delay_secs, message)
             }
-            ChainStepDef::Complete { complete, message, .. } => {
+            ChainStepDef::Complete {
+                complete, message, ..
+            } => {
                 format!("[Complete] {} → {}", complete, message)
             }
             ChainStepDef::Cancel { cancel } => {
@@ -885,7 +923,14 @@ pub mod overlay_config {
         // If currently a Simple, convert to Chained with the step as the only additional step.
         match &mut state.def {
             TriggerDef::Chained { steps, .. } => steps.push(step),
-            TriggerDef::Simple { name, enabled, pattern, icon, message, sound } => {
+            TriggerDef::Simple {
+                name,
+                enabled,
+                pattern,
+                icon,
+                message,
+                sound,
+            } => {
                 let start = ChainStepDef::Match {
                     pattern: pattern.clone(),
                     icon: icon.clone(),
@@ -1062,14 +1107,33 @@ pub mod overlay_config {
                 let icon = get_text(state.edit_icon);
                 let message = get_text(state.edit_message);
                 let sound_s = get_text(state.edit_sound);
-                let sound = if sound_s.is_empty() { None } else { Some(sound_s) };
+                let sound = if sound_s.is_empty() {
+                    None
+                } else {
+                    Some(sound_s)
+                };
                 let pattern = get_text(state.edit_pattern);
                 let delay: f64 = get_text(state.edit_delay).parse().unwrap_or(5.0);
 
                 let step = match type_idx {
-                    0 => ChainStepDef::Match { pattern, icon, message, sound },
-                    1 => ChainStepDef::Delay { delay_secs: delay, icon, message, sound },
-                    2 => ChainStepDef::Complete { complete: pattern, icon, message, sound },
+                    0 => ChainStepDef::Match {
+                        pattern,
+                        icon,
+                        message,
+                        sound,
+                    },
+                    1 => ChainStepDef::Delay {
+                        delay_secs: delay,
+                        icon,
+                        message,
+                        sound,
+                    },
+                    2 => ChainStepDef::Complete {
+                        complete: pattern,
+                        icon,
+                        message,
+                        sound,
+                    },
                     _ => ChainStepDef::Cancel { cancel: pattern },
                 };
                 state.result = Some(step);
@@ -1098,8 +1162,17 @@ pub mod overlay_config {
 
         // Tab control.
         state.tab_hwnd = mk_child(
-            hwnd, hi, font, "SysTabControl32", "", margin, margin,
-            win_w - margin * 2, tab_h, IDC_TAB, 0,
+            hwnd,
+            hi,
+            font,
+            "SysTabControl32",
+            "",
+            margin,
+            margin,
+            win_w - margin * 2,
+            tab_h,
+            IDC_TAB,
+            0,
         );
         insert_tab(state.tab_hwnd, 0, "Triggers");
         insert_tab(state.tab_hwnd, 1, "Appearance");
@@ -1121,8 +1194,17 @@ pub mod overlay_config {
 
         // Triggers panel.
         state.triggers_panel = mk_child(
-            hwnd, hi, font, "STATIC", "", ta.left, ta.top,
-            ta.right - ta.left, ta.bottom - ta.top, 0, 0,
+            hwnd,
+            hi,
+            font,
+            "STATIC",
+            "",
+            ta.left,
+            ta.top,
+            ta.right - ta.left,
+            ta.bottom - ta.top,
+            0,
+            0,
         );
         create_triggers_panel(state.triggers_panel, hi, font, &state.triggers, ta);
         // Store sub-control handles back into state.
@@ -1131,15 +1213,25 @@ pub mod overlay_config {
         state.btn_edit = GetDlgItem(state.triggers_panel, IDC_BTN_EDIT).unwrap_or_default();
         state.btn_delete = GetDlgItem(state.triggers_panel, IDC_BTN_DELETE).unwrap_or_default();
         state.btn_move_up = GetDlgItem(state.triggers_panel, IDC_BTN_MOVE_UP).unwrap_or_default();
-        state.btn_move_down = GetDlgItem(state.triggers_panel, IDC_BTN_MOVE_DOWN).unwrap_or_default();
+        state.btn_move_down =
+            GetDlgItem(state.triggers_panel, IDC_BTN_MOVE_DOWN).unwrap_or_default();
         state.btn_toggle = GetDlgItem(state.triggers_panel, IDC_BTN_TOGGLE).unwrap_or_default();
         rebuild_trigger_list(state);
         refresh_trigger_buttons(state);
 
         // Appearance panel (hidden initially).
         state.appearance_panel = mk_child(
-            hwnd, hi, font, "STATIC", "", ta.left, ta.top,
-            ta.right - ta.left, ta.bottom - ta.top, 0, 0,
+            hwnd,
+            hi,
+            font,
+            "STATIC",
+            "",
+            ta.left,
+            ta.top,
+            ta.right - ta.left,
+            ta.bottom - ta.top,
+            0,
+            0,
         );
         create_appearance_panel(state, state.appearance_panel, hi, font, ta);
         windows::Win32::UI::WindowsAndMessaging::ShowWindow(
@@ -1149,8 +1241,28 @@ pub mod overlay_config {
 
         // Save / Cancel buttons at bottom.
         let by = win_h - btn_h - margin * 2;
-        mk_button_ex(hwnd, hi, font, "Cancel", win_w - margin - btn_w, by, btn_w, btn_h, IDC_CANCEL);
-        mk_default_button(hwnd, hi, font, "Save", win_w - margin - btn_w * 2 - 8, by, btn_w, btn_h, IDC_SAVE);
+        mk_button_ex(
+            hwnd,
+            hi,
+            font,
+            "Cancel",
+            win_w - margin - btn_w,
+            by,
+            btn_w,
+            btn_h,
+            IDC_CANCEL,
+        );
+        mk_default_button(
+            hwnd,
+            hi,
+            font,
+            "Save",
+            win_w - margin - btn_w * 2 - 8,
+            by,
+            btn_w,
+            btn_h,
+            IDC_SAVE,
+        );
     }
 
     unsafe fn create_triggers_panel(
@@ -1170,7 +1282,15 @@ pub mod overlay_config {
 
         // Listbox.
         mk_child(
-            parent, hi, font, "LISTBOX", "", 4, 4, list_w, list_h,
+            parent,
+            hi,
+            font,
+            "LISTBOX",
+            "",
+            4,
+            4,
+            list_w,
+            list_h,
             IDC_TRIGGER_LIST,
             LBS_NOTIFY | LBS_HASSTRINGS | WS_VSCROLL_VAL | WS_BORDER.0 | WS_TABSTOP.0,
         );
@@ -1182,13 +1302,53 @@ pub mod overlay_config {
         by += gap;
         mk_button_ex(parent, hi, font, "Edit", bx, by, btn_w, btn_h, IDC_BTN_EDIT);
         by += gap;
-        mk_button_ex(parent, hi, font, "Delete", bx, by, btn_w, btn_h, IDC_BTN_DELETE);
+        mk_button_ex(
+            parent,
+            hi,
+            font,
+            "Delete",
+            bx,
+            by,
+            btn_w,
+            btn_h,
+            IDC_BTN_DELETE,
+        );
         by += gap + 8;
-        mk_button_ex(parent, hi, font, "Move Up", bx, by, btn_w, btn_h, IDC_BTN_MOVE_UP);
+        mk_button_ex(
+            parent,
+            hi,
+            font,
+            "Move Up",
+            bx,
+            by,
+            btn_w,
+            btn_h,
+            IDC_BTN_MOVE_UP,
+        );
         by += gap;
-        mk_button_ex(parent, hi, font, "Move Down", bx, by, btn_w, btn_h, IDC_BTN_MOVE_DOWN);
+        mk_button_ex(
+            parent,
+            hi,
+            font,
+            "Move Down",
+            bx,
+            by,
+            btn_w,
+            btn_h,
+            IDC_BTN_MOVE_DOWN,
+        );
         by += gap + 8;
-        mk_button_ex(parent, hi, font, "Enable/Disable", bx, by, btn_w, btn_h, IDC_BTN_TOGGLE);
+        mk_button_ex(
+            parent,
+            hi,
+            font,
+            "Enable/Disable",
+            bx,
+            by,
+            btn_w,
+            btn_h,
+            IDC_BTN_TOGGLE,
+        );
     }
 
     unsafe fn create_appearance_panel(
@@ -1207,9 +1367,24 @@ pub mod overlay_config {
         let mut y = 8i32;
 
         // Overlay enabled checkbox.
-        state.chk_overlay_enabled = mk_checkbox(parent, hi, font, "Enable overlay window", cx, y, cw + 80, ch, IDC_OVERLAY_ENABLED);
+        state.chk_overlay_enabled = mk_checkbox(
+            parent,
+            hi,
+            font,
+            "Enable overlay window",
+            cx,
+            y,
+            cw + 80,
+            ch,
+            IDC_OVERLAY_ENABLED,
+        );
         if state.cfg.overlay_enabled {
-            SendMessageW(state.chk_overlay_enabled, BM_SETCHECK, WPARAM(BST_CHECKED), LPARAM(0));
+            SendMessageW(
+                state.chk_overlay_enabled,
+                BM_SETCHECK,
+                WPARAM(BST_CHECKED),
+                LPARAM(0),
+            );
         }
         y += row;
 
@@ -1218,24 +1393,67 @@ pub mod overlay_config {
         for name in FONT_NAMES {
             cb_add(state.font_combo, name);
         }
-        let fi = FONT_NAMES.iter().position(|&n| n == state.cfg.overlay_font).unwrap_or(0);
+        let fi = FONT_NAMES
+            .iter()
+            .position(|&n| n == state.cfg.overlay_font)
+            .unwrap_or(0);
         SendMessageW(state.font_combo, CB_SETCURSEL, WPARAM(fi), LPARAM(0));
         y += row;
 
         mk_label(parent, hi, font, "Font size (pt):", lx, y, lw, ch);
-        state.edit_font_size = mk_edit_num(parent, hi, font, &state.cfg.overlay_font_size.to_string(), cx, y, 60, ch, IDC_FONT_SIZE);
+        state.edit_font_size = mk_edit_num(
+            parent,
+            hi,
+            font,
+            &state.cfg.overlay_font_size.to_string(),
+            cx,
+            y,
+            60,
+            ch,
+            IDC_FONT_SIZE,
+        );
         y += row;
 
         mk_label(parent, hi, font, "Opacity (0-255):", lx, y, lw, ch);
-        state.edit_alpha = mk_edit_num(parent, hi, font, &state.cfg.overlay_alpha.to_string(), cx, y, 60, ch, IDC_ALPHA_EDIT);
+        state.edit_alpha = mk_edit_num(
+            parent,
+            hi,
+            font,
+            &state.cfg.overlay_alpha.to_string(),
+            cx,
+            y,
+            60,
+            ch,
+            IDC_ALPHA_EDIT,
+        );
         y += row;
 
         mk_label(parent, hi, font, "Idle hide (secs):", lx, y, lw, ch);
-        state.edit_idle = mk_edit_num(parent, hi, font, &state.cfg.overlay_idle_secs.to_string(), cx, y, 60, ch, IDC_IDLE_EDIT);
+        state.edit_idle = mk_edit_num(
+            parent,
+            hi,
+            font,
+            &state.cfg.overlay_idle_secs.to_string(),
+            cx,
+            y,
+            60,
+            ch,
+            IDC_IDLE_EDIT,
+        );
         y += row;
 
         mk_label(parent, hi, font, "Max entries:", lx, y, lw, ch);
-        state.edit_max_entries = mk_edit_num(parent, hi, font, &state.cfg.overlay_max_entries.to_string(), cx, y, 60, ch, IDC_MAX_ENTRIES);
+        state.edit_max_entries = mk_edit_num(
+            parent,
+            hi,
+            font,
+            &state.cfg.overlay_max_entries.to_string(),
+            cx,
+            y,
+            60,
+            ch,
+            IDC_MAX_ENTRIES,
+        );
     }
 
     // ── Trigger edit controls ─────────────────────────────────────────────────
@@ -1267,14 +1485,35 @@ pub mod overlay_config {
         y += row;
 
         // Enabled.
-        state.chk_enabled = mk_checkbox(hwnd, hi, font, "Enabled", cx, y, 100, ch, IDC_EDIT_ENABLED);
+        state.chk_enabled =
+            mk_checkbox(hwnd, hi, font, "Enabled", cx, y, 100, ch, IDC_EDIT_ENABLED);
         if enabled {
-            SendMessageW(state.chk_enabled, BM_SETCHECK, WPARAM(BST_CHECKED), LPARAM(0));
+            SendMessageW(
+                state.chk_enabled,
+                BM_SETCHECK,
+                WPARAM(BST_CHECKED),
+                LPARAM(0),
+            );
         }
         // Chained toggle.
-        state.chk_chained = mk_checkbox(hwnd, hi, font, "Multi-step (chained)", cx + 110, y, 160, ch, IDC_EDIT_CHAINED);
+        state.chk_chained = mk_checkbox(
+            hwnd,
+            hi,
+            font,
+            "Multi-step (chained)",
+            cx + 110,
+            y,
+            160,
+            ch,
+            IDC_EDIT_CHAINED,
+        );
         if is_chained {
-            SendMessageW(state.chk_chained, BM_SETCHECK, WPARAM(BST_CHECKED), LPARAM(0));
+            SendMessageW(
+                state.chk_chained,
+                BM_SETCHECK,
+                WPARAM(BST_CHECKED),
+                LPARAM(0),
+            );
         }
         y += row;
 
@@ -1285,63 +1524,209 @@ pub mod overlay_config {
         // We wrap them in a static "group" container so we can show/hide together.
         let group_h = row * 4;
         state.simple_group = mk_child(
-            hwnd, hi, font, "STATIC", "", lx, y, bx + bw - lx, group_h, 0, 0,
+            hwnd,
+            hi,
+            font,
+            "STATIC",
+            "",
+            lx,
+            y,
+            bx + bw - lx,
+            group_h,
+            0,
+            0,
         );
 
         // Pattern.
-        mk_label(state.simple_group, hi, font, "Pattern (regex):", 0, 0, lw, ch);
+        mk_label(
+            state.simple_group,
+            hi,
+            font,
+            "Pattern (regex):",
+            0,
+            0,
+            lw,
+            ch,
+        );
         let (pat, ico, msg, snd) = match &state.def {
-            TriggerDef::Simple { pattern, icon, message, sound, .. } => {
-                (pattern.as_str(), icon.as_str(), message.as_str(), sound.as_deref().unwrap_or(""))
-            }
+            TriggerDef::Simple {
+                pattern,
+                icon,
+                message,
+                sound,
+                ..
+            } => (
+                pattern.as_str(),
+                icon.as_str(),
+                message.as_str(),
+                sound.as_deref().unwrap_or(""),
+            ),
             TriggerDef::Chained { steps, .. } => {
-                if let Some(ChainStepDef::Match { pattern, icon, message, sound }) = steps.first() {
-                    (pattern.as_str(), icon.as_str(), message.as_str(), sound.as_deref().unwrap_or(""))
+                if let Some(ChainStepDef::Match {
+                    pattern,
+                    icon,
+                    message,
+                    sound,
+                }) = steps.first()
+                {
+                    (
+                        pattern.as_str(),
+                        icon.as_str(),
+                        message.as_str(),
+                        sound.as_deref().unwrap_or(""),
+                    )
                 } else {
                     ("", "", "", "")
                 }
             }
         };
-        state.edit_pattern = mk_edit(state.simple_group, hi, font, pat, cx - lx, 0, cw, ch, IDC_EDIT_PATTERN, 0);
+        state.edit_pattern = mk_edit(
+            state.simple_group,
+            hi,
+            font,
+            pat,
+            cx - lx,
+            0,
+            cw,
+            ch,
+            IDC_EDIT_PATTERN,
+            0,
+        );
         {
             let hint = wide("e.g. You have slain (.+)!");
-            SendMessageW(state.edit_pattern, EM_SETCUEBANNER, WPARAM(1), LPARAM(hint.as_ptr() as isize));
+            SendMessageW(
+                state.edit_pattern,
+                EM_SETCUEBANNER,
+                WPARAM(1),
+                LPARAM(hint.as_ptr() as isize),
+            );
         }
 
         // Icon.
         mk_label(state.simple_group, hi, font, "Icon:", 0, row, lw, ch);
-        state.edit_icon = mk_edit(state.simple_group, hi, font, ico, cx - lx, row, cw2, ch, IDC_EDIT_ICON, 0);
-        mk_button_ex(state.simple_group, hi, font, "Browse…", bx - lx, row, bw, ch, IDC_EDIT_ICON_BROWSE);
+        state.edit_icon = mk_edit(
+            state.simple_group,
+            hi,
+            font,
+            ico,
+            cx - lx,
+            row,
+            cw2,
+            ch,
+            IDC_EDIT_ICON,
+            0,
+        );
+        mk_button_ex(
+            state.simple_group,
+            hi,
+            font,
+            "Browse…",
+            bx - lx,
+            row,
+            bw,
+            ch,
+            IDC_EDIT_ICON_BROWSE,
+        );
         {
             let hint = wide("heal / damage / path\\to\\icon.png");
-            SendMessageW(state.edit_icon, EM_SETCUEBANNER, WPARAM(1), LPARAM(hint.as_ptr() as isize));
+            SendMessageW(
+                state.edit_icon,
+                EM_SETCUEBANNER,
+                WPARAM(1),
+                LPARAM(hint.as_ptr() as isize),
+            );
         }
 
         // Message.
         mk_label(state.simple_group, hi, font, "Message:", 0, row * 2, lw, ch);
-        state.edit_message = mk_edit(state.simple_group, hi, font, msg, cx - lx, row * 2, cw, ch, IDC_EDIT_MESSAGE, 0);
+        state.edit_message = mk_edit(
+            state.simple_group,
+            hi,
+            font,
+            msg,
+            cx - lx,
+            row * 2,
+            cw,
+            ch,
+            IDC_EDIT_MESSAGE,
+            0,
+        );
         {
             let hint = wide("Slain: {1}  (use {1},{2}… for capture groups)");
-            SendMessageW(state.edit_message, EM_SETCUEBANNER, WPARAM(1), LPARAM(hint.as_ptr() as isize));
+            SendMessageW(
+                state.edit_message,
+                EM_SETCUEBANNER,
+                WPARAM(1),
+                LPARAM(hint.as_ptr() as isize),
+            );
         }
 
         // Sound.
         mk_label(state.simple_group, hi, font, "Sound:", 0, row * 3, lw, ch);
-        state.edit_sound = mk_edit(state.simple_group, hi, font, snd, cx - lx, row * 3, cw2, ch, IDC_EDIT_SOUND, 0);
-        mk_button_ex(state.simple_group, hi, font, "Browse…", bx - lx, row * 3, bw, ch, IDC_EDIT_SOUND_BROWSE);
+        state.edit_sound = mk_edit(
+            state.simple_group,
+            hi,
+            font,
+            snd,
+            cx - lx,
+            row * 3,
+            cw2,
+            ch,
+            IDC_EDIT_SOUND,
+            0,
+        );
+        mk_button_ex(
+            state.simple_group,
+            hi,
+            font,
+            "Browse…",
+            bx - lx,
+            row * 3,
+            bw,
+            ch,
+            IDC_EDIT_SOUND_BROWSE,
+        );
 
         y += group_h + 8;
 
         // Chained step list.
         let list_h = 120i32;
         state.step_list = mk_child(
-            hwnd, hi, font, "LISTBOX", "", lx, y, bx - lx - 4, list_h,
+            hwnd,
+            hi,
+            font,
+            "LISTBOX",
+            "",
+            lx,
+            y,
+            bx - lx - 4,
+            list_h,
             IDC_STEP_LIST,
             LBS_NOTIFY | LBS_HASSTRINGS | WS_VSCROLL_VAL | WS_BORDER.0 | WS_TABSTOP.0,
         );
         state.btn_step_add = mk_button_ex(hwnd, hi, font, "Add Step", bx, y, bw, ch, IDC_STEP_ADD);
-        state.btn_step_edit = mk_button_ex(hwnd, hi, font, "Edit Step", bx, y + row, bw, ch, IDC_STEP_EDIT);
-        state.btn_step_delete = mk_button_ex(hwnd, hi, font, "Delete Step", bx, y + row * 2, bw, ch, IDC_STEP_DELETE);
+        state.btn_step_edit = mk_button_ex(
+            hwnd,
+            hi,
+            font,
+            "Edit Step",
+            bx,
+            y + row,
+            bw,
+            ch,
+            IDC_STEP_EDIT,
+        );
+        state.btn_step_delete = mk_button_ex(
+            hwnd,
+            hi,
+            font,
+            "Delete Step",
+            bx,
+            y + row * 2,
+            bw,
+            ch,
+            IDC_STEP_DELETE,
+        );
         y += list_h + 8;
 
         // Populate steps if chained.
@@ -1351,8 +1736,28 @@ pub mod overlay_config {
         // OK / Cancel.
         let bw2 = 80i32;
         let right = bx + bw;
-        mk_button_ex(hwnd, hi, font, "Cancel", right - bw2, y, bw2, ch, IDC_EDIT_CANCEL);
-        mk_default_button(hwnd, hi, font, "OK", right - bw2 * 2 - 8, y, bw2, ch, IDC_EDIT_OK);
+        mk_button_ex(
+            hwnd,
+            hi,
+            font,
+            "Cancel",
+            right - bw2,
+            y,
+            bw2,
+            ch,
+            IDC_EDIT_CANCEL,
+        );
+        mk_default_button(
+            hwnd,
+            hi,
+            font,
+            "OK",
+            right - bw2 * 2 - 8,
+            y,
+            bw2,
+            ch,
+            IDC_EDIT_OK,
+        );
     }
 
     // ── Step edit controls ────────────────────────────────────────────────────
@@ -1392,7 +1797,9 @@ pub mod overlay_config {
         mk_label(hwnd, hi, font, "Pattern/regex:", lx, y, lw, ch);
         let pat = match &state.step {
             ChainStepDef::Match { pattern, .. }
-            | ChainStepDef::Complete { complete: pattern, .. }
+            | ChainStepDef::Complete {
+                complete: pattern, ..
+            }
             | ChainStepDef::Cancel { cancel: pattern } => pattern.as_str(),
             ChainStepDef::Delay { .. } => "",
         };
@@ -1415,7 +1822,17 @@ pub mod overlay_config {
             ChainStepDef::Cancel { .. } => "",
         };
         state.edit_icon = mk_edit(hwnd, hi, font, ico, cx, y, cw2, ch, IDC_STEP_ICON, 0);
-        mk_button_ex(hwnd, hi, font, "Browse…", bx, y, bw, ch, IDC_STEP_ICON_BROWSE);
+        mk_button_ex(
+            hwnd,
+            hi,
+            font,
+            "Browse…",
+            bx,
+            y,
+            bw,
+            ch,
+            IDC_STEP_ICON_BROWSE,
+        );
         y += row;
 
         mk_label(hwnd, hi, font, "Message:", lx, y, lw, ch);
@@ -1436,13 +1853,43 @@ pub mod overlay_config {
             ChainStepDef::Cancel { .. } => "",
         };
         state.edit_sound = mk_edit(hwnd, hi, font, snd, cx, y, cw2, ch, IDC_STEP_SOUND, 0);
-        mk_button_ex(hwnd, hi, font, "Browse…", bx, y, bw, ch, IDC_STEP_SOUND_BROWSE);
+        mk_button_ex(
+            hwnd,
+            hi,
+            font,
+            "Browse…",
+            bx,
+            y,
+            bw,
+            ch,
+            IDC_STEP_SOUND_BROWSE,
+        );
         y += row + 8;
 
         let right = bx + bw;
         let bw2 = 80i32;
-        mk_button_ex(hwnd, hi, font, "Cancel", right - bw2, y, bw2, ch, IDC_STEP_CANCEL);
-        mk_default_button(hwnd, hi, font, "OK", right - bw2 * 2 - 8, y, bw2, ch, IDC_STEP_OK);
+        mk_button_ex(
+            hwnd,
+            hi,
+            font,
+            "Cancel",
+            right - bw2,
+            y,
+            bw2,
+            ch,
+            IDC_STEP_CANCEL,
+        );
+        mk_default_button(
+            hwnd,
+            hi,
+            font,
+            "OK",
+            right - bw2 * 2 - 8,
+            y,
+            bw2,
+            ch,
+            IDC_STEP_OK,
+        );
     }
 
     // ── Widget helpers ────────────────────────────────────────────────────────
@@ -1467,7 +1914,10 @@ pub mod overlay_config {
             PCWSTR(cw.as_ptr()),
             PCWSTR(tw.as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(extra),
-            x, y, w, h,
+            x,
+            y,
+            w,
+            h,
             parent,
             HMENU(id as isize as *mut c_void),
             hi,
@@ -1478,38 +1928,171 @@ pub mod overlay_config {
         hwnd
     }
 
-    unsafe fn mk_label(parent: HWND, hi: HINSTANCE, font: windows::Win32::Graphics::Gdi::HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32) -> HWND {
+    unsafe fn mk_label(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    ) -> HWND {
         mk_child(parent, hi, font, "STATIC", text, x, y, w, h, 0, SS_RIGHT)
     }
 
-    unsafe fn mk_separator(parent: HWND, hi: HINSTANCE, font: windows::Win32::Graphics::Gdi::HGDIOBJ, x: i32, y: i32, w: i32) {
+    unsafe fn mk_separator(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        x: i32,
+        y: i32,
+        w: i32,
+    ) {
         mk_child(parent, hi, font, "STATIC", "", x, y, w, 2, 0, SS_ETCHEDHORZ);
     }
 
-    unsafe fn mk_edit(parent: HWND, hi: HINSTANCE, font: windows::Win32::Graphics::Gdi::HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32, extra: u32) -> HWND {
-        mk_child(parent, hi, font, "EDIT", text, x, y, w, h, id,
-            ES_AUTOHSCROLL | WS_BORDER.0 | WS_TABSTOP.0 | extra)
+    unsafe fn mk_edit(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+        extra: u32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "EDIT",
+            text,
+            x,
+            y,
+            w,
+            h,
+            id,
+            ES_AUTOHSCROLL | WS_BORDER.0 | WS_TABSTOP.0 | extra,
+        )
     }
 
-    unsafe fn mk_edit_num(parent: HWND, hi: HINSTANCE, font: windows::Win32::Graphics::Gdi::HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32) -> HWND {
+    unsafe fn mk_edit_num(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+    ) -> HWND {
         mk_edit(parent, hi, font, text, x, y, w, h, id, ES_NUMBER)
     }
 
-    unsafe fn mk_combo(parent: HWND, hi: HINSTANCE, font: windows::Win32::Graphics::Gdi::HGDIOBJ, x: i32, y: i32, w: i32, id: i32) -> HWND {
-        mk_child(parent, hi, font, "COMBOBOX", "", x, y, w, 200, id,
-            CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_TABSTOP.0)
+    unsafe fn mk_combo(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        x: i32,
+        y: i32,
+        w: i32,
+        id: i32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "COMBOBOX",
+            "",
+            x,
+            y,
+            w,
+            200,
+            id,
+            CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_TABSTOP.0,
+        )
     }
 
-    unsafe fn mk_button_ex(parent: HWND, hi: HINSTANCE, font: windows::Win32::Graphics::Gdi::HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32) -> HWND {
-        mk_child(parent, hi, font, "BUTTON", text, x, y, w, h, id, BS_PUSHBUTTON | WS_TABSTOP.0)
+    unsafe fn mk_button_ex(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "BUTTON",
+            text,
+            x,
+            y,
+            w,
+            h,
+            id,
+            BS_PUSHBUTTON | WS_TABSTOP.0,
+        )
     }
 
-    unsafe fn mk_default_button(parent: HWND, hi: HINSTANCE, font: windows::Win32::Graphics::Gdi::HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32) -> HWND {
-        mk_child(parent, hi, font, "BUTTON", text, x, y, w, h, id, BS_DEFPUSHBUTTON | WS_TABSTOP.0)
+    unsafe fn mk_default_button(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "BUTTON",
+            text,
+            x,
+            y,
+            w,
+            h,
+            id,
+            BS_DEFPUSHBUTTON | WS_TABSTOP.0,
+        )
     }
 
-    unsafe fn mk_checkbox(parent: HWND, hi: HINSTANCE, font: windows::Win32::Graphics::Gdi::HGDIOBJ, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32) -> HWND {
-        mk_child(parent, hi, font, "BUTTON", text, x, y, w, h, id, BS_AUTOCHECKBOX | WS_TABSTOP.0)
+    unsafe fn mk_checkbox(
+        parent: HWND,
+        hi: HINSTANCE,
+        font: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        text: &str,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        id: i32,
+    ) -> HWND {
+        mk_child(
+            parent,
+            hi,
+            font,
+            "BUTTON",
+            text,
+            x,
+            y,
+            w,
+            h,
+            id,
+            BS_AUTOCHECKBOX | WS_TABSTOP.0,
+        )
     }
 
     // Tab insert helper.

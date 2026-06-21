@@ -28,9 +28,9 @@ pub mod overlay {
     use windows::Win32::Graphics::Gdi::{
         BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
         CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, GetDC, GetStockObject,
-        ReleaseDC, SelectObject, SetBkMode, SetTextColor, TextOutW, HBITMAP, HBRUSH, HDC, HFONT,
-        HGDIOBJ, PAINTSTRUCT, BLACK_BRUSH, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
-        DEFAULT_QUALITY, FF_DONTCARE, FW_BOLD, FW_NORMAL, OUT_DEFAULT_PRECIS, SRCCOPY,
+        ReleaseDC, SelectObject, SetBkMode, SetTextColor, TextOutW, BLACK_BRUSH,
+        CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, FF_DONTCARE, FW_BOLD,
+        FW_NORMAL, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY,
         TRANSPARENT,
     };
 
@@ -42,10 +42,10 @@ pub mod overlay {
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
         GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, LoadCursorW, PostQuitMessage,
         RegisterClassExW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
-        TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HMENU,
-        IDC_ARROW, LWA_ALPHA, MSG, SM_CXSCREEN, SM_CYSCREEN, SWP_NOMOVE, SWP_NOOWNERZORDER,
-        SWP_NOZORDER, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSEXW, WM_APP, WM_CREATE, WM_DESTROY,
-        WM_LBUTTONDOWN, WM_NCLBUTTONDOWN, WM_PAINT, WM_TIMER, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HMENU, IDC_ARROW,
+        LWA_ALPHA, MSG, SM_CXSCREEN, SM_CYSCREEN, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+        WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN,
+        WM_NCLBUTTONDOWN, WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
         WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
@@ -234,7 +234,12 @@ pub mod overlay {
             )
             .expect("CreateWindowExW overlay");
 
-            let _ = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), alpha, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(
+                hwnd,
+                windows::Win32::Foundation::COLORREF(0),
+                alpha,
+                LWA_ALPHA,
+            );
 
             // Start the animation timer.
             windows::Win32::UI::WindowsAndMessaging::SetTimer(
@@ -489,7 +494,11 @@ pub mod overlay {
         // Convert point size to logical units (pixels). 96 DPI assumed; good enough
         // for a game overlay that doesn't need DPI-awareness.
         let height = -pt_size * 96 / 72;
-        let weight = if bold { FW_BOLD.0 as i32 } else { FW_NORMAL.0 as i32 };
+        let weight = if bold {
+            FW_BOLD.0 as i32
+        } else {
+            FW_NORMAL.0 as i32
+        };
         let name_w: Vec<u16> = name.encode_utf16().chain(std::iter::once(0u16)).collect();
         let mut face = [0u16; 32];
         let copy_len = name_w.len().min(31);
@@ -520,8 +529,7 @@ pub mod overlay {
         {
             let path = path.to_string();
             std::thread::spawn(move || unsafe {
-                let path_w: Vec<u16> =
-                    path.encode_utf16().chain(std::iter::once(0u16)).collect();
+                let path_w: Vec<u16> = path.encode_utf16().chain(std::iter::once(0u16)).collect();
                 windows::Win32::Media::Audio::PlaySoundW(
                     PCWSTR(path_w.as_ptr()),
                     None,

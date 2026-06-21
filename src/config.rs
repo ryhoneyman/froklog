@@ -62,7 +62,6 @@ pub struct Config {
     pub logging_enabled: bool,
 
     // ── Overlay settings ──────────────────────────────────────────────────────
-
     /// Whether the overlay window is visible.
     #[serde(default)]
     pub overlay_enabled: bool,

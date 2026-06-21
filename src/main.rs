@@ -143,7 +143,7 @@ fn run_engine_once(
     // Tailer output → splitter → parser_rx (parser) + trigger_rx (trigger engine).
     let (line_tx, tail_rx) = bounded::<String>(4096);
     let (parser_tx, line_rx) = bounded::<String>(4096);
-    let (trigger_tx, trigger_rx) = bounded::<String>(1024);
+    let (trigger_tx, _trigger_rx) = bounded::<String>(1024);
 
     let player_name = config.effective_player_name();
     info!("Watching: {log_path}  player: {player_name}");
@@ -232,7 +232,7 @@ fn run_engine_once(
                     // Drain all pending lines without blocking longer than one tick.
                     let deadline = std::time::Instant::now() + tick;
                     loop {
-                        match trigger_rx.recv_timeout(std::time::Duration::from_millis(5)) {
+                        match _trigger_rx.recv_timeout(std::time::Duration::from_millis(5)) {
                             Ok(line) => engine.process_line(&line),
                             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
                             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
