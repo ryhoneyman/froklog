@@ -22,7 +22,7 @@ python3 scripts/chat/chatanalyze.py \
     --mode stats
 
 # just
-just nn-chatanalyze --input logs/eqlog_Talodar_test.txt --mode stats
+just chat-chatanalyze --input logs/eqlog_Talodar_test.txt --mode stats
 ```
 
 One JSONL record per speaker, sorted by total message count:
@@ -71,7 +71,7 @@ python3 scripts/chat/chatanalyze.py \
     --window 60
 
 # just — filter to one speaker
-just nn-chatanalyze \
+just chat-chatanalyze \
     --input logs/eqlog_Talodar_test.txt \
     --mode correlated \
     --speaker Icestorm \
@@ -135,7 +135,7 @@ python3 scripts/chat/chatanalyze.py \
     --speaker Icestorm
 
 # just
-just nn-chatanalyze --input logs/eqlog_Talodar_test.txt --mode corpus --speaker Talodar
+just chat-chatanalyze --input logs/eqlog_Talodar_test.txt --mode corpus --speaker Talodar
 ```
 
 ```json
@@ -162,7 +162,7 @@ Speaker→archetype labels live in `data/chat/build/archetype_map.json`.  Both
 `extract_corpus.py` and `analyze_speakers.py` read from and write to that file —
 no source editing required.
 
-Run this phase whenever you add new log files or when `just nn-stats` shows a
+Run this phase whenever you add new log files or when `just chat-stats` shows a
 significant number of `Unknown` records.
 
 ### Step 1 — Extract the corpus (including unknowns for inspection)
@@ -176,7 +176,7 @@ python3 scripts/chat/extract_corpus.py \
     --include-unknown
 
 # just (passes --archetype-map automatically)
-just nn-corpus
+just chat-corpus
 ```
 
 `extract_corpus.py` walks every `eqlog_*.txt` in `logs/`, parses group, guild,
@@ -205,7 +205,7 @@ python3 scripts/chat/extract_corpus.py \
     --stats
 
 # just
-just nn-stats
+just chat-stats
 ```
 
 Output shows how many records each archetype contributed and flags how much
@@ -228,16 +228,16 @@ python3 scripts/chat/analyze_speakers.py \
     --archetype-map data/chat/build/archetype_map.json
 
 # just
-just nn-analyze
+just chat-analyze
 
 # Lower threshold to catch occasional speakers
-just nn-analyze --min-msgs 5
+just chat-analyze --min-msgs 5
 
 # Include already-labelled speakers to sanity-check the map
-just nn-analyze --min-msgs 10 --all-speakers
+just chat-analyze --min-msgs 10 --all-speakers
 
 # Preview suggested entries without writing anything
-just nn-analyze --suggest-map
+just chat-analyze --suggest-map
 ```
 
 Example output:
@@ -265,7 +265,7 @@ python3 scripts/chat/analyze_speakers.py \
     --update-map
 
 # just
-just nn-update-map
+just chat-update-map
 ```
 
 Output confirms what was written:
@@ -289,7 +289,7 @@ python3 scripts/chat/extract_corpus.py \
     --output data/chat/build/corpus.jsonl
 
 # just
-just nn-corpus
+just chat-corpus
 ```
 
 ---
@@ -304,7 +304,7 @@ python3 scripts/chat/build_vocab.py \
     --corpus data/chat/build/corpus.jsonl \
     --output data/chat/build/vocab
 # just
-just nn-vocab
+just chat-vocab
 
 # 2. Tokenise the corpus into padded training arrays
 python3 scripts/chat/build_dataset.py \
@@ -312,31 +312,31 @@ python3 scripts/chat/build_dataset.py \
     --vocab  data/chat/build/vocab.model \
     --output data/chat/build/dataset
 # just
-just nn-dataset
+just chat-dataset
 
 # 3. Train the model (add --device cuda if available)
 python3 scripts/chat/train.py \
     --dataset data/chat/build/dataset \
     --output  data/chat/build/checkpoints
 # just
-just nn-train
-just nn-train --device cuda       # GPU
+just chat-train
+just chat-train --device cuda       # GPU
 
 # 4. Export the best checkpoint to ONNX for Rust inference
 python3 scripts/chat/export_onnx.py \
     --checkpoint data/chat/build/checkpoints/best.pt \
     --output     data/chat/models/model.onnx
 # just
-just nn-export
+just chat-export
 ```
 
 ### Run the full pipeline in one shot
 
 ```bash
-just nn-all
+just chat-all
 ```
 
-This runs `nn-corpus → nn-vocab → nn-dataset → nn-train → nn-export` in order.
+This runs `chat-corpus → chat-vocab → chat-dataset → chat-train → chat-export` in order.
 It does not run the labeling phase — make sure `ARCHETYPE_MAP` is up to date first.
 
 ---
@@ -345,16 +345,16 @@ It does not run the labeling phase — make sure `ARCHETYPE_MAP` is up to date f
 
 | Recipe | What it runs |
 |---|---|
-| `just nn-chatanalyze [args]` | `chatanalyze.py` — explore a single log file |
-| `just nn-corpus` | `extract_corpus.py` — extract labelled corpus from all logs |
-| `just nn-stats` | `extract_corpus.py --stats` — print archetype/channel breakdown |
-| `just nn-analyze [args]` | `analyze_speakers.py` — score unknown speakers |
-| `just nn-update-map` | `analyze_speakers.py --update-map` — write new labels into `archetype_map.json` |
-| `just nn-vocab` | `build_vocab.py` — train BPE vocabulary |
-| `just nn-dataset` | `build_dataset.py` — tokenise corpus into training arrays |
-| `just nn-train [args]` | `train.py` — train the model |
-| `just nn-export` | `export_onnx.py` — export best checkpoint to ONNX |
-| `just nn-all` | Run the full training pipeline (phases 2–3, minus labeling) |
+| `just chat-chatanalyze [args]` | `chatanalyze.py` — explore a single log file |
+| `just chat-corpus` | `extract_corpus.py` — extract labelled corpus from all logs |
+| `just chat-stats` | `extract_corpus.py --stats` — print archetype/channel breakdown |
+| `just chat-analyze [args]` | `analyze_speakers.py` — score unknown speakers |
+| `just chat-update-map` | `analyze_speakers.py --update-map` — write new labels into `archetype_map.json` |
+| `just chat-vocab` | `build_vocab.py` — train BPE vocabulary |
+| `just chat-dataset` | `build_dataset.py` — tokenise corpus into training arrays |
+| `just chat-train [args]` | `train.py` — train the model |
+| `just chat-export` | `export_onnx.py` — export best checkpoint to ONNX |
+| `just chat-all` | Run the full training pipeline (phases 2–3, minus labeling) |
 
 ---
 
@@ -362,20 +362,12 @@ It does not run the labeling phase — make sure `ARCHETYPE_MAP` is up to date f
 
 ```bash
 # First time only — bootstrap archetype_map.json from scratch
-just nn-corpus --include-unknown   # extract all speakers; map file will be created empty
-just nn-analyze                    # score all speakers
-just nn-update-map                 # writes data/chat/build/archetype_map.json
-
-# Label new speakers (repeat until nn-stats shows no significant Unknown count)
-just nn-corpus
-just nn-stats
-just nn-analyze
-just nn-update-map
+just chat-corpus --include-unknown   # extract all speakers; map file will be created empty
+just chat-update-map                 # writes data/chat/build/archetype_map.json
 
 # Train
-just nn-corpus
-just nn-vocab
-just nn-dataset
-just nn-train
-just nn-export
+just chat-vocab
+just chat-dataset
+just chat-train
+just chat-export
 ```

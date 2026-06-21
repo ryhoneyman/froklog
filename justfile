@@ -117,68 +117,70 @@ build-all:
 
 # ── Neural training pipeline ───────────────────────────────────────────────────
 
-nn_data    := "data/chat/build"
-nn_scripts := "scripts/chat"
-nn_map     := "data/chat/build/archetype_map.json"
+chat_data    := "data/chat/build"
+chat_scripts := "scripts/chat"
+chat_map     := "data/chat/build/archetype_map.json"
 
 # 1. Extract corpus JSONL from all EQ log files
-nn-corpus:
-    python3 {{nn_scripts}}/extract_corpus.py \
+# Usage: just chat-corpus [--include-unknown] [--stats]
+chat-corpus *args:
+    python3 {{chat_scripts}}/extract_corpus.py \
         --logs logs/ \
-        --archetype-map {{nn_map}} \
-        --output {{nn_data}}/corpus.jsonl
+        --archetype-map {{chat_map}} \
+        --output {{chat_data}}/corpus.jsonl \
+        {{args}}
 
 # 2. Train SentencePiece BPE vocabulary on the corpus
-nn-vocab:
-    python3 {{nn_scripts}}/build_vocab.py \
-        --corpus {{nn_data}}/corpus.jsonl \
-        --output {{nn_data}}/vocab
+chat-vocab:
+    python3 {{chat_scripts}}/build_vocab.py \
+        --corpus {{chat_data}}/corpus.jsonl \
+        --output {{chat_data}}/vocab
 
 # 3. Tokenise corpus into padded training arrays
-nn-dataset:
-    python3 {{nn_scripts}}/build_dataset.py \
-        --corpus {{nn_data}}/corpus.jsonl \
-        --vocab  {{nn_data}}/vocab.model \
-        --output {{nn_data}}/dataset
+chat-dataset:
+    python3 {{chat_scripts}}/build_dataset.py \
+        --corpus {{chat_data}}/corpus.jsonl \
+        --vocab  {{chat_data}}/vocab.model \
+        --output {{chat_data}}/dataset
 
 # 4. Train the model (CPU; use --device cuda if available)
-nn-train *args:
-    python3 {{nn_scripts}}/train.py \
-        --dataset {{nn_data}}/dataset \
-        --output  {{nn_data}}/checkpoints \
+chat-train *args:
+    python3 {{chat_scripts}}/train.py \
+        --dataset {{chat_data}}/dataset \
+        --output  {{chat_data}}/checkpoints \
         {{args}}
 
 # 5. Export best checkpoint to ONNX for Rust inference
-nn-export:
-    python3 {{nn_scripts}}/export_onnx.py \
-        --checkpoint {{nn_data}}/checkpoints/best.pt \
+chat-export:
+    python3 {{chat_scripts}}/export_onnx.py \
+        --checkpoint {{chat_data}}/checkpoints/best.pt \
         --output     data/chat/models/model.onnx
 
 # Full pipeline: corpus → vocab → dataset → train → export
-nn-all: nn-corpus nn-vocab nn-dataset nn-train nn-export
+chat-all: chat-corpus chat-vocab chat-dataset chat-train chat-export
 
 # Print per-archetype corpus statistics without writing files
-nn-stats:
-    python3 {{nn_scripts}}/extract_corpus.py \
+chat-stats:
+    python3 {{chat_scripts}}/extract_corpus.py \
         --logs logs/ \
-        --archetype-map {{nn_map}} \
+        --archetype-map {{chat_map}} \
         --stats
 
 # Infer archetype suggestions for unknown speakers from corpus features
-nn-analyze *args:
-    python3 {{nn_scripts}}/analyze_speakers.py \
-        --corpus {{nn_data}}/corpus.jsonl \
-        --archetype-map {{nn_map}} \
+chat-analyze *args:
+    python3 {{chat_scripts}}/analyze_speakers.py \
+        --corpus {{chat_data}}/corpus.jsonl \
+        --archetype-map {{chat_map}} \
         {{args}}
 
 # Write suggested archetype labels for unknown speakers into the map file
-nn-update-map:
-    python3 {{nn_scripts}}/analyze_speakers.py \
-        --corpus {{nn_data}}/corpus.jsonl \
-        --archetype-map {{nn_map}} \
+chat-update-map:
+    python3 {{chat_scripts}}/analyze_speakers.py \
+        --corpus {{chat_data}}/corpus.jsonl \
+        --archetype-map {{chat_map}} \
         --update-map
 
 # Correlate/annotate chat from a single EQ log file (replaces froklog-chatanalyze binary)
-# Usage: just nn-chatanalyze --input eqlog_Name.txt [--mode correlated|corpus|stats] [--speaker Name]
-nn-chatanalyze *args:
-    python3 {{nn_scripts}}/chatanalyze.py {{args}}
+# Usage: just chat-chatanalyze --input eqlog_Name.txt [--mode correlated|corpus|stats] [--speaker Name]
+chat-chatanalyze *args:
+    python3 {{chat_scripts}}/chatanalyze.py {{args}}
