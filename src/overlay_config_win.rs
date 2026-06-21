@@ -1206,16 +1206,15 @@ pub mod overlay_config {
             0,
             0,
         );
-        create_triggers_panel(state.triggers_panel, hi, font, &state.triggers, ta);
-        // Store sub-control handles back into state.
-        // We need to look them up by ID since we called create_triggers_panel with a sub-parent.
-        state.trigger_list = GetDlgItem(state.triggers_panel, IDC_TRIGGER_LIST).unwrap_or_default();
-        state.btn_edit = GetDlgItem(state.triggers_panel, IDC_BTN_EDIT).unwrap_or_default();
-        state.btn_delete = GetDlgItem(state.triggers_panel, IDC_BTN_DELETE).unwrap_or_default();
-        state.btn_move_up = GetDlgItem(state.triggers_panel, IDC_BTN_MOVE_UP).unwrap_or_default();
-        state.btn_move_down =
-            GetDlgItem(state.triggers_panel, IDC_BTN_MOVE_DOWN).unwrap_or_default();
-        state.btn_toggle = GetDlgItem(state.triggers_panel, IDC_BTN_TOGGLE).unwrap_or_default();
+        // Controls are parented to hwnd (not the STATIC panel) so that WM_COMMAND
+        // from buttons reaches config_wnd_proc — STATIC's DefWindowProc drops it.
+        create_triggers_panel(hwnd, hi, font, &state.triggers, ta);
+        state.trigger_list = GetDlgItem(hwnd, IDC_TRIGGER_LIST).unwrap_or_default();
+        state.btn_edit = GetDlgItem(hwnd, IDC_BTN_EDIT).unwrap_or_default();
+        state.btn_delete = GetDlgItem(hwnd, IDC_BTN_DELETE).unwrap_or_default();
+        state.btn_move_up = GetDlgItem(hwnd, IDC_BTN_MOVE_UP).unwrap_or_default();
+        state.btn_move_down = GetDlgItem(hwnd, IDC_BTN_MOVE_DOWN).unwrap_or_default();
+        state.btn_toggle = GetDlgItem(hwnd, IDC_BTN_TOGGLE).unwrap_or_default();
         rebuild_trigger_list(state);
         refresh_trigger_buttons(state);
 
@@ -1272,6 +1271,8 @@ pub mod overlay_config {
         triggers: &TriggerConfig,
         ta: windows::Win32::Foundation::RECT,
     ) {
+        let ox = ta.left;
+        let oy = ta.top;
         let pw = ta.right - ta.left;
         let ph = ta.bottom - ta.top;
         let btn_w = 90i32;
@@ -1287,8 +1288,8 @@ pub mod overlay_config {
             font,
             "LISTBOX",
             "",
-            4,
-            4,
+            ox + 4,
+            oy + 4,
             list_w,
             list_h,
             IDC_TRIGGER_LIST,
@@ -1298,17 +1299,37 @@ pub mod overlay_config {
         // Buttons on the right.
         let mut by = 4i32;
         let gap = btn_h + 4;
-        mk_button_ex(parent, hi, font, "Add", bx, by, btn_w, btn_h, IDC_BTN_ADD);
+        mk_button_ex(
+            parent,
+            hi,
+            font,
+            "Add",
+            ox + bx,
+            oy + by,
+            btn_w,
+            btn_h,
+            IDC_BTN_ADD,
+        );
         by += gap;
-        mk_button_ex(parent, hi, font, "Edit", bx, by, btn_w, btn_h, IDC_BTN_EDIT);
+        mk_button_ex(
+            parent,
+            hi,
+            font,
+            "Edit",
+            ox + bx,
+            oy + by,
+            btn_w,
+            btn_h,
+            IDC_BTN_EDIT,
+        );
         by += gap;
         mk_button_ex(
             parent,
             hi,
             font,
             "Delete",
-            bx,
-            by,
+            ox + bx,
+            oy + by,
             btn_w,
             btn_h,
             IDC_BTN_DELETE,
@@ -1319,8 +1340,8 @@ pub mod overlay_config {
             hi,
             font,
             "Move Up",
-            bx,
-            by,
+            ox + bx,
+            oy + by,
             btn_w,
             btn_h,
             IDC_BTN_MOVE_UP,
@@ -1331,8 +1352,8 @@ pub mod overlay_config {
             hi,
             font,
             "Move Down",
-            bx,
-            by,
+            ox + bx,
+            oy + by,
             btn_w,
             btn_h,
             IDC_BTN_MOVE_DOWN,
@@ -1343,8 +1364,8 @@ pub mod overlay_config {
             hi,
             font,
             "Enable/Disable",
-            bx,
-            by,
+            ox + bx,
+            oy + by,
             btn_w,
             btn_h,
             IDC_BTN_TOGGLE,
