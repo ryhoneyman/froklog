@@ -15,6 +15,8 @@ use tracing::info;
 use froklog::config::Config;
 use froklog::state::CombatState;
 use froklog::tailer::{TailConfig, TailFrom};
+#[cfg(feature = "tray")]
+use froklog::triggers::engine::{TriggerConfig, TriggerEngine};
 use froklog::{parser, pusher, tailer};
 
 fn main() {
@@ -93,6 +95,7 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
                         Arc::clone(&handle.events_sent),
                         Arc::clone(&handle.connected),
                         Arc::clone(&handle.last_connect_error),
+                        Arc::clone(&handle),
                     );
                     info!("Engine stopped");
                 } else {
@@ -118,6 +121,7 @@ fn run_engine_once(
     events_sent: Arc<AtomicU64>,
     connected: Arc<AtomicBool>,
     last_connect_error: Arc<std::sync::RwLock<Option<String>>>,
+    #[cfg(feature = "tray")] app_handle: Arc<froklog::tray::tray::AppHandle>,
 ) {
     let log_path = match config.log_path.as_ref() {
         Some(p) => p.clone(),
@@ -136,7 +140,10 @@ fn run_engine_once(
     let reset_flag = Arc::new(AtomicBool::new(false));
     let (broadcast_tx, _) = broadcast::channel::<Arc<CombatState>>(64);
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (line_tx, line_rx) = bounded::<String>(4096);
+    // Tailer output → splitter → parser_rx (parser) + trigger_rx (trigger engine).
+    let (line_tx, tail_rx) = bounded::<String>(4096);
+    let (parser_tx, line_rx) = bounded::<String>(4096);
+    let (trigger_tx, trigger_rx) = bounded::<String>(1024);
 
     let player_name = config.effective_player_name();
     info!("Watching: {log_path}  player: {player_name}");
@@ -183,6 +190,20 @@ fn run_engine_once(
             .expect("spawn tailer");
     }
 
+    // Splitter: fan the tailer output to the parser channel and the trigger channel.
+    {
+        thread::Builder::new()
+            .name("eq-splitter".into())
+            .spawn(move || {
+                for line in tail_rx {
+                    let _ = parser_tx.send(line.clone());
+                    // Drop lines if the trigger channel is full rather than blocking the parser.
+                    let _ = trigger_tx.try_send(line);
+                }
+            })
+            .expect("spawn splitter");
+    }
+
     {
         let shared2 = Arc::clone(&shared);
         let reset2 = Arc::clone(&reset_flag);
@@ -192,6 +213,43 @@ fn run_engine_once(
             .name("eq-parser".into())
             .spawn(move || parser::run(line_rx, shared2, reset2, btx, event_tx, pname))
             .expect("spawn parser");
+    }
+
+    // Trigger engine + overlay (tray builds only).
+    #[cfg(feature = "tray")]
+    {
+        let trigger_cfg = TriggerConfig::load();
+        let overlay_queue = Arc::clone(&app_handle.overlay_queue);
+        let engine = TriggerEngine::new(&trigger_cfg, Arc::clone(&overlay_queue));
+        *app_handle.trigger_engine.lock().unwrap() = Some(engine.clone());
+
+        // Trigger engine thread — processes log lines and advances timers.
+        thread::Builder::new()
+            .name("eq-triggers".into())
+            .spawn(move || {
+                let tick = std::time::Duration::from_millis(100);
+                loop {
+                    // Drain all pending lines without blocking longer than one tick.
+                    let deadline = std::time::Instant::now() + tick;
+                    loop {
+                        match trigger_rx.recv_timeout(std::time::Duration::from_millis(5)) {
+                            Ok(line) => engine.process_line(&line),
+                            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            break;
+                        }
+                    }
+                    engine.tick();
+                }
+            })
+            .expect("spawn trigger engine");
+
+        // Spawn overlay window if enabled.
+        if config.overlay_enabled {
+            froklog::overlay::overlay::spawn_overlay(config.clone(), overlay_queue);
+        }
     }
 
     {

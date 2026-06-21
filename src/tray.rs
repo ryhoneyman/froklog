@@ -18,11 +18,14 @@ pub mod tray {
     use winit::event_loop::{ControlFlow, EventLoop};
 
     use crate::config::Config;
+    use crate::triggers::engine::TriggerEngine;
 
     // ── Menu item IDs ─────────────────────────────────────────────────────────
 
     const ID_STATUS: &str = "status";
     const ID_TOGGLE_LOGGING: &str = "toggle_logging";
+    const ID_TOGGLE_OVERLAY: &str = "toggle_overlay";
+    const ID_OVERLAY_SETTINGS: &str = "overlay_settings";
     const ID_SETTINGS: &str = "settings";
     const ID_COPY_VIEWER_URL: &str = "copy_viewer_url";
     const ID_OPEN_VIEWER_URL: &str = "open_viewer_url";
@@ -43,12 +46,18 @@ pub mod tray {
         pub logging_enabled: Arc<AtomicBool>,
         /// Prevents opening multiple settings windows simultaneously.
         pub settings_open: Arc<AtomicBool>,
+        /// Prevents opening multiple overlay-config windows simultaneously.
+        pub overlay_config_open: Arc<AtomicBool>,
         /// Cumulative count of events successfully pushed to the server.
         pub events_sent: Arc<AtomicU64>,
         /// True while the pusher has an active WebSocket connection.
         pub connected: Arc<AtomicBool>,
         /// Last pusher connection error, cleared on successful connect.
         pub last_connect_error: Arc<RwLock<Option<String>>>,
+        /// Live trigger engine — replaced on reload.
+        pub trigger_engine: Arc<Mutex<Option<TriggerEngine>>>,
+        /// Shared queue from trigger engine → overlay window.
+        pub overlay_queue: Arc<Mutex<Vec<crate::triggers::engine::OverlayEvent>>>,
     }
 
     impl AppHandle {
@@ -60,9 +69,12 @@ pub mod tray {
                 restart: Arc::new(AtomicBool::new(false)),
                 quit: Arc::new(AtomicBool::new(false)),
                 settings_open: Arc::new(AtomicBool::new(false)),
+                overlay_config_open: Arc::new(AtomicBool::new(false)),
                 events_sent: Arc::new(AtomicU64::new(0)),
                 connected: Arc::new(AtomicBool::new(false)),
                 last_connect_error: Arc::new(RwLock::new(None)),
+                trigger_engine: Arc::new(Mutex::new(None)),
+                overlay_queue: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -74,12 +86,15 @@ pub mod tray {
         let event_loop: EventLoop<()> = EventLoop::builder().build().expect("event loop");
 
         let logging_on = handle.logging_enabled.load(Ordering::Relaxed);
-        let (tray, toggle_item, status_item, copy_url_item, open_url_item) =
-            build_tray(&handle.config.lock().unwrap(), logging_on);
+        let overlay_on = handle.config.lock().unwrap().overlay_enabled;
+        let (tray, toggle_item, overlay_toggle_item, status_item, copy_url_item, open_url_item) =
+            build_tray(&handle.config.lock().unwrap(), logging_on, overlay_on);
         #[allow(clippy::arc_with_non_send_sync)]
         let tray = Arc::new(Mutex::new(tray));
         #[allow(clippy::arc_with_non_send_sync)]
         let toggle_item = Arc::new(Mutex::new(toggle_item));
+        #[allow(clippy::arc_with_non_send_sync)]
+        let overlay_toggle_item = Arc::new(Mutex::new(overlay_toggle_item));
 
         let handle_clone = Arc::clone(&handle);
 
@@ -120,6 +135,14 @@ pub mod tray {
                     match evt.id.0.as_str() {
                         ID_TOGGLE_LOGGING => {
                             toggle_logging(&handle_clone, &tray, &toggle_item);
+                        }
+                        ID_TOGGLE_OVERLAY => {
+                            toggle_overlay(&handle_clone, &overlay_toggle_item);
+                        }
+                        ID_OVERLAY_SETTINGS
+                            if !handle_clone.overlay_config_open.swap(true, Ordering::Relaxed) =>
+                        {
+                            crate::overlay_config_win::open_overlay_config(Arc::clone(&handle_clone));
                         }
                         ID_SETTINGS
                             if !handle_clone.settings_open.swap(true, Ordering::Relaxed) =>
@@ -208,6 +231,22 @@ pub mod tray {
                 let _ = event;
             })
             .expect("event loop");
+    }
+
+    // ── Overlay toggle ────────────────────────────────────────────────────────
+
+    fn toggle_overlay(handle: &Arc<AppHandle>, overlay_toggle_item: &Arc<Mutex<MenuItem>>) {
+        let now_on = {
+            let mut cfg = handle.config.lock().unwrap();
+            cfg.overlay_enabled = !cfg.overlay_enabled;
+            let v = cfg.overlay_enabled;
+            cfg.save();
+            v
+        };
+        let label = if now_on { "Hide Overlay" } else { "Show Overlay" };
+        overlay_toggle_item.lock().unwrap().set_text(label);
+        // A restart picks up the new overlay_enabled flag.
+        handle.restart.store(true, Ordering::Relaxed);
     }
 
     // ── Logging toggle ────────────────────────────────────────────────────────
@@ -318,7 +357,8 @@ pub mod tray {
     fn build_tray(
         cfg: &Config,
         logging_on: bool,
-    ) -> (tray_icon::TrayIcon, MenuItem, MenuItem, MenuItem, MenuItem) {
+        overlay_on: bool,
+    ) -> (tray_icon::TrayIcon, MenuItem, MenuItem, MenuItem, MenuItem, MenuItem) {
         let menu = Menu::new();
 
         let status_item = MenuItem::with_id(
@@ -334,6 +374,13 @@ pub mod tray {
             "Enable Logging"
         };
         let toggle_item = MenuItem::with_id(ID_TOGGLE_LOGGING, toggle_label, true, None);
+
+        let overlay_toggle_label = if overlay_on { "Hide Overlay" } else { "Show Overlay" };
+        let overlay_toggle_item =
+            MenuItem::with_id(ID_TOGGLE_OVERLAY, overlay_toggle_label, true, None);
+        let overlay_settings_item =
+            MenuItem::with_id(ID_OVERLAY_SETTINGS, "Overlay Settings…", true, None);
+
         let settings_item = MenuItem::with_id(ID_SETTINGS, "Settings…", true, None);
         let is_reg = cfg.is_registered();
         let open_url_item = MenuItem::with_id(ID_OPEN_VIEWER_URL, "Open Viewer URL", is_reg, None);
@@ -344,6 +391,10 @@ pub mod tray {
         menu.append(&status_item).unwrap();
         menu.append(&sep_status).unwrap();
         menu.append(&toggle_item).unwrap();
+        menu.append(&PredefinedMenuItem::separator()).unwrap();
+        menu.append(&overlay_toggle_item).unwrap();
+        menu.append(&overlay_settings_item).unwrap();
+        menu.append(&PredefinedMenuItem::separator()).unwrap();
         menu.append(&settings_item).unwrap();
         menu.append(&open_url_item).unwrap();
         menu.append(&copy_url_item).unwrap();
@@ -357,7 +408,7 @@ pub mod tray {
             .build()
             .expect("tray icon");
 
-        (tray, toggle_item, status_item, copy_url_item, open_url_item)
+        (tray, toggle_item, overlay_toggle_item, status_item, copy_url_item, open_url_item)
     }
 
     fn make_status_text(

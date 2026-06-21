@@ -8,6 +8,26 @@ fn default_true() -> bool {
     true
 }
 
+fn default_overlay_alpha() -> u8 {
+    200
+}
+
+fn default_overlay_font_size() -> u32 {
+    14
+}
+
+fn default_overlay_idle_secs() -> u32 {
+    6
+}
+
+fn default_overlay_max_entries() -> usize {
+    8
+}
+
+fn default_neg_one_i32() -> i32 {
+    -1
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Path to the EverQuest log file being tailed.
@@ -40,6 +60,33 @@ pub struct Config {
     /// Whether the log-tail engine is enabled. Defaults to true.
     #[serde(default = "default_true")]
     pub logging_enabled: bool,
+
+    // ── Overlay settings ──────────────────────────────────────────────────────
+
+    /// Whether the overlay window is visible.
+    #[serde(default)]
+    pub overlay_enabled: bool,
+    /// Window opacity 0–255 (255 = fully opaque). Default 200.
+    #[serde(default = "default_overlay_alpha")]
+    pub overlay_alpha: u8,
+    /// Font family for overlay text. Empty = system default (Segoe UI).
+    #[serde(default)]
+    pub overlay_font: String,
+    /// Font point size for normal overlay entries. Featured entry is 2×. Default 14.
+    #[serde(default = "default_overlay_font_size")]
+    pub overlay_font_size: u32,
+    /// Seconds of inactivity before the overlay auto-hides. Default 6.
+    #[serde(default = "default_overlay_idle_secs")]
+    pub overlay_idle_secs: u32,
+    /// Maximum number of entries kept in the scroll buffer. Default 8.
+    #[serde(default = "default_overlay_max_entries")]
+    pub overlay_max_entries: usize,
+    /// Overlay window X position (pixels from left of screen). Default -1 = auto-centre.
+    #[serde(default = "default_neg_one_i32")]
+    pub overlay_x: i32,
+    /// Overlay window Y position (pixels from top of screen). Default -1 = auto-centre.
+    #[serde(default = "default_neg_one_i32")]
+    pub overlay_y: i32,
 }
 
 impl Config {
