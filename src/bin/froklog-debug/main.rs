@@ -841,7 +841,10 @@ fn main() {
 
             // Register Beastlord warders as pets before mob/player classification.
             if let Some(owner) = parse_warder_owner(&src) {
-                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state
+                    .known_pets
+                    .entry(src.clone())
+                    .or_insert_with(|| owner.to_owned());
                 state.known_players.insert(src.clone());
             }
 
@@ -961,7 +964,10 @@ fn main() {
 
             // Register Beastlord warders as pets before mob/player classification.
             if let Some(owner) = parse_warder_owner(&src) {
-                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state
+                    .known_pets
+                    .entry(src.clone())
+                    .or_insert_with(|| owner.to_owned());
                 state.known_players.insert(src.clone());
             }
 
@@ -1166,7 +1172,10 @@ fn main() {
 
             // Register Beastlord warders as pets before mob/player classification.
             if let Some(owner) = parse_warder_owner(&src) {
-                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state
+                    .known_pets
+                    .entry(src.clone())
+                    .or_insert_with(|| owner.to_owned());
                 state.known_players.insert(src.clone());
             }
 
@@ -1466,7 +1475,10 @@ fn main() {
             if let Some(src) = attacker {
                 // Register Beastlord warders as pets before mob/player classification.
                 if let Some(owner) = parse_warder_owner(&src) {
-                    state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                    state
+                        .known_pets
+                        .entry(src.clone())
+                        .or_insert_with(|| owner.to_owned());
                     state.known_players.insert(src.clone());
                 }
 
