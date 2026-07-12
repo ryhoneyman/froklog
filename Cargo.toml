@@ -119,6 +119,8 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Media",
     "Win32_Media_Audio",
+    "Win32_Media_Speech",
+    "Win32_System_Registry",
 ]}
 
 [build-dependencies]

@@ -28,6 +28,46 @@ fn default_neg_one_i32() -> i32 {
     -1
 }
 
+/// Voice speed multiplier for TTS playback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TtsSpeed {
+    /// 1.0× — natural speech rate.
+    #[default]
+    Normal,
+    /// 1.2×
+    Fast,
+    /// 1.5×
+    Faster,
+    /// 2.0×
+    Fastest,
+}
+
+impl TtsSpeed {
+    pub fn multiplier(&self) -> f32 {
+        match self {
+            Self::Normal => 1.0,
+            Self::Fast => 1.2,
+            Self::Faster => 1.5,
+            Self::Fastest => 2.0,
+        }
+    }
+}
+
+/// How concurrent TTS alerts are handled when audio is already playing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TtsAudioMode {
+    /// Emergency alerts cut in immediately; Operational alerts queue; Ambient alerts are
+    /// suppressed while any audio is playing.
+    #[default]
+    SmartPriority,
+    /// Every alert is queued and spoken in order, regardless of priority.
+    QueueAll,
+    /// Every new alert interrupts whatever is currently playing.
+    InterruptConstantly,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Path to the EverQuest log file being tailed.
@@ -86,6 +126,29 @@ pub struct Config {
     /// Overlay window Y position (pixels from top of screen). Default -1 = auto-centre.
     #[serde(default = "default_neg_one_i32")]
     pub overlay_y: i32,
+
+    // ── TTS / Voice settings ──────────────────────────────────────────────────
+    /// Whether Text-to-Speech is enabled globally.
+    #[serde(default)]
+    pub tts_enabled: bool,
+    /// Playback speed for TTS speech.
+    #[serde(default)]
+    pub tts_speed: TtsSpeed,
+    /// How concurrent TTS alerts are handled when audio is already playing.
+    #[serde(default)]
+    pub tts_audio_mode: TtsAudioMode,
+    /// Whether Emergency priority voice alerts are spoken.
+    #[serde(default = "default_true")]
+    pub tts_read_emergency: bool,
+    /// Whether Operational priority voice alerts are spoken.
+    #[serde(default = "default_true")]
+    pub tts_read_operational: bool,
+    /// Whether Ambient priority voice alerts are spoken.
+    #[serde(default = "default_true")]
+    pub tts_read_ambient: bool,
+    /// SAPI voice token key name (e.g. `TTS_MS_EN-US_DAVID_11.0`).  Empty = system default.
+    #[serde(default)]
+    pub tts_voice: String,
 }
 
 impl Config {

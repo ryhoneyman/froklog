@@ -233,6 +233,14 @@ pub fn norm(name: &str, player: &str) -> String {
 
 /// Lowercase "A "/"An " articles at the start of a name.
 /// EQ capitalises these when the mob name opens a sentence.
+/// Extract the owner name from "Playername's warder" → Some("Playername").
+/// Returns None if the name doesn't match the pattern or the prefix contains a space.
+pub fn parse_warder_owner(name: &str) -> Option<&str> {
+    name.strip_suffix("'s warder")
+        .or_else(|| name.strip_suffix("`s warder"))
+        .filter(|owner| !owner.is_empty() && !owner.contains(' '))
+}
+
 pub fn normalize_article_case(name: &str) -> String {
     if let Some(rest) = name.strip_prefix("A ") {
         format!("a {rest}")

@@ -69,6 +69,17 @@ fn main() {
 
 #[cfg(feature = "tray")]
 fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
+    // Generate icon/sound assets on first run (no-op if already present).
+    froklog::assets::assets::ensure_assets();
+
+    // Spawn the overlay once here so it survives engine restarts and live-reloads
+    // its settings (font, alpha, enabled) from the shared config on each tick.
+    froklog::overlay::overlay::spawn_overlay(
+        Arc::clone(&handle.config),
+        Arc::clone(&handle.overlay_queue),
+        Arc::clone(&handle.quit),
+    );
+
     thread::Builder::new()
         .name("eq-engine-monitor".into())
         .spawn(move || {
@@ -245,11 +256,6 @@ fn run_engine_once(
                 }
             })
             .expect("spawn trigger engine");
-
-        // Spawn overlay window if enabled.
-        if config.overlay_enabled {
-            froklog::overlay::overlay::spawn_overlay(config.clone(), overlay_queue);
-        }
     }
 
     {

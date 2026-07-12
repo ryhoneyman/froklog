@@ -86,6 +86,10 @@ pub struct CombatState {
     /// Level for known players, populated from /who log lines.
     #[serde(skip)]
     pub player_levels: HashMap<String, u8>,
+    /// Pet entity name → owner player name (e.g. "Rysk's warder" → "Rysk").
+    /// Persisted across resets so pets identified early aren't re-classified as mobs.
+    #[serde(skip)]
+    pub known_pets: HashMap<String, String>,
 
     #[serde(skip)]
     pub fight_start: Option<Instant>,

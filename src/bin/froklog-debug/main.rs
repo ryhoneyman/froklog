@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 use chrono::Timelike;
 use clap::Parser;
 use froklog::patterns::{
-    norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_who_classes,
-    RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED, RE_DOT, RE_DS,
-    RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL, RE_LOOT_ENHANCE,
-    RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE,
-    RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
+    norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_warder_owner,
+    parse_who_classes, RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED,
+    RE_DOT, RE_DS, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
+    RE_LOOT_ENHANCE, RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST,
+    RE_RIPOSTE, RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
 use froklog::tailer::parse_eq_timestamp;
 
@@ -103,6 +103,8 @@ struct DebugState {
     player_classes: HashMap<String, Vec<String>>,
     /// player name → level from /who lines
     player_levels: HashMap<String, u8>,
+    /// pet entity name → owner player name ("Rysk's warder" → "Rysk")
+    known_pets: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -303,11 +305,27 @@ fn main() {
                 format!("RE_HIT_BY_SPELL — src={src:?} tgt={tgt:?} dmg={dmg} spell={spell:?}")
             );
 
-            let src_is_mob = src.contains(' ')
-                || state.confirmed_mobs.contains(&src)
-                || state.known_players.contains(tgt.as_str())
-                || tgt == args.player
-                || state.mob_candidates.contains_key(src.as_str());
+            if let Some(owner) = parse_warder_owner(&src) {
+                let is_new = state
+                    .known_pets
+                    .entry(src.clone())
+                    .or_insert_with(|| owner.to_owned())
+                    == owner;
+                if is_new {
+                    t!(
+                        "PET",
+                        format!("{src:?} registered as warder (owner={owner:?})")
+                    );
+                }
+                state.known_players.insert(src.clone());
+            }
+
+            let src_is_mob = !state.known_players.contains(&src)
+                && (src.contains(' ')
+                    || state.confirmed_mobs.contains(&src)
+                    || state.known_players.contains(tgt.as_str())
+                    || tgt == args.player
+                    || state.mob_candidates.contains_key(src.as_str()));
 
             if src_is_mob {
                 t!("REASON", format!("{src:?} identified as MOB (multi-word={}, confirmed={}, tgt_is_player={}, tgt_is_self={}, src_is_candidate={})",
@@ -421,6 +439,21 @@ fn main() {
                 "MATCH",
                 format!("RE_MELEE — src={src:?} verb={verb:?} tgt={tgt:?} dmg={dmg} type={typ:?}")
             );
+
+            if let Some(owner) = parse_warder_owner(&src) {
+                let is_new = state
+                    .known_pets
+                    .entry(src.clone())
+                    .or_insert_with(|| owner.to_owned())
+                    == owner;
+                if is_new {
+                    t!(
+                        "PET",
+                        format!("{src:?} registered as warder (owner={owner:?})")
+                    );
+                }
+                state.known_players.insert(src.clone());
+            }
 
             let src_is_mob = !state.known_players.contains(&src)
                 && (verb == "hit"
@@ -634,7 +667,8 @@ fn main() {
             if let Some(caster) = state.spell_caster.get(&spell).cloned() {
                 t!("LOOKUP", format!("spell_caster[{spell:?}] = {caster:?}"));
 
-                let caster_is_mob = caster.contains(' ') || state.confirmed_mobs.contains(&caster);
+                let caster_is_mob = !state.known_players.contains(&caster)
+                    && (caster.contains(' ') || state.confirmed_mobs.contains(&caster));
 
                 if caster_is_mob {
                     t!(
@@ -805,11 +839,18 @@ fn main() {
                 format!("RE_RIPOSTE — src={src:?} tgt={tgt:?} dmg={dmg}")
             );
 
+            // Register Beastlord warders as pets before mob/player classification.
+            if let Some(owner) = parse_warder_owner(&src) {
+                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state.known_players.insert(src.clone());
+            }
+
             // A mob can riposte a player: "Player was injured by Mob's riposte for N"
-            let src_is_mob = src.contains(' ')
-                || state.confirmed_mobs.contains(&src)
-                || state.known_players.contains(tgt.as_str())
-                || tgt == args.player;
+            let src_is_mob = !state.known_players.contains(&src)
+                && (src.contains(' ')
+                    || state.confirmed_mobs.contains(&src)
+                    || state.known_players.contains(tgt.as_str())
+                    || tgt == args.player);
 
             if src_is_mob {
                 t!(
@@ -918,11 +959,18 @@ fn main() {
                 format!("RE_DS — src={src:?} tgt={tgt:?} dmg={dmg}")
             );
 
+            // Register Beastlord warders as pets before mob/player classification.
+            if let Some(owner) = parse_warder_owner(&src) {
+                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state.known_players.insert(src.clone());
+            }
+
             // A mob can have a DS: "Player was struck by Mob's damage shield for N"
-            let src_is_mob = src.contains(' ')
-                || state.confirmed_mobs.contains(&src)
-                || state.known_players.contains(tgt.as_str())
-                || tgt == args.player;
+            let src_is_mob = !state.known_players.contains(&src)
+                && (src.contains(' ')
+                    || state.confirmed_mobs.contains(&src)
+                    || state.known_players.contains(tgt.as_str())
+                    || tgt == args.player);
 
             if src_is_mob {
                 t!(
@@ -1116,11 +1164,18 @@ fn main() {
                 format!("entities[{tgt:?}].avoidance_by_type[{miss_type:?}] += 1")
             );
 
+            // Register Beastlord warders as pets before mob/player classification.
+            if let Some(owner) = parse_warder_owner(&src) {
+                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state.known_players.insert(src.clone());
+            }
+
             // If src is a mob, update mob tracking and tanking avoidance.
-            let src_is_mob = src.contains(' ')
-                || state.confirmed_mobs.contains(&src)
-                || state.known_players.contains(tgt.as_str())
-                || tgt == args.player;
+            let src_is_mob = !state.known_players.contains(&src)
+                && (src.contains(' ')
+                    || state.confirmed_mobs.contains(&src)
+                    || state.known_players.contains(tgt.as_str())
+                    || tgt == args.player);
             if src_is_mob {
                 t!("REASON", format!("{src:?} identified as MOB"));
                 if !state.known_players.contains(&src) {
@@ -1409,10 +1464,17 @@ fn main() {
             );
 
             if let Some(src) = attacker {
-                let src_is_mob = src.contains(' ')
-                    || state.confirmed_mobs.contains(&src)
-                    || state.known_players.contains(tgt.as_str())
-                    || tgt == args.player;
+                // Register Beastlord warders as pets before mob/player classification.
+                if let Some(owner) = parse_warder_owner(&src) {
+                    state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                    state.known_players.insert(src.clone());
+                }
+
+                let src_is_mob = !state.known_players.contains(&src)
+                    && (src.contains(' ')
+                        || state.confirmed_mobs.contains(&src)
+                        || state.known_players.contains(tgt.as_str())
+                        || tgt == args.player);
 
                 if src_is_mob && src != args.player {
                     t!(

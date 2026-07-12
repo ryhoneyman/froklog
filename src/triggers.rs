@@ -4,15 +4,25 @@
 /// `~/.config/froklog/triggers.toml` (other).  The engine is reloaded whenever
 /// the config dialog saves changes.
 ///
-/// Two trigger shapes are supported:
-///   - Simple  : single pattern → instant overlay event
-///   - Chained : multi-step state machine (delay / completion / cancel)
+/// Each trigger has:
+///   - Zero or more Conditions evaluated with ALL or ANY logic
+///   - One or more Actions executed when the trigger fires
+///
+/// Condition types:
+///   - match : compare the log line with an exact string, regex, or glob pattern
+///   - var   : test a stored variable with isset/equals/gt/gte/lt/lte/matches
+///
+/// Action types:
+///   - overlay   : emit a message to the overlay window (icon, color, delay)
+///   - store_var : write a variable (value may reference capture groups)
 #[cfg(feature = "tray")]
 pub mod engine {
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use once_cell::sync::Lazy;
     use regex::Regex;
     use serde::{Deserialize, Serialize};
 
@@ -22,94 +32,145 @@ pub mod engine {
         true
     }
 
-    /// A single step inside a chained trigger.
-    /// Exactly one of `match_pattern`, `delay_secs`, `complete`, or `cancel` must
-    /// be set; serde's untagged discriminant resolves which variant to decode.
+    /// How a log line is matched in a Match condition.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum MatchType {
+        /// Literal substring — line must contain the pattern string verbatim.
+        Exact,
+        /// Standard Rust regex.  Capture groups `(…)` give `{1}`, `{2}` …
+        #[default]
+        Regex,
+        /// Shell-style glob.  `*` = any chars, `?` = one char,
+        /// `{name}` = named capture (usable as `{name}` in action templates).
+        Glob,
+    }
+
+    /// Comparison operator for a Var condition.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum VarOp {
+        /// Variable has been stored (value field ignored).
+        #[default]
+        Isset,
+        /// String equality (case-insensitive).
+        Equals,
+        /// Numeric greater-than.
+        Gt,
+        /// Numeric greater-than-or-equal.
+        Gte,
+        /// Numeric less-than.
+        Lt,
+        /// Numeric less-than-or-equal.
+        Lte,
+        /// Variable value matches a regex pattern.
+        Matches,
+    }
+
+    /// Whether ALL or ANY conditions must pass for a trigger to fire.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ConditionLogic {
+        /// Every condition must pass (AND).
+        #[default]
+        All,
+        /// At least one condition must pass (OR).
+        Any,
+    }
+
+    /// A single trigger condition stored in triggers.toml.
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(untagged)]
-    pub enum ChainStepDef {
-        /// Primary trigger pattern (always the first step in a chain).
+    #[serde(tag = "type", rename_all = "snake_case")]
+    pub enum Condition {
+        /// Test the incoming log line.
         Match {
-            #[serde(rename = "match")]
+            #[serde(default)]
+            match_type: MatchType,
+            #[serde(default)]
             pattern: String,
-            #[serde(default)]
-            icon: String,
-            #[serde(default)]
-            message: String,
-            #[serde(default)]
-            sound: Option<String>,
         },
-        /// Fire after a fixed delay with no log event required.
-        Delay {
-            delay_secs: f64,
+        /// Test a stored variable.
+        Var {
             #[serde(default)]
-            icon: String,
+            var_name: String,
             #[serde(default)]
-            message: String,
+            op: VarOp,
+            /// Comparison value (ignored for `isset`).
             #[serde(default)]
-            sound: Option<String>,
+            value: String,
         },
-        /// Fire when this pattern is seen, completing the chain.
-        Complete {
-            complete: String,
-            #[serde(default)]
-            icon: String,
-            #[serde(default)]
-            message: String,
-            #[serde(default)]
-            sound: Option<String>,
-        },
-        /// Silently cancel the active chain when this pattern is seen.
-        Cancel { cancel: String },
     }
 
-    /// Top-level trigger definition stored in triggers.toml.
+    /// Priority level for a VoiceAlert action, controlling queue behaviour.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum VoicePriority {
+        /// Cuts any currently playing audio immediately to speak this alert.
+        Emergency,
+        /// Queues speech after the current audio finishes.
+        #[default]
+        Operational,
+        /// Suppressed entirely if any audio is currently playing.
+        Ambient,
+    }
+
+    /// A single action executed when a trigger fires.
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(untagged)]
-    pub enum TriggerDef {
-        Simple {
-            name: String,
-            #[serde(default = "default_true")]
-            enabled: bool,
-            #[serde(rename = "match")]
-            pattern: String,
+    #[serde(tag = "type", rename_all = "snake_case")]
+    pub enum Action {
+        /// Show a message in the overlay.
+        Overlay {
+            /// Built-in icon key: "heal", "damage", "warn", "spell", "info" or "".
             #[serde(default)]
             icon: String,
+            /// Optional hex colour override for the icon swatch, e.g. "#FF4400".
+            #[serde(default)]
+            color: String,
+            /// Message text; supports `{1}`, `{name}` placeholders.
             #[serde(default)]
             message: String,
+            /// Optional hex colour for the message text, e.g. "#FFDD44".  Empty = default white.
+            #[serde(default)]
+            message_color: String,
+            /// Seconds to wait before showing (0 = immediate).
+            #[serde(default)]
+            delay_secs: f64,
+            /// Optional sound: "" = none, "sounds/ding.wav" = bundled, or absolute path.
             #[serde(default)]
             sound: Option<String>,
         },
-        Chained {
-            name: String,
-            #[serde(default = "default_true")]
-            enabled: bool,
-            steps: Vec<ChainStepDef>,
+        /// Speak a message via the system TTS engine.
+        VoiceAlert {
+            /// Text to speak; supports `{1}`, `{name}` placeholders.
+            #[serde(default)]
+            tts_text: String,
+            /// Playback priority: emergency cuts current audio, operational queues,
+            /// ambient is suppressed if audio is already playing.
+            #[serde(default)]
+            priority: VoicePriority,
+        },
+        /// Write a value to a named variable.
+        StoreVar {
+            #[serde(default)]
+            var_name: String,
+            /// Value template; supports `{1}`, `{name}` placeholders.
+            #[serde(default)]
+            value: String,
         },
     }
 
-    impl TriggerDef {
-        pub fn name(&self) -> &str {
-            match self {
-                TriggerDef::Simple { name, .. } | TriggerDef::Chained { name, .. } => name,
-            }
-        }
-
-        pub fn enabled(&self) -> bool {
-            match self {
-                TriggerDef::Simple { enabled, .. } | TriggerDef::Chained { enabled, .. } => {
-                    *enabled
-                }
-            }
-        }
-
-        pub fn set_enabled(&mut self, v: bool) {
-            match self {
-                TriggerDef::Simple { enabled, .. } | TriggerDef::Chained { enabled, .. } => {
-                    *enabled = v;
-                }
-            }
-        }
+    /// One trigger definition as stored in triggers.toml.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct TriggerDef {
+        pub name: String,
+        #[serde(default = "default_true")]
+        pub enabled: bool,
+        #[serde(default)]
+        pub condition_logic: ConditionLogic,
+        #[serde(default, rename = "condition")]
+        pub conditions: Vec<Condition>,
+        #[serde(default, rename = "action")]
+        pub actions: Vec<Action>,
     }
 
     /// Root document in triggers.toml.
@@ -155,78 +216,81 @@ pub mod engine {
         }
     }
 
-    // ── Runtime types ─────────────────────────────────────────────────────────
+    // ── Runtime event type ────────────────────────────────────────────────────
 
     /// An event emitted by the trigger engine to be displayed in the overlay.
     #[derive(Debug, Clone)]
     pub struct OverlayEvent {
         pub icon: String,
+        /// Optional hex colour override for the icon swatch (e.g. "#FF4400"), or "".
+        pub color: String,
         pub message: String,
+        /// Optional hex colour for the message text (e.g. "#FFDD44"), or "".
+        pub message_color: String,
         pub sound: Option<String>,
+        /// Text to speak via TTS, or None for visual-only events.
+        pub tts_text: Option<String>,
+        /// Priority for TTS playback (controls interrupt / queue / suppress behaviour).
+        pub tts_priority: VoicePriority,
     }
 
-    /// Compiled form of a `TriggerDef::Simple`.
-    struct CompiledSimple {
-        pattern: Regex,
-        icon: String,
-        message: String,
-        sound: Option<String>,
+    // ── Compiled runtime types ────────────────────────────────────────────────
+
+    /// The compiled form of a match-type condition.
+    enum CompiledMatch {
+        Exact(String),
+        Regex(Regex),
     }
 
-    /// One pending step inside a running chain instance.
-    enum PendingStep {
-        Delay {
-            fire_at: Instant,
-            icon: String,
-            message: String,
-            sound: Option<String>,
-        },
-        Pattern {
-            regex: Regex,
-            is_cancel: bool,
-            icon: String,
-            message: String,
-            sound: Option<String>,
-        },
+    struct CompiledCondition {
+        original: Condition,
+        /// Compiled pattern — only Some for Match conditions.
+        compiled: Option<CompiledMatch>,
     }
 
-    /// A running instance of a chained trigger.
-    struct ActiveChain {
-        /// Index of the next step to process (everything before this index is done).
-        pending: Vec<PendingStep>,
+    struct CompiledTrigger {
+        logic: ConditionLogic,
+        conditions: Vec<CompiledCondition>,
+        actions: Vec<Action>,
     }
 
-    /// Compiled form of a `TriggerDef::Chained` — just the start pattern + the
-    /// full step list for spawning new instances.
-    struct CompiledChain {
-        start_pattern: Regex,
-        start_icon: String,
-        start_message: String,
-        start_sound: Option<String>,
-        steps: Vec<ChainStepDef>,
+    /// Resolved capture groups from a matched condition, owned strings.
+    #[derive(Default)]
+    struct CaptureMap {
+        /// Positional groups: index 0 = full match, 1+ = capture groups.
+        positional: Vec<Option<String>>,
+        /// Named capture groups.
+        named: HashMap<String, String>,
     }
 
-    // ── Engine ────────────────────────────────────────────────────────────────
+    struct PendingAction {
+        fire_at: Instant,
+        event: OverlayEvent,
+    }
 
-    /// The trigger engine.  Cloneable handle backed by a shared inner state.
+    struct EngineInner {
+        triggers: Vec<CompiledTrigger>,
+        vars: HashMap<String, String>,
+        pending: Vec<PendingAction>,
+        output: Arc<Mutex<Vec<OverlayEvent>>>,
+    }
+
+    // ── Template placeholder regex ────────────────────────────────────────────
+
+    /// Matches `{something}` in action templates.
+    static PLACEHOLDER: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{([^}]+)\}").unwrap());
+
+    // ── Public engine handle ──────────────────────────────────────────────────
+
     #[derive(Clone)]
     pub struct TriggerEngine {
         inner: Arc<Mutex<EngineInner>>,
     }
 
-    struct EngineInner {
-        simples: Vec<CompiledSimple>,
-        chains: Vec<CompiledChain>,
-        active: Vec<ActiveChain>,
-        output: Arc<Mutex<Vec<OverlayEvent>>>,
-    }
-
     impl TriggerEngine {
-        /// Build a new engine from a loaded `TriggerConfig`.
         pub fn new(cfg: &TriggerConfig, output: Arc<Mutex<Vec<OverlayEvent>>>) -> Self {
-            let inner = EngineInner::from_config(cfg, output);
             Self {
-                inner: Arc::new(Mutex::new(inner)),
+                inner: Arc::new(Mutex::new(EngineInner::from_config(cfg, output))),
             }
         }
 
@@ -237,60 +301,123 @@ pub mod engine {
             *g = EngineInner::from_config(cfg, output);
         }
 
-        /// Feed a log line into the engine.  Any resulting events are appended to
-        /// the shared output queue.
+        /// Feed a log line into the engine.
         pub fn process_line(&self, line: &str) {
             self.inner.lock().unwrap().process_line(line);
         }
 
-        /// Advance timer-based steps.  Call on a regular tick (e.g. every 100 ms).
+        /// Advance timer-based actions.  Call on a regular tick (e.g. every 100 ms).
         pub fn tick(&self) {
             self.inner.lock().unwrap().tick();
         }
     }
 
+    // ── Engine inner ──────────────────────────────────────────────────────────
+
     impl EngineInner {
         fn from_config(cfg: &TriggerConfig, output: Arc<Mutex<Vec<OverlayEvent>>>) -> Self {
-            let mut simples = Vec::new();
-            let mut chains = Vec::new();
-
+            let mut triggers = Vec::new();
             for def in &cfg.triggers {
-                if !def.enabled() {
+                if !def.enabled {
                     continue;
                 }
-                match def {
-                    TriggerDef::Simple {
-                        pattern,
-                        icon,
-                        message,
-                        sound,
-                        ..
-                    } => {
-                        if let Ok(re) = Regex::new(pattern) {
-                            simples.push(CompiledSimple {
-                                pattern: re,
-                                icon: icon.clone(),
-                                message: message.clone(),
-                                sound: sound.clone(),
-                            });
+                let conditions = def.conditions.iter().map(compile_condition).collect();
+                triggers.push(CompiledTrigger {
+                    logic: def.condition_logic.clone(),
+                    conditions,
+                    actions: def.actions.clone(),
+                });
+            }
+            Self {
+                triggers,
+                vars: HashMap::new(),
+                pending: Vec::new(),
+                output,
+            }
+        }
+
+        fn process_line(&mut self, line: &str) {
+            let now = Instant::now();
+            let mut new_events: Vec<OverlayEvent> = Vec::new();
+            let mut new_pending: Vec<PendingAction> = Vec::new();
+
+            for trigger in &self.triggers {
+                // Evaluate all conditions and collect captures from Match ones.
+                let mut results: Vec<bool> = Vec::with_capacity(trigger.conditions.len());
+                let mut caps = CaptureMap::default();
+                let mut caps_set = false;
+
+                for cond in &trigger.conditions {
+                    let (passed, maybe_caps) = eval_condition(cond, line, &self.vars);
+                    results.push(passed);
+                    if passed {
+                        if let Some(c) = maybe_caps {
+                            if !caps_set {
+                                // First match condition's positional groups win.
+                                caps.positional = c.positional;
+                                caps_set = true;
+                            }
+                            // Named captures from all matching conditions are merged.
+                            caps.named.extend(c.named);
                         }
                     }
-                    TriggerDef::Chained { steps, .. } => {
-                        // The first step must be a Match.
-                        if let Some(ChainStepDef::Match {
-                            pattern,
+                }
+
+                // Apply ALL / ANY logic.  An empty condition list always fires.
+                let fired = match trigger.logic {
+                    ConditionLogic::All => results.iter().all(|&b| b),
+                    ConditionLogic::Any => results.is_empty() || results.iter().any(|&b| b),
+                };
+                if !fired {
+                    continue;
+                }
+
+                // Execute actions in order.
+                for action in &trigger.actions {
+                    match action {
+                        Action::StoreVar { var_name, value } => {
+                            if !var_name.is_empty() {
+                                let resolved = resolve_template(value, &caps, &self.vars);
+                                self.vars.insert(var_name.clone(), resolved);
+                            }
+                        }
+                        Action::VoiceAlert { tts_text, priority } => {
+                            let text = resolve_template(tts_text, &caps, &self.vars);
+                            if !text.is_empty() {
+                                new_events.push(OverlayEvent {
+                                    icon: String::new(),
+                                    color: String::new(),
+                                    message: String::new(),
+                                    message_color: String::new(),
+                                    sound: None,
+                                    tts_text: Some(text),
+                                    tts_priority: priority.clone(),
+                                });
+                            }
+                        }
+                        Action::Overlay {
                             icon,
+                            color,
                             message,
+                            message_color,
+                            delay_secs,
                             sound,
-                        }) = steps.first()
-                        {
-                            if let Ok(re) = Regex::new(pattern) {
-                                chains.push(CompiledChain {
-                                    start_pattern: re,
-                                    start_icon: icon.clone(),
-                                    start_message: message.clone(),
-                                    start_sound: sound.clone(),
-                                    steps: steps[1..].to_vec(),
+                        } => {
+                            let event = OverlayEvent {
+                                icon: icon.clone(),
+                                color: color.clone(),
+                                message: resolve_template(message, &caps, &self.vars),
+                                message_color: message_color.clone(),
+                                sound: sound.clone(),
+                                tts_text: None,
+                                tts_priority: VoicePriority::default(),
+                            };
+                            if *delay_secs <= 0.0 {
+                                new_events.push(event);
+                            } else {
+                                new_pending.push(PendingAction {
+                                    fire_at: now + Duration::from_secs_f64(*delay_secs),
+                                    event,
                                 });
                             }
                         }
@@ -298,208 +425,213 @@ pub mod engine {
                 }
             }
 
-            Self {
-                simples,
-                chains,
-                active: Vec::new(),
-                output,
-            }
-        }
-
-        fn emit(&self, icon: &str, message: &str, sound: Option<&str>) {
-            let mut q = self.output.lock().unwrap();
-            q.push(OverlayEvent {
-                icon: icon.to_string(),
-                message: message.to_string(),
-                sound: sound.map(|s| s.to_string()),
-            });
-        }
-
-        fn apply_captures(template: &str, caps: &regex::Captures<'_>) -> String {
-            let mut out = template.to_string();
-            for i in 0..caps.len() {
-                let placeholder = format!("{{{i}}}");
-                if let Some(m) = caps.get(i) {
-                    out = out.replace(&placeholder, m.as_str());
-                }
-            }
-            out
-        }
-
-        fn process_line(&mut self, line: &str) {
-            // Simple triggers.
-            for s in &self.simples {
-                if let Some(caps) = s.pattern.captures(line) {
-                    let msg = Self::apply_captures(&s.message, &caps);
-                    self.emit(&s.icon, &msg, s.sound.as_deref());
-                }
-            }
-
-            // Chain start triggers — spawn new ActiveChain instances.
-            let mut new_chains: Vec<ActiveChain> = Vec::new();
-            for c in &self.chains {
-                if let Some(caps) = c.start_pattern.captures(line) {
-                    let msg = Self::apply_captures(&c.start_message, &caps);
-                    self.emit(&c.start_icon, &msg, c.start_sound.as_deref());
-
-                    // Build pending steps for this chain instance.
-                    let pending = compile_pending_steps(&c.steps);
-                    new_chains.push(ActiveChain { pending });
-                }
-            }
-            self.active.extend(new_chains);
-
-            // Check active chain pending patterns.
-            let mut emit_queue: Vec<OverlayEvent> = Vec::new();
-            let mut keep = Vec::with_capacity(self.active.len());
-
-            'outer: for mut chain in self.active.drain(..) {
-                // Scan the pending list for pattern steps that could fire on this line.
-                let mut fired_idx = None;
-                for (i, step) in chain.pending.iter().enumerate() {
-                    if let PendingStep::Pattern {
-                        regex,
-                        is_cancel,
-                        icon,
-                        message,
-                        sound,
-                    } = step
-                    {
-                        if regex.is_match(line) {
-                            if *is_cancel {
-                                // Discard chain.
-                                continue 'outer;
-                            }
-                            emit_queue.push(OverlayEvent {
-                                icon: icon.clone(),
-                                message: message.clone(),
-                                sound: sound.clone(),
-                            });
-                            fired_idx = Some(i);
-                            break;
-                        }
-                    }
-                }
-
-                if let Some(idx) = fired_idx {
-                    // Remove everything up to and including the fired step.
-                    chain.pending.drain(..=idx);
-                    if !chain.pending.is_empty() {
-                        keep.push(chain);
-                    }
-                } else {
-                    keep.push(chain);
-                }
-            }
-
-            self.active = keep;
-
-            for ev in emit_queue {
+            self.pending.extend(new_pending);
+            if !new_events.is_empty() {
                 let mut q = self.output.lock().unwrap();
-                q.push(ev);
+                q.extend(new_events);
             }
         }
 
         fn tick(&mut self) {
             let now = Instant::now();
-            let mut emit_queue: Vec<OverlayEvent> = Vec::new();
-            let mut keep = Vec::with_capacity(self.active.len());
-
-            for mut chain in self.active.drain(..) {
-                // Fire any delay steps whose time has come (may be multiple if stacked).
-                loop {
-                    match chain.pending.first() {
-                        Some(PendingStep::Delay {
-                            fire_at,
-                            icon,
-                            message,
-                            sound,
-                        }) => {
-                            if now >= *fire_at {
-                                emit_queue.push(OverlayEvent {
-                                    icon: icon.clone(),
-                                    message: message.clone(),
-                                    sound: sound.clone(),
-                                });
-                                chain.pending.remove(0);
-                            } else {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    }
+            let mut fired: Vec<OverlayEvent> = Vec::new();
+            self.pending.retain(|p| {
+                if now >= p.fire_at {
+                    fired.push(p.event.clone());
+                    false
+                } else {
+                    true
                 }
-
-                if !chain.pending.is_empty() {
-                    keep.push(chain);
-                }
-            }
-
-            self.active = keep;
-
-            for ev in emit_queue {
+            });
+            if !fired.is_empty() {
                 let mut q = self.output.lock().unwrap();
-                q.push(ev);
+                q.extend(fired);
             }
         }
     }
 
-    fn compile_pending_steps(steps: &[ChainStepDef]) -> Vec<PendingStep> {
-        let mut out = Vec::new();
-        let now = Instant::now();
+    // ── Condition evaluation ──────────────────────────────────────────────────
 
-        // We accumulate delay offsets so that stacked delays work correctly.
-        let mut delay_offset = Duration::ZERO;
-
-        for step in steps {
-            match step {
-                ChainStepDef::Delay {
-                    delay_secs,
-                    icon,
-                    message,
-                    sound,
-                } => {
-                    delay_offset += Duration::from_secs_f64(*delay_secs);
-                    out.push(PendingStep::Delay {
-                        fire_at: now + delay_offset,
-                        icon: icon.clone(),
-                        message: message.clone(),
-                        sound: sound.clone(),
-                    });
+    fn compile_condition(cond: &Condition) -> CompiledCondition {
+        let compiled = match cond {
+            Condition::Match {
+                match_type,
+                pattern,
+            } => match match_type {
+                MatchType::Exact => Some(CompiledMatch::Exact(pattern.clone())),
+                MatchType::Regex => Regex::new(pattern).ok().map(CompiledMatch::Regex),
+                MatchType::Glob => {
+                    let re_str = glob_to_regex(pattern);
+                    Regex::new(&re_str).ok().map(CompiledMatch::Regex)
                 }
-                ChainStepDef::Complete {
-                    complete,
-                    icon,
-                    message,
-                    sound,
-                } => {
-                    if let Ok(re) = Regex::new(complete) {
-                        out.push(PendingStep::Pattern {
-                            regex: re,
-                            is_cancel: false,
-                            icon: icon.clone(),
-                            message: message.clone(),
-                            sound: sound.clone(),
-                        });
+            },
+            Condition::Var { .. } => None,
+        };
+        CompiledCondition {
+            original: cond.clone(),
+            compiled,
+        }
+    }
+
+    fn eval_condition(
+        cond: &CompiledCondition,
+        line: &str,
+        vars: &HashMap<String, String>,
+    ) -> (bool, Option<CaptureMap>) {
+        match &cond.original {
+            Condition::Match { .. } => {
+                let Some(compiled) = &cond.compiled else {
+                    return (false, None);
+                };
+                match compiled {
+                    CompiledMatch::Exact(s) => {
+                        if line.contains(s.as_str()) {
+                            (true, Some(CaptureMap::default()))
+                        } else {
+                            (false, None)
+                        }
+                    }
+                    CompiledMatch::Regex(re) => {
+                        if let Some(caps) = re.captures(line) {
+                            let positional = (0..caps.len())
+                                .map(|i| caps.get(i).map(|m| m.as_str().to_owned()))
+                                .collect();
+                            let mut named = HashMap::new();
+                            for name in re.capture_names().flatten() {
+                                if let Some(m) = caps.name(name) {
+                                    named.insert(name.to_owned(), m.as_str().to_owned());
+                                }
+                            }
+                            (true, Some(CaptureMap { positional, named }))
+                        } else {
+                            (false, None)
+                        }
                     }
                 }
-                ChainStepDef::Cancel { cancel } => {
-                    if let Ok(re) = Regex::new(cancel) {
-                        out.push(PendingStep::Pattern {
-                            regex: re,
-                            is_cancel: true,
-                            icon: String::new(),
-                            message: String::new(),
-                            sound: None,
-                        });
+            }
+            Condition::Var {
+                var_name,
+                op,
+                value,
+            } => {
+                let stored = vars.get(var_name.as_str());
+                let result = match op {
+                    VarOp::Isset => stored.is_some(),
+                    VarOp::Equals => stored
+                        .map(|v| v.eq_ignore_ascii_case(value))
+                        .unwrap_or(false),
+                    VarOp::Gt => cmp_numeric(stored, value, |a, b| a > b),
+                    VarOp::Gte => cmp_numeric(stored, value, |a, b| a >= b),
+                    VarOp::Lt => cmp_numeric(stored, value, |a, b| a < b),
+                    VarOp::Lte => cmp_numeric(stored, value, |a, b| a <= b),
+                    VarOp::Matches => {
+                        if let Some(v) = stored {
+                            Regex::new(value).map(|re| re.is_match(v)).unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    }
+                };
+                (result, None)
+            }
+        }
+    }
+
+    fn cmp_numeric(stored: Option<&String>, rhs: &str, op: impl Fn(f64, f64) -> bool) -> bool {
+        let Some(v) = stored else { return false };
+        let Ok(a) = v.parse::<f64>() else {
+            return false;
+        };
+        let Ok(b) = rhs.parse::<f64>() else {
+            return false;
+        };
+        op(a, b)
+    }
+
+    // ── Template resolution ───────────────────────────────────────────────────
+
+    fn resolve_template(
+        template: &str,
+        caps: &CaptureMap,
+        vars: &HashMap<String, String>,
+    ) -> String {
+        PLACEHOLDER
+            .replace_all(template, |m: &regex::Captures<'_>| {
+                let key = &m[1];
+                // Try positional index first.
+                if let Ok(i) = key.parse::<usize>() {
+                    if let Some(Some(s)) = caps.positional.get(i) {
+                        return s.clone();
                     }
                 }
-                ChainStepDef::Match { .. } => {
-                    // Match steps only valid as the first step; ignore here.
+                // Try named capture.
+                if let Some(s) = caps.named.get(key) {
+                    return s.clone();
+                }
+                // Try stored variable.
+                if let Some(s) = vars.get(key) {
+                    return s.clone();
+                }
+                // Leave placeholder unchanged.
+                m[0].to_owned()
+            })
+            .into_owned()
+    }
+
+    // ── Glob → regex compiler ─────────────────────────────────────────────────
+
+    /// Convert a glob pattern to a regex string.
+    ///
+    /// Supported glob syntax:
+    ///   `*`      — matches any sequence of characters
+    ///   `?`      — matches exactly one character
+    ///   `{name}` — named capture group (referenced as `{name}` in action templates)
+    ///
+    /// All other regex metacharacters are escaped.
+    pub fn glob_to_regex(glob: &str) -> String {
+        let chars: Vec<char> = glob.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '{' => {
+                    // Look for a valid identifier followed by '}'.
+                    let start = i + 1;
+                    let rel = chars[start..].iter().position(|&c| c == '}');
+                    if let Some(rel) = rel {
+                        let name: String = chars[start..start + rel].iter().collect();
+                        let valid = !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                        if valid {
+                            out.push_str(&format!("(?P<{name}>.+?)"));
+                            i = start + rel + 1;
+                            continue;
+                        }
+                    }
+                    out.push_str("\\{");
+                    i += 1;
+                }
+                '}' => {
+                    out.push_str("\\}");
+                    i += 1;
+                }
+                '*' => {
+                    out.push_str(".*");
+                    i += 1;
+                }
+                '?' => {
+                    out.push('.');
+                    i += 1;
+                }
+                c => {
+                    if ".+^$|\\[]()".contains(c) {
+                        out.push('\\');
+                    }
+                    out.push(c);
+                    i += 1;
                 }
             }
         }
-
         out
     }
 }

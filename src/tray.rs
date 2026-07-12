@@ -87,8 +87,15 @@ pub mod tray {
 
         let logging_on = handle.logging_enabled.load(Ordering::Relaxed);
         let overlay_on = handle.config.lock().unwrap().overlay_enabled;
-        let (tray, toggle_item, overlay_toggle_item, status_item, copy_url_item, open_url_item) =
-            build_tray(&handle.config.lock().unwrap(), logging_on, overlay_on);
+        let (
+            tray,
+            toggle_item,
+            overlay_toggle_item,
+            status_item,
+            copy_url_item,
+            open_url_item,
+            menu,
+        ) = build_tray(&handle.config.lock().unwrap(), logging_on, overlay_on);
         #[allow(clippy::arc_with_non_send_sync)]
         let tray = Arc::new(Mutex::new(tray));
         #[allow(clippy::arc_with_non_send_sync)]
@@ -104,6 +111,9 @@ pub mod tray {
         let mut prev_connected: bool = false;
         let mut next_tick = Instant::now() + Duration::from_secs(TICK_SECS);
         let mut next_fast_check = Instant::now() + Duration::from_secs(1);
+        // Error detail items inserted into the menu below the status line.
+        let mut error_items: Vec<MenuItem> = Vec::new();
+        let mut prev_error: Option<String> = None;
 
         #[allow(deprecated)]
         event_loop
@@ -227,6 +237,23 @@ pub mod tray {
                         last_err.as_deref(),
                         rate,
                     ));
+
+                    // Update wrapped error detail lines below the status item.
+                    if last_err != prev_error {
+                        for item in &error_items {
+                            let _ = menu.remove(item);
+                        }
+                        error_items.clear();
+                        if let Some(ref e) = last_err {
+                            for (i, line) in word_wrap(e, 32).into_iter().enumerate() {
+                                let item = MenuItem::new(line, false, None);
+                                let _ = menu.insert(&item, 1 + i);
+                                error_items.push(item);
+                            }
+                        }
+                        prev_error = last_err;
+                    }
+
                     let is_reg = cfg.is_registered();
                     copy_url_item.set_enabled(is_reg);
                     open_url_item.set_enabled(is_reg);
@@ -253,8 +280,7 @@ pub mod tray {
             "Show Overlay"
         };
         overlay_toggle_item.lock().unwrap().set_text(label);
-        // A restart picks up the new overlay_enabled flag.
-        handle.restart.store(true, Ordering::Relaxed);
+        // Overlay live-reloads overlay_enabled from config on its timer tick.
     }
 
     // ── Logging toggle ────────────────────────────────────────────────────────
@@ -373,6 +399,7 @@ pub mod tray {
         MenuItem,
         MenuItem,
         MenuItem,
+        Menu,
     ) {
         let menu = Menu::new();
 
@@ -420,6 +447,7 @@ pub mod tray {
         menu.append(&sep).unwrap();
         menu.append(&quit_item).unwrap();
 
+        let menu_handle = menu.clone();
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip(make_tooltip(cfg, logging_on))
@@ -434,14 +462,35 @@ pub mod tray {
             status_item,
             copy_url_item,
             open_url_item,
+            menu_handle,
         )
+    }
+
+    fn word_wrap(text: &str, max_chars: usize) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for word in text.split_whitespace() {
+            if current.is_empty() {
+                current = word.to_string();
+            } else if current.chars().count() + 1 + word.chars().count() <= max_chars {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current = word.to_string();
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+        lines
     }
 
     fn make_status_text(
         logging_on: bool,
         connected: bool,
         cfg: &crate::config::Config,
-        last_err: Option<&str>,
+        _last_err: Option<&str>,
         rate: u32,
     ) -> String {
         if !logging_on {
@@ -454,10 +503,7 @@ pub mod tray {
             return "Not configured (missing log file or server URL)".into();
         }
         if !connected {
-            return match last_err {
-                Some(e) => format!("Reconnecting… ({e})"),
-                None => "Reconnecting…".into(),
-            };
+            return "Reconnecting…".into();
         }
         let rate_str = if rate == 0 {
             "idle".into()

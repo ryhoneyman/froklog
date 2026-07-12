@@ -14,29 +14,49 @@ EQ log file
 │  Tailer     │  tokio single-thread runtime
 │  (tailer.rs)│  handles files up to 10 GB+
 └──────┬──────┘
-       │ crossbeam channel (String lines)
+       │ crossbeam channel (String lines) — line_tx
        ▼
 ┌─────────────┐
-│  Parser     │  dedicated OS thread
-│  (parser.rs)│  regex hot-loop, no allocs beyond HashMap updates
-└──────┬──────┘
-       │ Arc<ArcSwap<CombatState>>  +  tokio::sync::mpsc events
-       ▼
-┌─────────────┐
-│  Pusher     │  tokio single-thread runtime
-│  (pusher.rs)│  batches CombatEvents, sends to server via WebSocket
-└──────┬──────┘
-       │ WebSocket (wss://<server>)
-       ▼
-┌─────────────────┐
-│ froklog-server  │  tokio multi-thread
-│ (Axum on :8766) │  GET  /ingest/:id — ingest WebSocket (client push)
-│                 │  GET  /stream/:id — HTML viewer (token-gated)
-│                 │  GET  /stream/:id/ws — viewer WebSocket push
-│                 │  GET  /player/:game/:server/:name — public player page
-│                 │  GET  /admin — admin panel
-└─────────────────┘
+│  Splitter   │  OS thread — fans output to parser_tx AND trigger_tx
+└──────┬──────┘  (trigger_tx drops lines if full rather than blocking parser)
+       │
+       ├─► parser_tx ─►
+       │   ┌─────────────┐
+       │   │  Parser     │  OS thread — regex hot-loop, updates Arc<ArcSwap<CombatState>>
+       │   │  (parser.rs)│  emits CombatEvents via tokio::sync::mpsc
+       │   └──────┬──────┘
+       │          │
+       │          ▼
+       │   ┌─────────────┐
+       │   │  Pusher     │  tokio single-thread — batches CombatEvents, WebSocket push
+       │   │  (pusher.rs)│  auto-reconnects on disconnect
+       │   └──────┬──────┘
+       │          │ WebSocket (wss://<server>/ingest/:id)
+       │          ▼
+       │   ┌─────────────────────────────────────────────┐
+       │   │ froklog-server  (Axum on :8766)             │
+       │   │  POST /stream          — create stream       │
+       │   │  GET  /ingest/:id      — ingest WebSocket   │
+       │   │  GET  /stream/:id      — HTML viewer        │
+       │   │  GET  /stream/:id/ws   — viewer WebSocket   │
+       │   │  GET  /player/:g/:s/:n — public player page │
+       │   │  GET  /admin           — admin panel        │
+       │   └─────────────────────────────────────────────┘
+       │
+       └─► trigger_tx ─►
+           ┌─────────────────────────┐
+           │  Trigger Engine         │  OS thread — 100ms tick loop
+           │  (triggers.rs::engine)  │  fires OverlayEvents to overlay queue
+           └────────────┬────────────┘
+                        │ Arc<Mutex<Vec<OverlayEvent>>>
+                        ▼
+           ┌─────────────────────────┐
+           │  Overlay window         │  OS thread (Windows only)
+           │  (overlay.rs)           │  Win32 WS_EX_LAYERED DIB popup
+           └─────────────────────────┘
 ```
+
+The trigger engine and overlay are only active in `--features tray` (Windows) builds.
 
 ### Binaries
 
@@ -59,26 +79,44 @@ sudo apt-get install -y gcc-mingw-w64-x86-64
 # Run the server (serves viewer UI on http://localhost:8766)
 cargo run --bin froklog-server
 
-# Development: tail a log and push events to a local server
-just run /path/to/eqlog_Player_server.txt
-
-# Generate fake log lines and smoke-test without EQ running
-just fake-log
-just run-test
-
-# Headless mode (no tray, no server — raw parse + local web UI)
-just run-headless
-
-# Replay all events from the beginning of the log
-just run-from-start
-
-# Replay a specific time window
-just run-range "2024-01-02 20:00:00" "2024-01-02 21:00:00"
-just run-window "2024-01-02 20:00:00"   # 30 minutes from a start time
-
-# Build Windows .exe
+# Build Windows .exe (includes system tray, overlay, trigger engine)
 just build-windows
 # → target/x86_64-pc-windows-gnu/release/froklog.exe
+
+# Build all Linux binaries (server, replay, debug, migrate, loggen)
+just build-all
+
+# Lint + format check + tests (required before pushing)
+just ci
+```
+
+### Testing without a live game
+
+```bash
+# Generate fake EQ log lines into /tmp/eq_test.log
+just fake-log
+
+# Use froklog-replay to push a log file into a running local server:
+cargo run --bin froklog-replay -- \
+    --log logs/eqlog_Icestorm_test.txt \
+    --server http://localhost:8766 \
+    --admin-token <token-from-froklog-server.toml> \
+    --speed 10.0
+
+# Dump an entire log file as fast as possible (ignores replay speed)
+cargo run --bin froklog-replay -- \
+    --log logs/eqlog_Icestorm_test.txt \
+    --server http://localhost:8766 \
+    --admin-token <token> \
+    --dump
+
+# Replay a specific time window
+cargo run --bin froklog-replay -- \
+    --log logs/eqlog_Icestorm_test.txt \
+    --server http://localhost:8766 \
+    --admin-token <token> \
+    --from "2024-01-02 20:00:00" \
+    --to "2024-01-02 21:00:00"
 ```
 
 ## Web UI
@@ -128,17 +166,13 @@ by passing `?session=<num>` to the viewer.
 
 1. Drop `froklog.exe` on the Windows machine.
 2. On first run, configure via the tray right-click menu:
-   - **Set log file** — point to your `eqlog_Name_server.txt`
-   - **Register with server** — enter the server URL and stream ID
+   - **Settings…** — enter the server URL, then click Register to get stream credentials
+   - **Set log file** — point to your `eqlog_Name_server.txt` (typically `C:\Users\<You>\Documents\EverQuest\Logs\`)
 3. The tray icon appears; froklog runs silently in the background.
 
-## Passing the log path (headless / dev mode)
+Config is saved to `%APPDATA%\froklog\config.toml`. Trigger rules are in `%APPDATA%\froklog\triggers.toml`.
 
-```
-froklog.exe C:\Users\You\Documents\EverQuest\Logs\eqlog_Myrtle_server.txt
-```
-
-If omitted, it looks for `eqlog_Player_server.txt` in the current directory.
+The client binary does **not** accept command-line arguments for the log path — all configuration is done via the tray menu and the config file.
 
 ## Building the Windows client
 
@@ -151,8 +185,20 @@ cargo build --release --target x86_64-pc-windows-gnu --features tray
 just build-windows
 ```
 
-Without `--features tray` the binary still works on Windows but runs without a
-system-tray icon (useful for headless / server-side testing).
+Without `--features tray` the binary still compiles and connects to the server, but
+has no system-tray icon, overlay window, or trigger engine.
+
+## Trigger engine / overlay (`--features tray`)
+
+On Windows, `froklog.exe` includes a data-driven trigger engine that processes log
+lines in real-time and fires overlay messages or TTS speech. Triggers are defined in
+`%APPDATA%\froklog\triggers.toml` and can be edited via the **Overlay Settings…** tray menu item.
+
+Each trigger has conditions (`match` with exact/regex/glob, or `var` for stored variables)
+combined with `all` (AND) or `any` (OR) logic, and actions (`overlay`, `voice_alert`, `store_var`).
+
+Overlay messages appear in a stacked-deck Win32 popup (always on top, per-pixel alpha, ~60 fps
+eased animation). Position and appearance are configured via **Overlay Settings…** in the tray menu.
 
 ## Log generator (`froklog-loggen`)
 
@@ -203,6 +249,7 @@ cargo run --bin froklog-migrate -- /path/to/streams/
 | Loot (kept) | `--You have looted a Crystallized Sulfur from an abhorrent's corpse.--` |
 | Loot (sold) | `You looted a Bat Meat from a sonic bat's corpse and sold it for 8 silver.` |
 | Loot (hoard) | `You looted a Darkbrood Mask from a fire giant's corpse and stored it in your Dragon Hoard` |
+| Loot (enhance) | `You looted a Darkbrood Mask +1 from Innoruuk's corpse to create a Darkbrood Mask +1` |
 | Currency | `You receive 6 platinum, 1 gold, 8 silver and 3 copper from the corpse.` |
 | /who | `[65 Warrior] Crunchy (Human)` — up to 3 classes per player |
 

@@ -15,11 +15,11 @@ use crate::event::{
     MODS_TWINCAST,
 };
 use crate::patterns::{
-    norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_who_classes,
-    RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED, RE_DOT, RE_DS,
-    RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL, RE_LOOT_ENHANCE,
-    RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE,
-    RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
+    norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_warder_owner,
+    parse_who_classes, RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED,
+    RE_DOT, RE_DS, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
+    RE_LOOT_ENHANCE, RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST,
+    RE_RIPOSTE, RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
 use crate::state::{CombatState, EntityCombatStats, MobSighting};
 
@@ -113,11 +113,13 @@ pub fn run(
             let player = state.player_name.clone();
             let player_classes = std::mem::take(&mut state.player_classes);
             let player_levels = std::mem::take(&mut state.player_levels);
+            let known_pets = std::mem::take(&mut state.known_pets);
             state = CombatState {
                 lines_parsed: lines,
                 player_name: player,
                 player_classes,
                 player_levels,
+                known_pets,
                 ..Default::default()
             };
             spell_caster.clear();
@@ -167,15 +169,24 @@ pub fn run(
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
             let spell = caps["spell"].to_owned();
 
+            // Register Beastlord warders as pets before mob/player classification.
+            if let Some(owner) = parse_warder_owner(&src) {
+                state
+                    .known_pets
+                    .entry(src.clone())
+                    .or_insert_with(|| owner.to_owned());
+                state.known_players.insert(src.clone());
+            }
+
             // Determine direction: mob→player or player→mob.
-            // src with a space is always a mob (article prefix). If tgt is a known
-            // player (in known_players — damage dealers only, not mob healers), the
-            // src must be a mob even if single-word.
-            let src_is_mob = src.contains(' ')
-                || state.confirmed_mobs.contains(&src)
-                || state.known_players.contains(tgt.as_str())
-                || tgt == player_name
-                || mob_candidates.contains_key(src.as_str());
+            // Known players are never mobs. Otherwise, src with a space is always a
+            // mob (article prefix). If tgt is a known player the src must be a mob.
+            let src_is_mob = !state.known_players.contains(&src)
+                && (src.contains(' ')
+                    || state.confirmed_mobs.contains(&src)
+                    || state.known_players.contains(tgt.as_str())
+                    || tgt == player_name
+                    || mob_candidates.contains_key(src.as_str()));
 
             if src_is_mob {
                 // Mob spell hitting a player — record as tanking damage.
@@ -255,6 +266,15 @@ pub fn run(
             let tgt = norm(&caps["tgt"], &player_name);
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
             let typ = normalize_verb(verb).to_owned();
+
+            // Register Beastlord warders as pets before mob/player classification.
+            if let Some(owner) = parse_warder_owner(&src) {
+                state
+                    .known_pets
+                    .entry(src.clone())
+                    .or_insert_with(|| owner.to_owned());
+                state.known_players.insert(src.clone());
+            }
 
             // "hits"/"hit" is an exclusively mob verb in EQ.
             // Also treat as mob attack if src has been targeted before (in mob_candidates),
@@ -417,7 +437,8 @@ pub fn run(
             if let Some(caster) = spell_caster.get(&spell).cloned() {
                 // If the caster is mob-like (multi-word name or already a confirmed mob)
                 // the target is a player being hit by a mob spell — don't track as mob.
-                let caster_is_mob = caster.contains(' ') || state.confirmed_mobs.contains(&caster);
+                let caster_is_mob = !state.known_players.contains(&caster)
+                    && (caster.contains(' ') || state.confirmed_mobs.contains(&caster));
 
                 if caster_is_mob {
                     // Confirm the mob caster; ignore the player target for mob tracking.
@@ -520,11 +541,18 @@ pub fn run(
             let tgt = norm(&caps["tgt"], &player_name);
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
 
+            // Register Beastlord warders as pets before mob/player classification.
+            if let Some(owner) = parse_warder_owner(&src) {
+                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state.known_players.insert(src.clone());
+            }
+
             // A mob can riposte a player: "Player was injured by Mob's riposte for N"
-            let src_is_mob = src.contains(' ')
-                || state.confirmed_mobs.contains(&src)
-                || state.known_players.contains(tgt.as_str())
-                || tgt == player_name;
+            let src_is_mob = !state.known_players.contains(&src)
+                && (src.contains(' ')
+                    || state.confirmed_mobs.contains(&src)
+                    || state.known_players.contains(tgt.as_str())
+                    || tgt == player_name);
 
             if src_is_mob {
                 if !state.known_players.contains(&src) {
@@ -603,11 +631,18 @@ pub fn run(
             let tgt = norm(&caps["tgt"], &player_name);
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
 
+            // Register Beastlord warders as pets before mob/player classification.
+            if let Some(owner) = parse_warder_owner(&src) {
+                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state.known_players.insert(src.clone());
+            }
+
             // A mob can have a damage shield: "Player was struck by Mob's damage shield for N"
-            let src_is_mob = src.contains(' ')
-                || state.confirmed_mobs.contains(&src)
-                || state.known_players.contains(tgt.as_str())
-                || tgt == player_name;
+            let src_is_mob = !state.known_players.contains(&src)
+                && (src.contains(' ')
+                    || state.confirmed_mobs.contains(&src)
+                    || state.known_players.contains(tgt.as_str())
+                    || tgt == player_name);
 
             if src_is_mob {
                 if !state.known_players.contains(&src) {
@@ -873,10 +908,17 @@ pub fn run(
             };
 
             if let Some(src) = attacker {
-                let src_is_mob = src.contains(' ')
-                    || state.confirmed_mobs.contains(&src)
-                    || state.known_players.contains(tgt.as_str())
-                    || tgt == player_name;
+                // Register Beastlord warders as pets before mob/player classification.
+                if let Some(owner) = parse_warder_owner(&src) {
+                    state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                    state.known_players.insert(src.clone());
+                }
+
+                let src_is_mob = !state.known_players.contains(&src)
+                    && (src.contains(' ')
+                        || state.confirmed_mobs.contains(&src)
+                        || state.known_players.contains(tgt.as_str())
+                        || tgt == player_name);
                 if src_is_mob && src != player_name {
                     // Mob DoT/spell hitting a player — tanking
                     if !state.known_players.contains(&src) {
@@ -1015,11 +1057,18 @@ pub fn run(
                 .entry(miss_type.clone())
                 .or_default() += 1;
 
+            // Register Beastlord warders as pets before mob/player classification.
+            if let Some(owner) = parse_warder_owner(&src) {
+                state.known_pets.entry(src.clone()).or_insert_with(|| owner.to_owned());
+                state.known_players.insert(src.clone());
+            }
+
             // If src is a mob, also record on mob_tanking avoidance.
-            let src_is_mob = src.contains(' ')
-                || state.confirmed_mobs.contains(&src)
-                || state.known_players.contains(tgt.as_str())
-                || tgt == player_name;
+            let src_is_mob = !state.known_players.contains(&src)
+                && (src.contains(' ')
+                    || state.confirmed_mobs.contains(&src)
+                    || state.known_players.contains(tgt.as_str())
+                    || tgt == player_name);
             let mob_id: u64 = if src_is_mob {
                 if !state.known_players.contains(&src) {
                     state.confirmed_mobs.insert(src.clone());
