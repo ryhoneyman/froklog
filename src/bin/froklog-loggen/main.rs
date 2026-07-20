@@ -1001,7 +1001,7 @@ fn run_encounter(sim: &mut Sim, ctx: &mut Ctx, cfg: &GameConfig) {
     let mut chat: ChatDispatch<'_> = {
         let backend = sim.neural.take();
         if let Some(b) = backend {
-            ChatDispatch::Neural(NeuralCtx::new(b, &cfg.phrases, sim.chat_level))
+            ChatDispatch::Neural(Box::new(NeuralCtx::new(b, &cfg.phrases, sim.chat_level)))
         } else {
             ChatDispatch::Phrasebook(ChatCtx::new(&cfg.phrases, sim.chat_level))
         }
@@ -3232,7 +3232,7 @@ fn run_break(sim: &mut Sim, ctx: &mut Ctx, cfg: &GameConfig) {
     let mut chat: ChatDispatch<'_> = {
         let backend = sim.neural.take();
         if let Some(b) = backend {
-            ChatDispatch::Neural(NeuralCtx::new(b, &cfg.phrases, sim.chat_level))
+            ChatDispatch::Neural(Box::new(NeuralCtx::new(b, &cfg.phrases, sim.chat_level)))
         } else {
             ChatDispatch::Phrasebook(ChatCtx::new(&cfg.phrases, sim.chat_level))
         }

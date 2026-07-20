@@ -12,20 +12,64 @@ fn default_overlay_alpha() -> u8 {
     200
 }
 
-fn default_overlay_font_size() -> u32 {
-    14
+fn default_overlay_start_font_size() -> u32 {
+    10
 }
 
-fn default_overlay_idle_secs() -> u32 {
-    6
+fn default_overlay_max_font_size() -> u32 {
+    60
 }
 
-fn default_overlay_max_entries() -> usize {
+fn default_overlay_fly_ms() -> u32 {
+    240
+}
+
+fn default_overlay_hold_secs() -> f32 {
+    2.5
+}
+
+fn default_overlay_history_font_size() -> u32 {
+    12
+}
+
+fn default_overlay_history_idle_secs() -> u32 {
     8
+}
+
+fn default_overlay_history_max_entries() -> usize {
+    8
+}
+
+fn default_overlay_history_width() -> i32 {
+    320
 }
 
 fn default_neg_one_i32() -> i32 {
     -1
+}
+
+fn default_meter_max_rows() -> usize {
+    12
+}
+
+fn default_meter_idle_secs() -> u32 {
+    10
+}
+
+fn default_meter_font_size() -> u32 {
+    11
+}
+
+fn default_meter_width() -> i32 {
+    360
+}
+
+fn default_sound_volume() -> u8 {
+    100
+}
+
+fn default_sound_package() -> String {
+    "default".to_string()
 }
 
 /// Voice speed multiplier for TTS playback.
@@ -100,6 +144,23 @@ pub struct Config {
     /// Whether the log-tail engine is enabled. Defaults to true.
     #[serde(default = "default_true")]
     pub logging_enabled: bool,
+    /// Whether parsed events are pushed to the remote server. Local processing
+    /// (DPS meter, triggers, overlays) runs regardless of this setting; it only
+    /// gates the network push. Defaults to true.
+    #[serde(default = "default_true")]
+    pub remote_logging_enabled: bool,
+
+    // ── Sound settings ──────────────────────────────────────────────────────
+    /// Whether trigger "Play Sound" actions play at all. Defaults to true.
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
+    /// Overall volume applied to trigger "Play Sound" actions, 0-100. Default 100.
+    #[serde(default = "default_sound_volume")]
+    pub sound_volume: u8,
+    /// Name of the currently active sound package (a subfolder of `sounds/`
+    /// mapping label names to sound files). Default "default".
+    #[serde(default = "default_sound_package")]
+    pub sound_package: String,
 
     // ── Overlay settings ──────────────────────────────────────────────────────
     /// Whether the overlay window is visible.
@@ -111,21 +172,82 @@ pub struct Config {
     /// Font family for overlay text. Empty = system default (Segoe UI).
     #[serde(default)]
     pub overlay_font: String,
-    /// Font point size for normal overlay entries. Featured entry is 2×. Default 14.
-    #[serde(default = "default_overlay_font_size")]
-    pub overlay_font_size: u32,
-    /// Seconds of inactivity before the overlay auto-hides. Default 6.
-    #[serde(default = "default_overlay_idle_secs")]
-    pub overlay_idle_secs: u32,
-    /// Maximum number of entries kept in the scroll buffer. Default 8.
-    #[serde(default = "default_overlay_max_entries")]
-    pub overlay_max_entries: usize,
+    /// Font point size at the start of the fly-in animation. Default 10.
+    #[serde(default = "default_overlay_start_font_size")]
+    pub overlay_start_font_size: u32,
+    /// Font point size at the peak / hold of the fly-in animation. Default 60.
+    #[serde(default = "default_overlay_max_font_size")]
+    pub overlay_max_font_size: u32,
+    /// Milliseconds for the fly-in and shrink-out animations. Default 240.
+    #[serde(default = "default_overlay_fly_ms")]
+    pub overlay_fly_ms: u32,
+    /// Seconds the message holds at peak size before shrinking away. Default 2.5.
+    #[serde(default = "default_overlay_hold_secs")]
+    pub overlay_hold_secs: f32,
     /// Overlay window X position (pixels from left of screen). Default -1 = auto-centre.
     #[serde(default = "default_neg_one_i32")]
     pub overlay_x: i32,
     /// Overlay window Y position (pixels from top of screen). Default -1 = auto-centre.
     #[serde(default = "default_neg_one_i32")]
     pub overlay_y: i32,
+    /// When true, the alert overlay window is click-through (locked in place).
+    #[serde(default)]
+    pub overlay_locked: bool,
+
+    // ── Overlay history settings ──────────────────────────────────────────────
+    /// Whether the history overlay window can be shown at all, independent of
+    /// the alert overlay's own enable toggle. Defaults to true.
+    #[serde(default = "default_true")]
+    pub overlay_history_enabled: bool,
+    /// Font point size for history rows. Default 12.
+    #[serde(default = "default_overlay_history_font_size")]
+    pub overlay_history_font_size: u32,
+    /// Seconds of inactivity before the history overlay auto-hides. 0 = never. Default 8.
+    #[serde(default = "default_overlay_history_idle_secs")]
+    pub overlay_history_idle_secs: u32,
+    /// Maximum number of rows kept in the history overlay. Default 8.
+    #[serde(default = "default_overlay_history_max_entries")]
+    pub overlay_history_max_entries: usize,
+    /// History overlay window X position. Default -1 = auto-position.
+    #[serde(default = "default_neg_one_i32")]
+    pub overlay_history_x: i32,
+    /// History overlay window Y position. Default -1 = auto-position.
+    #[serde(default = "default_neg_one_i32")]
+    pub overlay_history_y: i32,
+    /// History overlay window width in pixels. Default 320.
+    #[serde(default = "default_overlay_history_width")]
+    pub overlay_history_width: i32,
+    /// When true, the history overlay window is click-through (locked in place).
+    #[serde(default)]
+    pub overlay_history_locked: bool,
+
+    // ── DPS meter settings ──────────────────────────────────────────────────────
+    /// Whether the live DPS/Tank/Heal meter window is visible.
+    #[serde(default)]
+    pub meter_enabled: bool,
+    /// Meter window X position (pixels from left of screen). Default -1 = auto-position.
+    #[serde(default = "default_neg_one_i32")]
+    pub meter_x: i32,
+    /// Meter window Y position (pixels from top of screen). Default -1 = auto-position.
+    #[serde(default = "default_neg_one_i32")]
+    pub meter_y: i32,
+    /// When true, the meter window is click-through (locked in place).
+    #[serde(default)]
+    pub meter_locked: bool,
+    /// Maximum number of ranked rows shown per tab. Default 12.
+    #[serde(default = "default_meter_max_rows")]
+    pub meter_max_rows: usize,
+    /// Seconds of inactivity (no new combat events for the active mob) before the
+    /// meter auto-hides. 0 = never hide. Default 10.
+    #[serde(default = "default_meter_idle_secs")]
+    pub meter_idle_secs: u32,
+    /// Font point size for meter rows. Default 11.
+    #[serde(default = "default_meter_font_size")]
+    pub meter_font_size: u32,
+    /// Meter window width in pixels, user-resizable via the left/right edges.
+    /// Height stays content-driven (row count). Default 360.
+    #[serde(default = "default_meter_width")]
+    pub meter_width: i32,
 
     // ── TTS / Voice settings ──────────────────────────────────────────────────
     /// Whether Text-to-Speech is enabled globally.
@@ -157,11 +279,21 @@ impl Config {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return Self {
                 logging_enabled: true,
+                remote_logging_enabled: true,
+                overlay_history_enabled: true,
+                sound_enabled: true,
+                sound_volume: 100,
+                sound_package: default_sound_package(),
                 ..Default::default()
             };
         };
         toml::from_str(&text).unwrap_or_else(|_| Self {
             logging_enabled: true,
+            remote_logging_enabled: true,
+            overlay_history_enabled: true,
+            sound_enabled: true,
+            sound_volume: 100,
+            sound_package: default_sound_package(),
             ..Default::default()
         })
     }
@@ -218,9 +350,21 @@ impl Config {
         }
     }
 
+    /// Returns true when there's enough config to run the local engine (tailer,
+    /// parser, triggers, DPS meter) regardless of remote server availability.
+    pub fn local_ready(&self) -> bool {
+        self.log_path.is_some()
+    }
+
     /// Returns true when the config has everything needed to start pushing.
     pub fn is_ready(&self) -> bool {
         self.log_path.is_some() && self.ingest_ws_url().is_some() && self.stream_token.is_some()
+    }
+
+    /// Returns true when remote push should actually run: the user hasn't
+    /// disabled it and the server credentials are present.
+    pub fn remote_ready(&self) -> bool {
+        self.remote_logging_enabled && self.is_ready()
     }
 
     /// Returns true when stream credentials have been obtained from a server.

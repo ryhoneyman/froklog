@@ -33,6 +33,9 @@ fn main() {
         use froklog::tray::tray::{run as tray_run, AppHandle};
 
         let config = Config::load();
+        froklog::overlay::overlay::set_sound_enabled(config.sound_enabled);
+        froklog::overlay::overlay::set_sound_volume_percent(config.sound_volume);
+        froklog::overlay::overlay::set_active_sound_package(&config.sound_package);
         let handle = Arc::new(AppHandle::new(config));
 
         spawn_engine(Arc::clone(&handle));
@@ -42,9 +45,9 @@ fn main() {
     #[cfg(not(feature = "tray"))]
     {
         let config = Config::load();
-        if !config.is_ready() {
+        if !config.local_ready() {
             eprintln!(
-                "Config not ready. Edit {:?} and set log_path, server_url, stream_id, stream_token.",
+                "Config not ready. Edit {:?} and set log_path (server_url/stream_id/stream_token are only needed for remote push).",
                 config_path_display()
             );
             std::process::exit(1);
@@ -69,16 +72,17 @@ fn main() {
 
 #[cfg(feature = "tray")]
 fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
-    // Generate icon/sound assets on first run (no-op if already present).
-    froklog::assets::assets::ensure_assets();
-
     // Spawn the overlay once here so it survives engine restarts and live-reloads
     // its settings (font, alpha, enabled) from the shared config on each tick.
-    froklog::overlay::overlay::spawn_overlay(
-        Arc::clone(&handle.config),
-        Arc::clone(&handle.overlay_queue),
-        Arc::clone(&handle.quit),
-    );
+    froklog::overlay::overlay::spawn_overlay(Arc::clone(&handle));
+
+    // Spawn the history overlay too — reads handle.overlay_history, which the
+    // alert overlay appends to once a message finishes flying through it.
+    froklog::overlay_history::overlay_history::spawn_overlay_history(Arc::clone(&handle));
+
+    // Spawn the DPS meter once here too — reads handle.combat_state, which stays
+    // valid across engine restarts (see run_engine_once).
+    froklog::overlay_dps::overlay_dps::spawn_dps_meter(Arc::clone(&handle));
 
     thread::Builder::new()
         .name("eq-engine-monitor".into())
@@ -96,7 +100,7 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
 
                 let config = handle.config.lock().unwrap().clone();
 
-                if config.is_ready() {
+                if config.local_ready() {
                     info!("Engine starting");
                     handle.restart.store(false, Ordering::Relaxed);
                     run_engine_once(
@@ -138,17 +142,29 @@ fn run_engine_once(
         Some(p) => p.clone(),
         None => return,
     };
-    let push_url = match config.ingest_ws_url() {
-        Some(u) => u,
-        None => return,
-    };
-    let push_token = match config.stream_token.as_ref() {
-        Some(t) => t.clone(),
-        None => return,
+    // Remote push is optional: local DPS meter / triggers / overlays keep running
+    // from the tailer + parser even when no server is configured or the user has
+    // switched remote logging off via the toggle.
+    let remote_target: Option<(String, String)> = if config.remote_ready() {
+        config
+            .ingest_ws_url()
+            .zip(config.stream_token.as_ref().cloned())
+    } else {
+        None
     };
 
+    #[cfg(feature = "tray")]
+    let shared: Arc<ArcSwap<CombatState>> = Arc::clone(&app_handle.combat_state);
+    #[cfg(not(feature = "tray"))]
     let shared: Arc<ArcSwap<CombatState>> = Arc::new(ArcSwap::from_pointee(CombatState::default()));
-    let reset_flag = Arc::new(AtomicBool::new(false));
+    // Always publish a blank snapshot on (re)start — the tray build reuses a stable
+    // ArcSwap across restarts (so the DPS meter overlay keeps a valid handle), so it
+    // no longer gets a clean slate for free from a freshly-allocated ArcSwap.
+    shared.store(Arc::new(CombatState::default()));
+    #[cfg(feature = "tray")]
+    let reset_flag: Arc<AtomicBool> = Arc::clone(&app_handle.reset_flag);
+    #[cfg(not(feature = "tray"))]
+    let reset_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let (broadcast_tx, _) = broadcast::channel::<Arc<CombatState>>(64);
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
     // Tailer output → splitter → parser_rx (parser) + trigger_rx (trigger engine).
@@ -258,7 +274,7 @@ fn run_engine_once(
             .expect("spawn trigger engine");
     }
 
-    {
+    if let Some((push_url, push_token)) = remote_target {
         let restart_p = Arc::clone(&restart);
         let quit_p = Arc::clone(&quit);
         thread::Builder::new()
@@ -281,6 +297,18 @@ fn run_engine_once(
             })
             .expect("spawn pusher");
         info!("Pushing events to remote server");
+    } else {
+        connected.store(false, Ordering::Relaxed);
+        // Nobody is consuming parser events; drain and discard them so the
+        // unbounded channel doesn't grow for the life of the session.
+        thread::Builder::new()
+            .name("eq-event-sink".into())
+            .spawn(move || {
+                let mut event_rx = event_rx;
+                while event_rx.blocking_recv().is_some() {}
+            })
+            .expect("spawn event sink");
+        info!("Remote logging disabled or not configured; running locally only");
     }
 
     loop {

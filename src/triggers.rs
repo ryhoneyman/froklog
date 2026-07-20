@@ -10,7 +10,11 @@
 ///
 /// Condition types:
 ///   - match : compare the log line with an exact string, regex, or glob pattern
-///   - var   : test a stored variable with isset/equals/gt/gte/lt/lte/matches
+///   - var   : test a value with isset/equals/gt/gte/lt/lte/matches. `var_name`
+///     resolves against a capture group from an earlier Match condition *in the
+///     same trigger* first, then falls back to a persisted `store_var` variable —
+///     so a Regex condition can capture a number and a following Var condition
+///     can Gt/Lt-compare it immediately, with no `store_var` action needed.
 ///
 /// Action types:
 ///   - overlay   : emit a message to the overlay window (icon, color, delay)
@@ -114,6 +118,21 @@ pub mod engine {
         Ambient,
     }
 
+    /// Visual treatment applied to an overlay message while it's held at max size.
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Treatment {
+        /// No special effect.
+        #[default]
+        None,
+        /// Soft expanding halo behind the text.
+        Glow,
+        /// Small jittering x/y offset.
+        Vibrate,
+        /// Gentle scale oscillation around the peak size.
+        Pulse,
+    }
+
     /// A single action executed when a trigger fires.
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(tag = "type", rename_all = "snake_case")]
@@ -132,12 +151,21 @@ pub mod engine {
             /// Optional hex colour for the message text, e.g. "#FFDD44".  Empty = default white.
             #[serde(default)]
             message_color: String,
+            /// Optional hex colour for the text's stroke/outline, e.g. "#000000".
+            /// Empty = default black.
+            #[serde(default)]
+            border_color: String,
             /// Seconds to wait before showing (0 = immediate).
             #[serde(default)]
             delay_secs: f64,
-            /// Optional sound: "" = none, "sounds/ding.wav" = bundled, or absolute path.
+            /// Visual treatment applied while the message is held at max size.
             #[serde(default)]
-            sound: Option<String>,
+            treatment: Treatment,
+            /// Queue priority: `emergency` interrupts whatever's currently showing and
+            /// jumps to the front; `operational` (default) queues normally; `ambient`
+            /// queues normally too but is dropped if the queue is already backed up.
+            #[serde(default)]
+            priority: VoicePriority,
         },
         /// Speak a message via the system TTS engine.
         VoiceAlert {
@@ -148,6 +176,17 @@ pub mod engine {
             /// ambient is suppressed if audio is already playing.
             #[serde(default)]
             priority: VoicePriority,
+        },
+        /// Play a sound file only — no visual overlay card, no TTS.
+        PlaySound {
+            /// None/empty = none, otherwise the name of a sound label (see
+            /// `sound_packages`) resolved through whichever package is
+            /// currently active.
+            #[serde(default)]
+            sound: Option<String>,
+            /// Seconds to wait before playing (0 = immediate).
+            #[serde(default)]
+            delay_secs: f64,
         },
         /// Write a value to a named variable.
         StoreVar {
@@ -186,7 +225,11 @@ pub mod engine {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 return Self::default();
             };
-            toml::from_str(&text).unwrap_or_default()
+            let mut cfg: Self = toml::from_str(&text).unwrap_or_default();
+            if migrate_legacy_sounds(&mut cfg) {
+                cfg.save();
+            }
+            cfg
         }
 
         pub fn save(&self) {
@@ -198,6 +241,30 @@ pub mod engine {
                 let _ = std::fs::write(path, text);
             }
         }
+    }
+
+    /// Converts any `Action::PlaySound` still storing a raw path (from before
+    /// sound packages existed) into a label, registering it in the `default`
+    /// package if needed. Returns whether anything changed, so the caller
+    /// knows to persist the migrated file. Idempotent: migrated values are
+    /// bare labels with no `/`/`\`, so a second pass is always a no-op.
+    fn migrate_legacy_sounds(cfg: &mut TriggerConfig) -> bool {
+        let mut changed = false;
+        for def in &mut cfg.triggers {
+            for action in &mut def.actions {
+                if let Action::PlaySound { sound: Some(s), .. } = action {
+                    if s.contains('/') || s.contains('\\') {
+                        if let Some(label) =
+                            crate::sound_packages::sound_packages::migrate_legacy_sound_value(s)
+                        {
+                            *s = label;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        changed
     }
 
     pub fn triggers_path() -> PathBuf {
@@ -227,11 +294,17 @@ pub mod engine {
         pub message: String,
         /// Optional hex colour for the message text (e.g. "#FFDD44"), or "".
         pub message_color: String,
+        /// Optional hex colour for the text's stroke/outline (e.g. "#000000"), or "".
+        pub border_color: String,
         pub sound: Option<String>,
         /// Text to speak via TTS, or None for visual-only events.
         pub tts_text: Option<String>,
         /// Priority for TTS playback (controls interrupt / queue / suppress behaviour).
         pub tts_priority: VoicePriority,
+        /// Visual treatment applied while the message is held at max size.
+        pub treatment: Treatment,
+        /// Visual queue priority — see `Action::Overlay`'s `priority` field.
+        pub priority: VoicePriority,
     }
 
     // ── Compiled runtime types ────────────────────────────────────────────────
@@ -348,7 +421,12 @@ pub mod engine {
                 let mut caps_set = false;
 
                 for cond in &trigger.conditions {
-                    let (passed, maybe_caps) = eval_condition(cond, line, &self.vars);
+                    // `caps` reflects only conditions evaluated *so far* in this
+                    // trigger, so a Var condition can reference a capture group
+                    // from an earlier Match/Regex condition in the same list
+                    // (e.g. regex-capture a kick's damage, then Gt-compare it)
+                    // without needing an intermediate `store_var` action.
+                    let (passed, maybe_caps) = eval_condition(cond, line, &self.vars, &caps);
                     results.push(passed);
                     if passed {
                         if let Some(c) = maybe_caps {
@@ -389,9 +467,12 @@ pub mod engine {
                                     color: String::new(),
                                     message: String::new(),
                                     message_color: String::new(),
+                                    border_color: String::new(),
                                     sound: None,
                                     tts_text: Some(text),
                                     tts_priority: priority.clone(),
+                                    treatment: Treatment::default(),
+                                    priority: VoicePriority::default(),
                                 });
                             }
                         }
@@ -400,17 +481,22 @@ pub mod engine {
                             color,
                             message,
                             message_color,
+                            border_color,
                             delay_secs,
-                            sound,
+                            treatment,
+                            priority,
                         } => {
                             let event = OverlayEvent {
                                 icon: icon.clone(),
                                 color: color.clone(),
                                 message: resolve_template(message, &caps, &self.vars),
                                 message_color: message_color.clone(),
-                                sound: sound.clone(),
+                                border_color: border_color.clone(),
+                                sound: None,
                                 tts_text: None,
                                 tts_priority: VoicePriority::default(),
+                                treatment: *treatment,
+                                priority: priority.clone(),
                             };
                             if *delay_secs <= 0.0 {
                                 new_events.push(event);
@@ -419,6 +505,30 @@ pub mod engine {
                                     fire_at: now + Duration::from_secs_f64(*delay_secs),
                                     event,
                                 });
+                            }
+                        }
+                        Action::PlaySound { sound, delay_secs } => {
+                            if let Some(s) = sound.clone().filter(|s| !s.is_empty()) {
+                                let event = OverlayEvent {
+                                    icon: String::new(),
+                                    color: String::new(),
+                                    message: String::new(),
+                                    message_color: String::new(),
+                                    border_color: String::new(),
+                                    sound: Some(s),
+                                    tts_text: None,
+                                    tts_priority: VoicePriority::default(),
+                                    treatment: Treatment::default(),
+                                    priority: VoicePriority::default(),
+                                };
+                                if *delay_secs <= 0.0 {
+                                    new_events.push(event);
+                                } else {
+                                    new_pending.push(PendingAction {
+                                        fire_at: now + Duration::from_secs_f64(*delay_secs),
+                                        event,
+                                    });
+                                }
                             }
                         }
                     }
@@ -477,6 +587,7 @@ pub mod engine {
         cond: &CompiledCondition,
         line: &str,
         vars: &HashMap<String, String>,
+        caps: &CaptureMap,
     ) -> (bool, Option<CaptureMap>) {
         match &cond.original {
             Condition::Match { .. } => {
@@ -514,7 +625,8 @@ pub mod engine {
                 op,
                 value,
             } => {
-                let stored = vars.get(var_name.as_str());
+                let stored = resolve_var(var_name, caps, vars);
+                let stored = stored.as_deref();
                 let result = match op {
                     VarOp::Isset => stored.is_some(),
                     VarOp::Equals => stored
@@ -537,7 +649,7 @@ pub mod engine {
         }
     }
 
-    fn cmp_numeric(stored: Option<&String>, rhs: &str, op: impl Fn(f64, f64) -> bool) -> bool {
+    fn cmp_numeric(stored: Option<&str>, rhs: &str, op: impl Fn(f64, f64) -> bool) -> bool {
         let Some(v) = stored else { return false };
         let Ok(a) = v.parse::<f64>() else {
             return false;
@@ -546,6 +658,29 @@ pub mod engine {
             return false;
         };
         op(a, b)
+    }
+
+    // ── Variable / capture resolution ─────────────────────────────────────────
+
+    /// Resolves `name` against, in order: a positional capture index, a named
+    /// capture group from conditions evaluated so far in the current trigger,
+    /// then a persisted `store_var` variable. Shared by Var-condition
+    /// comparisons and action template placeholders so both can refer to
+    /// either a same-trigger regex capture or a stored variable interchangeably.
+    fn resolve_var(
+        name: &str,
+        caps: &CaptureMap,
+        vars: &HashMap<String, String>,
+    ) -> Option<String> {
+        if let Ok(i) = name.parse::<usize>() {
+            if let Some(Some(s)) = caps.positional.get(i) {
+                return Some(s.clone());
+            }
+        }
+        if let Some(s) = caps.named.get(name) {
+            return Some(s.clone());
+        }
+        vars.get(name).cloned()
     }
 
     // ── Template resolution ───────────────────────────────────────────────────
@@ -557,23 +692,7 @@ pub mod engine {
     ) -> String {
         PLACEHOLDER
             .replace_all(template, |m: &regex::Captures<'_>| {
-                let key = &m[1];
-                // Try positional index first.
-                if let Ok(i) = key.parse::<usize>() {
-                    if let Some(Some(s)) = caps.positional.get(i) {
-                        return s.clone();
-                    }
-                }
-                // Try named capture.
-                if let Some(s) = caps.named.get(key) {
-                    return s.clone();
-                }
-                // Try stored variable.
-                if let Some(s) = vars.get(key) {
-                    return s.clone();
-                }
-                // Leave placeholder unchanged.
-                m[0].to_owned()
+                resolve_var(&m[1], caps, vars).unwrap_or_else(|| m[0].to_owned())
             })
             .into_owned()
     }

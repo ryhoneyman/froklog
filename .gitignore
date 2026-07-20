@@ -14,3 +14,6 @@
 
 # IDE local settings
 .vscode/
+
+# EQ spell icon assets
+/assets/spellicons/*

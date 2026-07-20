@@ -34,14 +34,17 @@ path = "src/bin/froklog-loggen/main.rs"
 [features]
 default = []
 # Windows systray client (no visible window; requires Windows cross-compile)
-tray = ["dep:tray-icon", "dep:winit", "dep:image"]
+tray = ["dep:tray-icon", "dep:winit", "dep:image", "dep:zip"]
 # Neural chat backend — gates ort and serde_json (already a dep) usage in NeuralBackend
 neural = ["dep:tract-onnx", "dep:sentencepiece-rs"]
 [dependencies]
 # Systray — only makes sense on Windows; use `--features tray` when cross-compiling
 tray-icon = { version = "0.19", optional = true }
 winit     = { version = "0.30", optional = true, default-features = false }
-image     = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+image     = { version = "0.25", optional = true, default-features = false, features = ["png", "tga"] }
+# Sound package export/import (.zip files) — Deflate only (pure Rust via flate2/miniz_oxide,
+# no C deps) so it stays clean for the x86_64-pc-windows-gnu cross-build.
+zip       = { version = "2", optional = true, default-features = false, features = ["deflate"] }
 # Config file serialisation (always needed)
 toml = "0.8"
 
@@ -102,6 +105,9 @@ tract-onnx       = { version = "0.22", optional = true }
 sentencepiece-rs = { version = "0.2", optional = true }
 
 [target.'cfg(windows)'.dependencies]
+# Sound playback (trigger sounds) — decodes WAV and MP3, WASAPI backend needs no C libs
+rodio = { version = "0.19", default-features = false, features = ["wav", "mp3"] }
+
 # Native Windows dialogs (file picker, message box)
 windows = { version = "0.58", features = [
     "Win32_Foundation",
@@ -118,7 +124,6 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Media",
-    "Win32_Media_Audio",
     "Win32_Media_Speech",
     "Win32_System_Registry",
 ]}

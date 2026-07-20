@@ -1,25 +1,41 @@
-/// Staggered 2.5D Stacked Deck overlay window.
+/// Fly-in alert overlay window.
 ///
 /// Per-pixel-alpha `WS_EX_LAYERED` Win32 popup rendered into a 32-bpp
-/// premultiplied-BGRA DIB and pushed to the screen via `UpdateLayeredWindow`.
-/// Each log event becomes a `DeckCard` with independently interpolated
-/// `cur_y`, `cur_alpha`, and `cur_scale`; a 16 ms `WM_TIMER` drives the
-/// ease-out-cubic spring step every frame (~60 fps).
+/// premultiplied-BGRA DIB and pushed to the screen via `UpdateLayeredWindow`,
+/// structurally a twin of `overlay_dps.rs`'s independent meter window.
 ///
-/// Deck layout (top → bottom, oldest → newest):
-///   history[k]  — compressed-height cards, decaying opacity & scale
-///   spotlight   — full-height card, 100 % opacity, left accent bar, bold text
+/// Unlike the old stacked-deck design, this window shows **one message at a
+/// time**: it flies in from a small font size to a large "peak" size
+/// (`FlyIn`), optionally applies a per-trigger visual treatment while held at
+/// peak size (`Hold`), then shrinks back down while translating toward the
+/// history overlay's position (`ShrinkOut`) before handing the message off to
+/// `AppHandle.overlay_history` for `overlay_history.rs` to display. Additional
+/// events arriving while one is in flight normally queue up (FIFO) and start
+/// as soon as the window returns to `Idle`, but `OverlayEvent.priority` can
+/// change that: `Emergency` interrupts whatever's currently showing and jumps
+/// the queue immediately (the interrupted event is requeued to resume next),
+/// and `Ambient` events are dropped outright once the queue is already
+/// backed up (`AMBIENT_DROP_QUEUE_LEN`). The `Hold` phase also shortens itself
+/// when a backlog exists, so queued messages don't wait behind a full-length
+/// hold on the current one.
 #[cfg(feature = "tray")]
 #[allow(clippy::module_inception)]
 pub mod overlay {
     use std::ffi::c_void;
     use std::mem;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use crate::config::Config;
-    use crate::triggers::engine::OverlayEvent;
+    #[cfg(target_os = "windows")]
+    use crate::overlay_draw::overlay_draw::{
+        apply_lock_style, composite_text_stroked, make_font, premult,
+    };
+    use crate::overlay_draw::overlay_draw::{blend_over, fill_rrect, parse_hex_color};
+    use crate::overlay_history::overlay_history::HistoryEntry;
+    use crate::tray::tray::AppHandle;
+    use crate::triggers::engine::{OverlayEvent, Treatment, VoicePriority};
 
     // ── Win32 imports ─────────────────────────────────────────────────────────
 
@@ -28,12 +44,9 @@ pub mod overlay {
 
     #[cfg(target_os = "windows")]
     use windows::Win32::Graphics::Gdi::{
-        BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
-        DrawTextW, EndPaint, GetDC, ReleaseDC, SelectObject, SetBkMode, SetTextColor, BITMAPINFO,
-        BITMAPINFOHEADER, BLENDFUNCTION, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
-        DEFAULT_QUALITY, DIB_RGB_COLORS, DT_LEFT, DT_NOCLIP, DT_SINGLELINE, DT_VCENTER,
-        FF_DONTCARE, FW_BOLD, FW_NORMAL, HBRUSH, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-        TRANSPARENT,
+        BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint, GetDC,
+        ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, DIB_RGB_COLORS,
+        DT_LEFT, DT_NOCLIP, HBRUSH, HFONT, HGDIOBJ, PAINTSTRUCT,
     };
 
     #[cfg(target_os = "windows")]
@@ -43,11 +56,11 @@ pub mod overlay {
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
         GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, LoadCursorW, PostQuitMessage,
-        RegisterClassExW, SetWindowLongPtrW, TranslateMessage, UpdateLayeredWindow, CREATESTRUCTW,
-        CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, MSG, SM_CXSCREEN, SM_CYSCREEN, ULW_ALPHA,
-        WM_APP, WM_CREATE, WM_DESTROY, WM_LBUTTONDOWN, WM_NCLBUTTONDOWN, WM_PAINT, WM_TIMER,
-        WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
-        WS_VISIBLE,
+        RegisterClassExW, SetWindowLongPtrW, ShowWindow, TranslateMessage, UpdateLayeredWindow,
+        CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, MSG, SM_CXSCREEN,
+        SM_CYSCREEN, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_APP, WM_CREATE, WM_DESTROY,
+        WM_LBUTTONDOWN, WM_NCLBUTTONDOWN, WM_PAINT, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
     };
 
     #[cfg(target_os = "windows")]
@@ -60,28 +73,27 @@ pub mod overlay {
     const TIMER_ANIM: usize = 1;
     const ANIM_INTERVAL_MS: u32 = 16;
 
-    const WINDOW_WIDTH: i32 = 500;
-    const MAX_DECK: usize = 20;
+    const WINDOW_WIDTH: i32 = 760;
+    const PAD_H: i32 = 18;
+    const PAD_V: i32 = 12;
+    const CORNER_R: i32 = 10;
+    const ICON_TEXT_GAP: i32 = 14;
 
-    const SPOTLIGHT_H: i32 = 52;
-    const HISTORY_H: i32 = 28;
-    const CARD_GAP: i32 = 3;
-    const CARD_PAD_V: i32 = 8;
-    const ACCENT_W: i32 = 4;
-    const ICON_SZ_SPOT: i32 = 30;
-    const ICON_SZ_HIST: i32 = 16;
-    const CORNER_R: i32 = 5;
-    const ICON_TEXT_GAP: i32 = 8;
-    const CARD_PAD_X: i32 = 10;
+    /// Vertical rise (px) during fly-in, easing to 0 as the message settles.
+    const RISE_PX: f32 = 26.0;
+    /// Fraction of the distance toward the history window's anchor travelled
+    /// during shrink-out (the remainder is covered by the fade completing).
+    const TRAVEL_FRACTION: f32 = 0.35;
+    const GLOW_LAYERS: i32 = 3;
+    const VIBRATE_PX: f32 = 3.0;
+    const PULSE_AMOUNT: f32 = 0.07;
 
-    const SPRING: f32 = 14.0;
-
-    const HIST_ALPHA_TOP: f32 = 0.90;
-    const HIST_ALPHA_MIN: f32 = 0.20;
-    const HIST_SCALE_TOP: f32 = 0.95;
-    const HIST_SCALE_MIN: f32 = 0.70;
-
-    const CARD_BG: (u8, u8, u8, u8) = (14, 14, 20, 210);
+    /// Ambient-priority events are dropped instead of queued once this many
+    /// events are already waiting — stale low-priority info showing late is
+    /// worse than not showing at all.
+    const AMBIENT_DROP_QUEUE_LEN: usize = 2;
+    /// Hold duration never shrinks below this when a backlog is draining it.
+    const MIN_HOLD_SECS: f32 = 0.6;
 
     const CLASS_NAME: &str = "FroklogOverlay\0";
 
@@ -110,134 +122,105 @@ pub mod overlay {
                 Self::System => (68, 120, 192),
             }
         }
-
-        fn text_rgb(&self) -> (u8, u8, u8) {
-            match self {
-                Self::Combat => (255, 180, 180),
-                Self::Loot => (255, 240, 160),
-                Self::System => (190, 210, 255),
-            }
-        }
     }
 
-    // ── Deck card ─────────────────────────────────────────────────────────────
+    /// Default text fill/stroke when a trigger doesn't override them.
+    const DEFAULT_TEXT_RGB: (u8, u8, u8) = (255, 255, 255);
+    const DEFAULT_BORDER_RGB: (u8, u8, u8) = (0, 0, 0);
 
-    struct DeckCard {
+    // ── Alert lifecycle ────────────────────────────────────────────────────────
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum AlertPhase {
+        FlyIn,
+        Hold,
+        ShrinkOut,
+    }
+
+    struct ActiveAlert {
         event: OverlayEvent,
         category: EventCategory,
-        arrived: Instant,
-        cur_y: f32,
-        target_y: f32,
-        cur_alpha: f32,
-        target_alpha: f32,
-        cur_scale: f32,
-        target_scale: f32,
-    }
-
-    impl DeckCard {
-        fn new(event: OverlayEvent, spawn_y: f32) -> Self {
-            let category = EventCategory::from_icon(&event.icon);
-            Self {
-                category,
-                event,
-                arrived: Instant::now(),
-                cur_y: spawn_y,
-                target_y: spawn_y,
-                cur_alpha: 0.0,
-                target_alpha: 1.0,
-                cur_scale: 0.8,
-                target_scale: 1.0,
-            }
-        }
+        phase: AlertPhase,
+        phase_started: Instant,
+        /// True for the synthetic alert injected by the Settings dialog's
+        /// "Show All Windows" button — held in `Hold` indefinitely (instead
+        /// of aging out to `ShrinkOut` and landing in history) for as long as
+        /// `force_show` stays set.
+        is_placeholder: bool,
     }
 
     // ── State ─────────────────────────────────────────────────────────────────
 
     struct OverlayState {
-        config: Arc<Mutex<Config>>,
-        quit: Arc<AtomicBool>,
-        queue: Arc<Mutex<Vec<OverlayEvent>>>,
-        deck: Vec<DeckCard>,
-        last_tick: Instant,
+        handle: Arc<AppHandle>,
+        queue: Vec<OverlayEvent>,
+        active: Option<ActiveAlert>,
         overlay_enabled: bool,
-        max_entries: usize,
-        idle_secs: u32,
-        font_size: i32,
+        start_pt: i32,
+        max_pt: i32,
+        fly_ms: u32,
+        hold_secs: f32,
+        alpha: u8,
         font_name: String,
-        window_w: i32,
         window_x: i32,
-        anchor_bottom_y: i32,
+        anchor_center_y: i32,
+        visible: bool,
+        locked: bool,
+        /// Mirrors `AppHandle.force_show_windows` — forces this window
+        /// visible (via a placeholder alert) so it can be dragged into
+        /// position from the Settings dialog even with no real alert queued.
+        force_show: bool,
         #[cfg(target_os = "windows")]
-        hfont_normal: Option<HFONT>,
-        #[cfg(target_os = "windows")]
-        hfont_bold: Option<HFONT>,
+        font_cache: std::collections::HashMap<i32, HFONT>,
         /// Premultiplied BGRA pixel cache keyed by `"filename@size"`.
-        /// `None` value means the load was attempted and failed.
         icon_cache: std::collections::HashMap<String, Option<Vec<u32>>>,
-        /// GDI font cache for history cards keyed by rounded pt size.
-        scaled_font_cache: std::collections::HashMap<i32, HFONT>,
-        /// SAPI ISpVoice — created lazily on first TTS event.
         #[cfg(target_os = "windows")]
         tts_voice: Option<windows::Win32::Media::Speech::ISpVoice>,
-        /// Cached SAPI rate value so we only call SetRate when it changes.
         #[cfg(target_os = "windows")]
         tts_rate: i32,
     }
 
     #[cfg(target_os = "windows")]
     impl OverlayState {
-        fn new(
-            cfg_arc: &Arc<Mutex<Config>>,
-            queue: Arc<Mutex<Vec<OverlayEvent>>>,
-            quit: Arc<AtomicBool>,
-            wx: i32,
-            anchor_bottom_y: i32,
-        ) -> Self {
-            let cfg = cfg_arc.lock().unwrap();
+        fn new(handle: &Arc<AppHandle>, wx: i32, anchor_center_y: i32) -> Self {
+            let cfg = handle.config.lock().unwrap();
             Self {
-                config: Arc::clone(cfg_arc),
-                quit,
-                queue,
-                deck: Vec::new(),
-                last_tick: Instant::now(),
+                handle: Arc::clone(handle),
+                queue: Vec::new(),
+                active: None,
                 overlay_enabled: cfg.overlay_enabled,
-                max_entries: cfg.overlay_max_entries.max(1).min(MAX_DECK),
-                idle_secs: cfg.overlay_idle_secs,
-                font_size: cfg.overlay_font_size.max(8) as i32,
+                start_pt: cfg.overlay_start_font_size.max(6) as i32,
+                max_pt: cfg.overlay_max_font_size.max(6) as i32,
+                fly_ms: cfg.overlay_fly_ms.max(16),
+                hold_secs: cfg.overlay_hold_secs.max(0.0),
+                alpha: cfg.overlay_alpha,
                 font_name: if cfg.overlay_font.is_empty() {
                     "Segoe UI".to_string()
                 } else {
                     cfg.overlay_font.clone()
                 },
-                window_w: WINDOW_WIDTH,
                 window_x: wx,
-                anchor_bottom_y,
-                hfont_normal: None,
-                hfont_bold: None,
+                anchor_center_y,
+                visible: false,
+                locked: cfg.overlay_locked,
+                force_show: handle.force_show_windows.load(Ordering::Relaxed),
+                font_cache: std::collections::HashMap::new(),
                 icon_cache: std::collections::HashMap::new(),
-                scaled_font_cache: std::collections::HashMap::new(),
                 tts_voice: None,
                 tts_rate: 0,
             }
         }
 
-        unsafe fn ensure_fonts(&mut self) {
-            if self.hfont_normal.is_none() {
-                self.hfont_normal = Some(make_font(&self.font_name, self.font_size, false));
-            }
-            if self.hfont_bold.is_none() {
-                self.hfont_bold = Some(make_font(&self.font_name, self.font_size, true));
-            }
+        unsafe fn font_for(&mut self, pt: i32) -> HFONT {
+            let name = self.font_name.clone();
+            *self
+                .font_cache
+                .entry(pt)
+                .or_insert_with(|| make_font(&name, pt, true))
         }
 
         unsafe fn drop_fonts(&mut self) {
-            for f in [self.hfont_normal.take(), self.hfont_bold.take()]
-                .into_iter()
-                .flatten()
-            {
-                let _ = DeleteObject(HGDIOBJ(f.0));
-            }
-            for f in self.scaled_font_cache.drain().map(|(_, f)| f) {
+            for f in self.font_cache.drain().map(|(_, f)| f) {
                 let _ = DeleteObject(HGDIOBJ(f.0));
             }
         }
@@ -246,19 +229,34 @@ pub mod overlay {
             self.icon_cache.clear();
         }
 
-        unsafe fn sync_config(&mut self) {
-            let cfg = self.config.lock().unwrap();
+        /// Reload live-tunable settings from config. Returns true if the
+        /// click-through lock state changed and needs to be re-applied to the
+        /// window style (covers both the in-window pin click and the settings
+        /// dialog's checkbox — the window can't receive clicks while locked,
+        /// so this poll is the only way an unlock via the dialog takes effect).
+        unsafe fn sync_config(&mut self) -> bool {
+            let cfg = self.handle.config.lock().unwrap();
             let new_font = if cfg.overlay_font.is_empty() {
                 "Segoe UI".to_string()
             } else {
                 cfg.overlay_font.clone()
             };
-            let new_size = cfg.overlay_font_size.max(8) as i32;
-            let new_idle = cfg.overlay_idle_secs;
-            let new_max = cfg.overlay_max_entries.max(1).min(MAX_DECK);
-            let new_enabled = cfg.overlay_enabled;
             let new_voice_id = cfg.tts_voice.clone();
+            self.overlay_enabled = cfg.overlay_enabled;
+            self.start_pt = cfg.overlay_start_font_size.max(6) as i32;
+            self.max_pt = cfg.overlay_max_font_size.max(6) as i32;
+            self.fly_ms = cfg.overlay_fly_ms.max(16);
+            self.hold_secs = cfg.overlay_hold_secs.max(0.0);
+            self.alpha = cfg.overlay_alpha;
+            let lock_changed = cfg.overlay_locked != self.locked;
+            self.locked = cfg.overlay_locked;
             drop(cfg);
+            self.force_show = self.handle.force_show_windows.load(Ordering::Relaxed);
+
+            if new_font != self.font_name {
+                self.font_name = new_font;
+                self.drop_fonts();
+            }
 
             // If the selected voice changed, drop the cached ISpVoice so it is
             // recreated with the new voice on the next TTS event.
@@ -280,228 +278,250 @@ pub mod overlay {
             if new_voice_id != cur_voice_id {
                 self.tts_voice = None;
             }
-
-            if new_font != self.font_name || new_size != self.font_size {
-                self.font_name = new_font;
-                self.font_size = new_size;
-                self.drop_fonts();
-            }
-            self.idle_secs = new_idle;
-            self.overlay_enabled = new_enabled;
-            if new_max != self.max_entries {
-                self.max_entries = new_max;
-                while self.deck.len() > self.max_entries {
-                    self.deck.remove(0);
-                }
-                assign_deck_targets(&mut self.deck, self.max_entries);
-            }
+            lock_changed
         }
 
         fn drain_queue(&mut self) {
             let new_events: Vec<OverlayEvent> = {
-                let mut q = self.queue.lock().unwrap();
+                let mut q = self.handle.overlay_queue.lock().unwrap();
                 q.drain(..).collect()
             };
-            if new_events.is_empty() {
-                return;
-            }
             for ev in new_events {
-                // TTS — speak if enabled and text is present.
                 #[cfg(target_os = "windows")]
                 if let Some(ref text) = ev.tts_text {
                     unsafe { self.try_speak(text, &ev.tts_priority) };
                 }
 
-                // Visual — only push a deck card when a message is present.
                 if !ev.message.is_empty() {
-                    if let Some(s) = &ev.sound {
-                        if !s.is_empty() {
-                            play_sound(s);
+                    match ev.priority {
+                        VoicePriority::Emergency => {
+                            // Interrupt whatever's currently showing — it goes back to
+                            // the front of the queue to resume (from scratch) right
+                            // after this one, rather than being lost.
+                            if let Some(active) = self.active.take() {
+                                self.queue.insert(0, active.event);
+                            }
+                            self.queue.insert(0, ev);
+                        }
+                        VoicePriority::Ambient if self.queue.len() >= AMBIENT_DROP_QUEUE_LEN => {
+                            // Backed up already — drop rather than pile on stale info.
+                        }
+                        VoicePriority::Ambient | VoicePriority::Operational => {
+                            self.queue.push(ev);
                         }
                     }
-                    // Evict any cards that were fading out on idle before adding new ones.
-                    self.deck.retain(|c| c.target_alpha > 0.001);
-                    let spawn_y = self.window_height() as f32 + SPOTLIGHT_H as f32;
-                    self.deck.push(DeckCard::new(ev, spawn_y));
-                    while self.deck.len() > self.max_entries {
-                        self.deck.remove(0);
-                    }
-                    assign_deck_targets(&mut self.deck, self.max_entries);
-                } else if ev.sound.as_deref().is_some_and(|s| !s.is_empty()) {
-                    play_sound(ev.sound.as_deref().unwrap());
+                } else if let Some(s) = ev.sound.as_deref().filter(|s| !s.is_empty()) {
+                    play_sound_label(s);
                 }
             }
         }
 
-        fn tick_animate(&mut self) {
+        /// Advance the single-message state machine one tick. Returns true if
+        /// a message finished its lifecycle and was handed off to history.
+        fn tick_state(&mut self) {
             let now = Instant::now();
-            let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.1);
-            self.last_tick = now;
 
-            for card in &mut self.deck {
-                card.cur_y = step_lerp(card.cur_y, card.target_y, dt, SPRING);
-                card.cur_alpha = step_lerp(card.cur_alpha, card.target_alpha, dt, SPRING);
-                card.cur_scale = step_lerp(card.cur_scale, card.target_scale, dt, SPRING);
+            // Placeholder injected for "Show All Windows": drop it the moment
+            // force_show clears, and otherwise keep it pinned in Hold forever
+            // instead of letting it age through ShrinkOut into history.
+            if let Some(active) = self.active.as_mut() {
+                if active.is_placeholder {
+                    if self.force_show {
+                        active.phase = AlertPhase::Hold;
+                        active.phase_started = now;
+                    } else {
+                        self.active = None;
+                    }
+                    return;
+                }
             }
 
-            // Start fading out all cards once the overlay goes idle (0 = never hide).
-            if self.idle_secs > 0 {
-                if let Some(newest) = self.deck.last() {
-                    if newest.arrived.elapsed() > Duration::from_secs(self.idle_secs as u64) {
-                        for c in &mut self.deck {
-                            c.target_alpha = 0.0;
+            if self.active.is_none() {
+                if !self.queue.is_empty() {
+                    let event = self.queue.remove(0);
+                    if let Some(s) = event.sound.as_deref() {
+                        if !s.is_empty() {
+                            play_sound_label(s);
                         }
                     }
+                    let category = EventCategory::from_icon(&event.icon);
+                    self.active = Some(ActiveAlert {
+                        event,
+                        category,
+                        phase: AlertPhase::FlyIn,
+                        phase_started: now,
+                        is_placeholder: false,
+                    });
+                } else if self.force_show {
+                    self.active = Some(ActiveAlert {
+                        event: OverlayEvent {
+                            icon: String::new(),
+                            color: String::new(),
+                            message: "Drag to position — Alert Overlay".to_string(),
+                            message_color: String::new(),
+                            border_color: String::new(),
+                            sound: None,
+                            tts_text: None,
+                            tts_priority: VoicePriority::default(),
+                            treatment: Treatment::default(),
+                            priority: VoicePriority::default(),
+                        },
+                        category: EventCategory::System,
+                        phase: AlertPhase::Hold,
+                        phase_started: now,
+                        is_placeholder: true,
+                    });
+                }
+                return;
+            }
+
+            let fly_dur = Duration::from_millis(self.fly_ms as u64);
+
+            let active = self.active.as_ref().unwrap();
+            let elapsed = now.duration_since(active.phase_started);
+            let phase = active.phase;
+            let dur = match phase {
+                AlertPhase::FlyIn | AlertPhase::ShrinkOut => fly_dur,
+                // Shorten the hold when a backlog is waiting, so queued messages
+                // don't sit behind a full-length hold on the current one.
+                AlertPhase::Hold => self.effective_hold_duration(),
+            };
+            if elapsed < dur {
+                return;
+            }
+
+            match phase {
+                AlertPhase::FlyIn => {
+                    let active = self.active.as_mut().unwrap();
+                    active.phase = AlertPhase::Hold;
+                    active.phase_started = now;
+                }
+                AlertPhase::Hold => {
+                    let active = self.active.as_mut().unwrap();
+                    active.phase = AlertPhase::ShrinkOut;
+                    active.phase_started = now;
+                }
+                AlertPhase::ShrinkOut => {
+                    let done = self.active.take().unwrap();
+                    let mut hist = self.handle.overlay_history.lock().unwrap();
+                    hist.push(HistoryEntry::new(
+                        done.event.icon,
+                        done.event.color,
+                        done.event.message,
+                        done.event.message_color,
+                        done.event.border_color,
+                    ));
                 }
             }
-
-            self.deck
-                .retain(|c| c.cur_alpha > 0.005 || c.target_alpha > 0.001);
         }
 
-        fn window_height(&self) -> i32 {
-            if self.deck.is_empty() {
-                return SPOTLIGHT_H + CARD_PAD_V * 2;
+        /// Hold duration for the current message, shortened when other
+        /// messages are already waiting so the queue drains faster. Never
+        /// drops below `MIN_HOLD_SECS` so a message is always readable.
+        fn effective_hold_duration(&self) -> Duration {
+            let backlog = self.queue.len();
+            if backlog == 0 {
+                return Duration::from_secs_f32(self.hold_secs);
             }
-            let n = self.deck.len();
-            let hist_h: i32 = self.deck[..n.saturating_sub(1)]
-                .iter()
-                .map(|c| (HISTORY_H as f32 * c.target_scale).round() as i32 + CARD_GAP)
-                .sum();
-            hist_h + SPOTLIGHT_H + CARD_PAD_V * 2
+            let scaled = self.hold_secs / (1.0 + backlog as f32 * 0.5);
+            let floor = MIN_HOLD_SECS.min(self.hold_secs);
+            Duration::from_secs_f32(scaled.clamp(floor, self.hold_secs))
         }
     }
 
-    // ── Animation & layout ────────────────────────────────────────────────────
+    // ── Animation math ────────────────────────────────────────────────────────
 
-    /// Ease-out-cubic spring: moves `cur` toward `target` by `speed` units/s.
-    fn step_lerp(cur: f32, target: f32, dt: f32, speed: f32) -> f32 {
-        let t = (speed * dt).min(1.0);
-        let ease = 1.0 - (1.0 - t).powi(3);
-        cur + (target - cur) * ease
+    /// Ease-out-cubic: `t` in `[0, 1]` -> eased progress in `[0, 1]`.
+    fn ease_out_cubic(t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        1.0 - (1.0 - t).powi(3)
     }
 
-    fn assign_deck_targets(deck: &mut [DeckCard], max_entries: usize) {
-        let n = deck.len();
-        if n == 0 {
-            return;
-        }
-        // Spread the fade from HIST_ALPHA_TOP → HIST_ALPHA_MIN across the full
-        // configured history depth so the topmost card is always slightly readable.
-        let hist_slots = (max_entries.saturating_sub(1)).max(1) as f32;
+    /// Everything needed to draw one frame of the active alert, resolved from
+    /// its current phase/elapsed time.
+    struct FrameParams {
+        font_pt: i32,
+        alpha: f32,
+        x_offset: f32,
+        y_offset: f32,
+        glow: bool,
+        glow_pulse: f32,
+    }
 
-        // Pass 1: set target_alpha and target_scale for every card.
-        for (i, card) in deck.iter_mut().enumerate() {
-            let from_bottom = (n - 1 - i) as i32;
-            if from_bottom == 0 {
-                card.target_alpha = 1.0;
-                card.target_scale = 1.0;
-            } else {
-                // t ∈ [0, 1]: 0 = just above spotlight, 1 = oldest/topmost slot
-                let t = ((from_bottom - 1) as f32 / hist_slots).min(1.0);
-                let inv = 1.0 - t;
-                card.target_alpha =
-                    HIST_ALPHA_MIN + (HIST_ALPHA_TOP - HIST_ALPHA_MIN) * inv.powf(1.5);
-                card.target_scale = HIST_SCALE_MIN + (HIST_SCALE_TOP - HIST_SCALE_MIN) * inv;
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_frame(
+        active: &ActiveAlert,
+        start_pt: i32,
+        max_pt: i32,
+        fly_ms: u32,
+        travel_dx: f32,
+        travel_dy: f32,
+        now: Instant,
+    ) -> FrameParams {
+        let elapsed = now.duration_since(active.phase_started);
+        let fly_ms = fly_ms.max(1) as f32;
+        match active.phase {
+            AlertPhase::FlyIn => {
+                let t = (elapsed.as_secs_f32() * 1000.0) / fly_ms;
+                let ease = ease_out_cubic(t);
+                FrameParams {
+                    font_pt: (start_pt as f32 + (max_pt - start_pt) as f32 * ease).round() as i32,
+                    alpha: ease,
+                    x_offset: 0.0,
+                    y_offset: (1.0 - ease) * RISE_PX,
+                    glow: false,
+                    glow_pulse: 0.0,
+                }
             }
-        }
-
-        // Pass 2: compute target_y by stacking scaled card heights bottom-up.
-        // History cards shrink in height with their scale so stacking stays tight.
-        let hist_h: i32 = deck[..n.saturating_sub(1)]
-            .iter()
-            .map(|c| (HISTORY_H as f32 * c.target_scale).round() as i32 + CARD_GAP)
-            .sum();
-        let window_h = hist_h + SPOTLIGHT_H + CARD_PAD_V * 2;
-        let spotlight_y = (window_h - CARD_PAD_V - SPOTLIGHT_H) as f32;
-
-        deck[n - 1].target_y = spotlight_y;
-        let mut y_top = spotlight_y;
-        for i in (0..n - 1).rev() {
-            let card_h = (HISTORY_H as f32 * deck[i].target_scale).round() as f32;
-            y_top -= CARD_GAP as f32 + card_h;
-            deck[i].target_y = y_top;
-        }
-    }
-
-    // ── Pixel helpers ─────────────────────────────────────────────────────────
-
-    /// Pack an RGBA colour into a premultiplied 32-bpp DIB pixel.
-    /// Memory layout: [B, G, R, A] → u32 = (A<<24)|(R<<16)|(G<<8)|B.
-    #[inline]
-    fn premult(r: u8, g: u8, b: u8, a: u8) -> u32 {
-        let a32 = a as u32;
-        ((a32) << 24)
-            | ((r as u32 * a32 / 255) << 16)
-            | ((g as u32 * a32 / 255) << 8)
-            | (b as u32 * a32 / 255)
-    }
-
-    /// Porter-Duff src-over on two premultiplied pixels.
-    #[inline]
-    fn blend_over(src: u32, dst: u32) -> u32 {
-        let sa = src >> 24;
-        let inv = 255 - sa;
-        let ch = |sh: u32| ((src >> sh & 0xFF) + ((dst >> sh & 0xFF) * inv >> 8)).min(255);
-        ((sa + ((dst >> 24) * inv >> 8)).min(255) << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)
-    }
-
-    /// Fill a rounded rectangle into the DIB pixel slice.
-    fn fill_rrect(
-        pix: &mut [u32],
-        dw: i32,
-        dh: i32,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        r: i32,
-        c: u32,
-    ) {
-        let (x1, y1) = (x1.max(0), y1.max(0));
-        let (x2, y2) = (x2.min(dw), y2.min(dh));
-        let rf = r as f32;
-        for y in y1..y2 {
-            for x in x1..x2 {
-                if (x < x1 + r || x >= x2 - r) && (y < y1 + r || y >= y2 - r) {
-                    let cx = if x < x1 + r {
-                        (x1 + r) as f32
-                    } else {
-                        (x2 - r) as f32
-                    };
-                    let cy = if y < y1 + r {
-                        (y1 + r) as f32
-                    } else {
-                        (y2 - r) as f32
-                    };
-                    let dx = x as f32 - cx;
-                    let dy = y as f32 - cy;
-                    if dx * dx + dy * dy > rf * rf {
-                        continue;
+            AlertPhase::Hold => {
+                let t = elapsed.as_secs_f32();
+                let treatment = active.event.treatment;
+                let mut font_pt = max_pt;
+                let mut x_offset = 0.0f32;
+                let mut y_offset = 0.0f32;
+                let mut glow = false;
+                let mut glow_pulse = 0.0f32;
+                match treatment {
+                    Treatment::None => {}
+                    Treatment::Glow => {
+                        glow = true;
+                        glow_pulse = 0.5 + 0.5 * (t * 2.0 * std::f32::consts::PI * 0.8).sin();
+                    }
+                    Treatment::Vibrate => {
+                        x_offset = (t * 2.0 * std::f32::consts::PI * 13.0).sin() * VIBRATE_PX;
+                        y_offset = (t * 2.0 * std::f32::consts::PI * 17.0).cos() * VIBRATE_PX;
+                    }
+                    Treatment::Pulse => {
+                        let wobble = (t * 2.0 * std::f32::consts::PI * 1.6).sin();
+                        font_pt = (max_pt as f32 * (1.0 + PULSE_AMOUNT * wobble)).round() as i32;
                     }
                 }
-                let idx = (y * dw + x) as usize;
-                pix[idx] = blend_over(c, pix[idx]);
+                FrameParams {
+                    font_pt,
+                    alpha: 1.0,
+                    x_offset,
+                    y_offset,
+                    glow,
+                    glow_pulse,
+                }
             }
-        }
-    }
-
-    /// Fill a plain rectangle into the DIB pixel slice.
-    fn fill_rect(pix: &mut [u32], dw: i32, dh: i32, x1: i32, y1: i32, x2: i32, y2: i32, c: u32) {
-        let (x1, y1) = (x1.max(0), y1.max(0));
-        let (x2, y2) = (x2.min(dw), y2.min(dh));
-        for y in y1..y2 {
-            let base = (y * dw) as usize;
-            for x in x1 as usize..x2 as usize {
-                pix[base + x] = blend_over(c, pix[base + x]);
+            AlertPhase::ShrinkOut => {
+                let t = (elapsed.as_secs_f32() * 1000.0) / fly_ms;
+                let ease = ease_out_cubic(t);
+                FrameParams {
+                    font_pt: (max_pt as f32 - (max_pt - start_pt) as f32 * ease).round() as i32,
+                    alpha: 1.0 - ease,
+                    x_offset: travel_dx * TRAVEL_FRACTION * ease,
+                    y_offset: travel_dy * TRAVEL_FRACTION * ease,
+                    glow: false,
+                    glow_pulse: 0.0,
+                }
             }
         }
     }
 
     // ── Icon loading & compositing ────────────────────────────────────────────
 
-    /// Load a PNG/JPG icon from the `icons/` directory next to the executable.
-    /// Returns premultiplied BGRA pixels at `size×size`, or `None` on failure.
     fn load_icon_pixels_premult(filename: &str, size: i32) -> Option<Vec<u32>> {
         let exe = std::env::current_exe().ok()?;
         let path = exe.parent()?.join("icons").join(filename);
@@ -517,13 +537,20 @@ pub mod overlay {
         let mut out = Vec::with_capacity((size * size) as usize);
         for chunk in raw.chunks_exact(4) {
             let (r, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
-            out.push(premult(r, g, b, a));
+            #[cfg(target_os = "windows")]
+            {
+                out.push(premult(r, g, b, a));
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = (r, g, b, a);
+            }
         }
         Some(out)
     }
 
-    /// Composite premultiplied icon pixels into the main DIB at `(dx, dy)`,
-    /// scaled by `card_alpha`.
+    #[cfg(target_os = "windows")]
+    #[allow(clippy::too_many_arguments)]
     fn composite_icon(
         pix: &mut [u32],
         dw: i32,
@@ -538,11 +565,10 @@ pub mod overlay {
         for iy in 0..icon_sz {
             for ix in 0..icon_sz {
                 let src = icon_pix[(iy * icon_sz + ix) as usize];
-                // Scale all channels of a premultiplied pixel by ka/255.
-                let scaled = (((src >> 24) * ka >> 8) << 24)
-                    | (((src >> 16 & 0xFF) * ka >> 8) << 16)
-                    | (((src >> 8 & 0xFF) * ka >> 8) << 8)
-                    | ((src & 0xFF) * ka >> 8);
+                let scaled = ((((src >> 24) * ka) >> 8) << 24)
+                    | ((((src >> 16 & 0xFF) * ka) >> 8) << 16)
+                    | ((((src >> 8 & 0xFF) * ka) >> 8) << 8)
+                    | (((src & 0xFF) * ka) >> 8);
                 let sx = dx + ix;
                 let sy = dy + iy;
                 if sx < 0 || sy < 0 || sx >= dw || sy >= dh {
@@ -554,119 +580,75 @@ pub mod overlay {
         }
     }
 
-    // ── GDI text → DIB compositing ────────────────────────────────────────────
+    // ── Text measurement ──────────────────────────────────────────────────────
 
-    /// Draw `text` with GDI (white on opaque black), extract per-pixel coverage
-    /// from the brightness channel, then alpha-composite with `text_rgb` into `pix`.
+    /// Measure the rendered pixel width of `text` in `font` so the icon+text
+    /// unit can be centered horizontally in the window.
     #[cfg(target_os = "windows")]
-    unsafe fn composite_text(
-        pix: &mut [u32],
-        dw: i32,
-        dh: i32,
-        text: &str,
-        font: HFONT,
-        (tr, tg, tb): (u8, u8, u8),
-        alpha: f32,
-        dx: i32,
-        dy: i32,
-        rw: i32,
-        rh: i32,
-    ) {
-        if rw <= 0 || rh <= 0 || alpha < 0.004 {
-            return;
-        }
-
-        let bmi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: rw,
-                biHeight: -rh,
-                biPlanes: 1,
-                biBitCount: 32,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+    unsafe fn measure_text_width(font: HFONT, text: &str) -> i32 {
+        use windows::Win32::Graphics::Gdi::GetTextExtentPoint32W;
 
         let hdc_screen = GetDC(None);
-        let hdc_tmp = CreateCompatibleDC(hdc_screen);
-        let mut bits: *mut c_void = std::ptr::null_mut();
-        let Ok(hbm) = CreateDIBSection(hdc_screen, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
-            let _ = DeleteDC(hdc_tmp);
-            ReleaseDC(None, hdc_screen);
-            return;
-        };
+        let hdc = CreateCompatibleDC(hdc_screen);
         ReleaseDC(None, hdc_screen);
-
-        let tmp = std::slice::from_raw_parts_mut(bits as *mut u32, (rw * rh) as usize);
-        // Opaque black background. GDI will not write alpha; any non-black pixel
-        // after drawing is text coverage (handles anti-aliasing correctly).
-        tmp.fill(0xFF00_0000u32);
-
-        let old_bm = SelectObject(hdc_tmp, HGDIOBJ(hbm.0));
-        let old_fn = SelectObject(hdc_tmp, HGDIOBJ(font.0));
-        SetBkMode(hdc_tmp, TRANSPARENT);
-        SetTextColor(hdc_tmp, COLORREF(0x00FF_FFFF)); // white text
-
-        let mut rect = windows::Win32::Foundation::RECT {
-            left: 0,
-            top: 0,
-            right: rw,
-            bottom: rh,
-        };
-        let mut tw: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let len = tw.len() - 1;
-        DrawTextW(
-            hdc_tmp,
-            &mut tw[..len],
-            &mut rect,
-            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOCLIP,
-        );
-
-        SelectObject(hdc_tmp, old_fn);
-        SelectObject(hdc_tmp, old_bm);
-        let _ = DeleteDC(hdc_tmp);
-
-        // Composite coverage pixels into main DIB.
-        for (i, &px) in tmp.iter().enumerate() {
-            let cov = (px >> 16 & 0xFF).max(px >> 8 & 0xFF).max(px & 0xFF) as u8;
-            if cov == 0 {
-                continue;
-            }
-            let sa = (cov as f32 / 255.0 * alpha * 255.0) as u8;
-            if sa == 0 {
-                continue;
-            }
-            let sx = dx + (i as i32 % rw);
-            let sy = dy + (i as i32 / rw);
-            if sx < 0 || sy < 0 || sx >= dw || sy >= dh {
-                continue;
-            }
-            let di = (sy * dw + sx) as usize;
-            pix[di] = blend_over(premult(tr, tg, tb, sa), pix[di]);
-        }
-
-        let _ = DeleteObject(HGDIOBJ(hbm.0));
+        let old = SelectObject(hdc, HGDIOBJ(font.0));
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let mut size = windows::Win32::Foundation::SIZE::default();
+        let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
+        SelectObject(hdc, old);
+        let _ = DeleteDC(hdc);
+        size.cx
     }
 
     // ── Frame rendering ───────────────────────────────────────────────────────
 
     #[cfg(target_os = "windows")]
     unsafe fn render_frame(hwnd: HWND, state: &mut OverlayState) {
-        state.ensure_fonts();
-        let Some(font_normal) = state.hfont_normal else {
-            return;
-        };
-        let Some(font_bold) = state.hfont_bold else {
+        let Some(active) = state.active.as_ref() else {
             return;
         };
 
-        let w = state.window_w;
-        let h = if state.deck.is_empty() {
-            1
-        } else {
-            state.window_height()
+        let (hx, hy) = {
+            let cfg = state.handle.config.lock().unwrap();
+            if cfg.overlay_history_x >= 0 && cfg.overlay_history_y >= 0 {
+                (cfg.overlay_history_x, cfg.overlay_history_y)
+            } else {
+                (state.window_x, state.anchor_center_y + 220)
+            }
         };
+        let travel_dx = (hx - state.window_x) as f32;
+        let travel_dy = (hy - state.anchor_center_y) as f32;
+
+        let frame = resolve_frame(
+            active,
+            state.start_pt,
+            state.max_pt,
+            state.fly_ms,
+            travel_dx,
+            travel_dy,
+            Instant::now(),
+        );
+        if frame.alpha < 0.004 {
+            return;
+        }
+        // overlay_alpha is a user-configurable ceiling on how opaque the
+        // icon/text ever get, applied on top of the animation's own alpha.
+        let overall_alpha = frame.alpha * (state.alpha as f32 / 255.0);
+
+        let font = state.font_for(frame.font_pt.max(6));
+        let text = &state.active.as_ref().unwrap().event.message;
+        let category = state.active.as_ref().unwrap().category;
+        let icon_name = state.active.as_ref().unwrap().event.icon.clone();
+        let event_color = state.active.as_ref().unwrap().event.color.clone();
+        let message_color = state.active.as_ref().unwrap().event.message_color.clone();
+        let border_color = state.active.as_ref().unwrap().event.border_color.clone();
+
+        let px_h = frame.font_pt as f32 * 96.0 / 72.0;
+        let line_h = (px_h * 1.35).round() as i32;
+        let icon_sz = (frame.font_pt as f32 * 1.5).round().clamp(14.0, 160.0) as i32;
+        let content_h = line_h.max(icon_sz);
+        let h = content_h + PAD_V * 2;
+        let w = WINDOW_WIDTH;
 
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -691,178 +673,137 @@ pub mod overlay {
         let old_bm = SelectObject(hdc_mem, HGDIOBJ(hbm.0));
 
         let pix = std::slice::from_raw_parts_mut(bits as *mut u32, (w * h) as usize);
-        pix.fill(0); // fully transparent canvas
+        pix.fill(0);
 
-        // Pre-populate the scaled-font cache for all history card sizes so the
-        // render loop can look up without needing &mut state inside the iter.
-        let n = state.deck.len();
-        {
-            let font_size = state.font_size;
-            let font_name = state.font_name.clone();
-            for card in &state.deck {
-                let card_h =
-                    ((HISTORY_H as f32 * card.cur_scale).round() as i32).max(CORNER_R * 2 + 2);
-                // Quadratic falloff so font shrinks much faster than card scale alone.
-                let desired_pt =
-                    (font_size as f32 * card.cur_scale * card.cur_scale).round() as i32;
-                // Hard cap: font height ≤ 70% of card pixel height (convert px→pt at 96 DPI).
-                let max_pt = (card_h as f32 * 0.70 * 72.0 / 96.0).round() as i32;
-                let pt = desired_pt.min(max_pt).max(6);
-                state
-                    .scaled_font_cache
-                    .entry(pt)
-                    .or_insert_with(|| make_font(&font_name, pt, false));
+        let text_rgb = parse_hex_color(&message_color)
+            .map(|c| {
+                (
+                    (c >> 16 & 0xFF) as u8,
+                    (c >> 8 & 0xFF) as u8,
+                    (c & 0xFF) as u8,
+                )
+            })
+            .unwrap_or(DEFAULT_TEXT_RGB);
+        let border_rgb = parse_hex_color(&border_color)
+            .map(|c| {
+                (
+                    (c >> 16 & 0xFF) as u8,
+                    (c >> 8 & 0xFF) as u8,
+                    (c & 0xFF) as u8,
+                )
+            })
+            .unwrap_or(DEFAULT_BORDER_RGB);
+
+        // Measure icon+gap+text so the whole unit can be horizontally centered.
+        let text_w = measure_text_width(font, text);
+        let unit_w = icon_sz + ICON_TEXT_GAP + text_w;
+        let unit_x = ((w - unit_w) / 2).max(PAD_H);
+
+        // ── Glow halo (drawn first, behind everything — no background panel) ──
+        if frame.glow {
+            let (gr, gg, gb) = text_rgb;
+            let cx_glow = unit_x + icon_sz / 2;
+            let cy_glow = h / 2;
+            for i in (1..=GLOW_LAYERS).rev() {
+                let grow = i * 14;
+                let glow_alpha = (46.0 * frame.glow_pulse * overall_alpha / i as f32) as u8;
+                fill_rrect(
+                    pix,
+                    w,
+                    h,
+                    cx_glow - icon_sz / 2 - grow,
+                    cy_glow - icon_sz / 2 - grow,
+                    unit_x + unit_w + grow,
+                    cy_glow + icon_sz / 2 + grow,
+                    CORNER_R + grow,
+                    premult(gr, gg, gb, glow_alpha),
+                );
             }
         }
-        let font_size = state.font_size;
-        let font_cache = &state.scaled_font_cache;
 
-        for (i, card) in state.deck.iter().enumerate() {
-            let is_spot = i + 1 == n;
-            let alpha = card.cur_alpha.clamp(0.0, 1.0);
-            if alpha < 0.005 {
-                continue;
+        // The x/y offsets (rise-in, vibrate, shrink-travel) move the whole
+        // window via `dst_pt` below, so content here stays centered in place.
+        let cx = unit_x;
+        let cy = (h - icon_sz) / 2;
+
+        // ── Icon swatch ────────────────────────────────────────────────────
+        let ix = cx;
+        let iy = cy;
+        let drew_png = if icon_name.ends_with(".png") || icon_name.ends_with(".jpg") {
+            if let Some(icon_pix) = state
+                .icon_cache
+                .entry(format!("{}@{}", icon_name, icon_sz))
+                .or_insert_with(|| load_icon_pixels_premult(&icon_name, icon_sz))
+                .as_ref()
+                .map(|v| v.as_slice())
+            {
+                composite_icon(pix, w, h, icon_pix, icon_sz, ix, iy, overall_alpha);
+                true
+            } else {
+                false
             }
-
-            let card_h = if is_spot {
-                SPOTLIGHT_H
-            } else {
-                ((HISTORY_H as f32 * card.cur_scale).round() as i32).max(CORNER_R * 2 + 2)
-            };
-            let cy = card.cur_y as i32;
-            let inset = if is_spot {
-                0
-            } else {
-                let card_w = (w as f32 * card.cur_scale).round() as i32;
-                ((w - card_w) / 2).max(0)
-            };
-
-            // Resolve text color early so accent bar can share it.
-            let text_rgb = if let Some(c) = parse_hex_color(&card.event.message_color) {
+        } else {
+            false
+        };
+        if !drew_png {
+            let (ir, ig, ib) = if let Some(c) = parse_hex_color(&event_color) {
                 (
                     (c >> 16 & 0xFF) as u8,
                     (c >> 8 & 0xFF) as u8,
                     (c & 0xFF) as u8,
                 )
             } else {
-                card.category.text_rgb()
+                category.accent()
             };
-
-            // ── Background panel ──────────────────────────────────────────
-            let (br, bg, bb, ba) = CARD_BG;
             fill_rrect(
                 pix,
                 w,
                 h,
-                inset,
-                cy,
-                w - inset,
-                cy + card_h,
-                CORNER_R,
-                premult(br, bg, bb, (ba as f32 * alpha) as u8),
-            );
-
-            // ── Left accent bar (matches font color) ──────────────────────
-            let (ar, ag, ab) = text_rgb;
-            fill_rect(
-                pix,
-                w,
-                h,
-                inset,
-                cy + CORNER_R,
-                inset + ACCENT_W,
-                cy + card_h - CORNER_R,
-                premult(ar, ag, ab, (255.0 * alpha) as u8),
-            );
-
-            // ── Icon swatch ───────────────────────────────────────────────
-            let icon_sz = if is_spot { ICON_SZ_SPOT } else { ICON_SZ_HIST };
-            let ix = inset + ACCENT_W + CARD_PAD_X;
-            let iy = cy + (card_h - icon_sz) / 2;
-            let icon_name = &card.event.icon;
-            let drew_png = if icon_name.ends_with(".png") || icon_name.ends_with(".jpg") {
-                if let Some(icon_pix) = state
-                    .icon_cache
-                    .entry(format!("{}@{}", icon_name, icon_sz))
-                    .or_insert_with(|| load_icon_pixels_premult(icon_name, icon_sz))
-                    .as_ref()
-                    .map(|v| v.as_slice())
-                {
-                    composite_icon(pix, w, h, icon_pix, icon_sz, ix, iy, alpha);
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            if !drew_png {
-                // Fallback: coloured rounded square using event.color or category accent.
-                let (ir, ig, ib) = if let Some(c) = parse_hex_color(&card.event.color) {
-                    (
-                        (c >> 16 & 0xFF) as u8,
-                        (c >> 8 & 0xFF) as u8,
-                        (c & 0xFF) as u8,
-                    )
-                } else {
-                    card.category.accent()
-                };
-                fill_rrect(
-                    pix,
-                    w,
-                    h,
-                    ix,
-                    iy,
-                    ix + icon_sz,
-                    iy + icon_sz,
-                    2,
-                    premult(ir, ig, ib, (200.0 * alpha) as u8),
-                );
-            }
-
-            // ── Message text ──────────────────────────────────────────────
-            let tx = ix + icon_sz + ICON_TEXT_GAP;
-            let font = if is_spot {
-                font_bold
-            } else {
-                let desired_pt =
-                    (font_size as f32 * card.cur_scale * card.cur_scale).round() as i32;
-                let max_pt = (card_h as f32 * 0.70 * 72.0 / 96.0).round() as i32;
-                let pt = desired_pt.min(max_pt).max(6);
-                *font_cache.get(&pt).unwrap_or(&font_normal)
-            };
-            composite_text(
-                pix,
-                w,
-                h,
-                &card.event.message,
-                font,
-                text_rgb,
-                alpha,
-                tx,
-                cy,
-                w - tx - CARD_PAD_X,
-                card_h,
+                ix,
+                iy,
+                ix + icon_sz,
+                iy + icon_sz,
+                4,
+                premult(ir, ig, ib, (200.0 * overall_alpha) as u8),
             );
         }
 
-        let new_top = state.anchor_bottom_y - h;
+        // ── Message text ───────────────────────────────────────────────────
+        let tx = cx + icon_sz + ICON_TEXT_GAP;
+        let stroke_width = ((frame.font_pt as f32 / 20.0).round() as i32).clamp(1, 3);
+        composite_text_stroked(
+            pix,
+            w,
+            h,
+            text,
+            font,
+            text_rgb,
+            border_rgb,
+            stroke_width,
+            overall_alpha,
+            tx,
+            0,
+            w - tx - PAD_H,
+            h,
+            DT_LEFT | DT_NOCLIP,
+        );
+
         let dst_pt = POINT {
-            x: state.window_x,
-            y: new_top,
+            x: state.window_x + frame.x_offset.round() as i32,
+            y: state.anchor_center_y - h / 2 + frame.y_offset.round() as i32,
         };
         let win_size = SIZE { cx: w, cy: h };
         let src_pt = POINT { x: 0, y: 0 };
         let blend = BLENDFUNCTION {
-            BlendOp: 0, // AC_SRC_OVER
+            BlendOp: 0,
             BlendFlags: 0,
             SourceConstantAlpha: 255,
-            AlphaFormat: 1, // AC_SRC_ALPHA — use per-pixel alpha from DIB
+            AlphaFormat: 1,
         };
         let _ = UpdateLayeredWindow(
             hwnd,
             hdc_screen,
-            Some(&dst_pt), // pin bottom: move top up as height grows
+            Some(&dst_pt),
             Some(&win_size),
             hdc_mem,
             Some(&src_pt),
@@ -879,25 +820,16 @@ pub mod overlay {
 
     // ── Entry point ───────────────────────────────────────────────────────────
 
-    pub fn spawn_overlay(
-        cfg: Arc<Mutex<Config>>,
-        queue: Arc<Mutex<Vec<OverlayEvent>>>,
-        quit: Arc<AtomicBool>,
-    ) {
+    pub fn spawn_overlay(handle: Arc<AppHandle>) {
         std::thread::Builder::new()
             .name("froklog-overlay".into())
-            .spawn(move || run_overlay_thread(cfg, queue, quit))
+            .spawn(move || run_overlay_thread(handle))
             .expect("spawn overlay thread");
     }
 
     #[cfg(target_os = "windows")]
-    fn run_overlay_thread(
-        cfg: Arc<Mutex<Config>>,
-        queue: Arc<Mutex<Vec<OverlayEvent>>>,
-        quit: Arc<AtomicBool>,
-    ) {
+    fn run_overlay_thread(handle: Arc<AppHandle>) {
         unsafe {
-            // COM is required for SAPI TTS (ISpVoice).
             let _ = windows::Win32::System::Com::CoInitializeEx(
                 None,
                 windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
@@ -919,17 +851,18 @@ pub mod overlay {
             };
             let _ = RegisterClassExW(&wc);
 
-            let (wx, anchor_bottom) = initial_position(&cfg.lock().unwrap());
-            let state = Box::new(OverlayState::new(&cfg, queue, quit, wx, anchor_bottom));
+            let (wx, anchor_center_y) = initial_position(&handle.config.lock().unwrap());
+            let state = Box::new(OverlayState::new(&handle, wx, anchor_center_y));
             let state_ptr = Box::into_raw(state);
 
+            // No WS_VISIBLE — the first WM_TIMER tick decides whether to show it.
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 PCWSTR(class_w.as_ptr()),
                 PCWSTR::null(),
-                WS_POPUP | WS_VISIBLE,
+                WS_POPUP,
                 wx,
-                anchor_bottom - 1, // 1px initial window; top = anchor - height
+                anchor_center_y - 1,
                 WINDOW_WIDTH,
                 1,
                 None,
@@ -938,6 +871,10 @@ pub mod overlay {
                 Some(state_ptr as *const c_void),
             )
             .expect("CreateWindowExW overlay");
+
+            handle
+                .overlay_hwnd
+                .store(hwnd.0 as isize, Ordering::Relaxed);
 
             windows::Win32::UI::WindowsAndMessaging::SetTimer(
                 hwnd,
@@ -957,12 +894,7 @@ pub mod overlay {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn run_overlay_thread(
-        _cfg: Arc<Mutex<Config>>,
-        _queue: Arc<Mutex<Vec<OverlayEvent>>>,
-        _quit: Arc<AtomicBool>,
-    ) {
-    }
+    fn run_overlay_thread(_handle: Arc<AppHandle>) {}
 
     // ── Window procedure ──────────────────────────────────────────────────────
 
@@ -987,19 +919,34 @@ pub mod overlay {
 
         match msg {
             WM_TIMER => {
-                if state.quit.load(Ordering::Relaxed) {
+                if state.handle.quit.load(Ordering::Relaxed) {
                     let _ = DestroyWindow(hwnd);
                     return LRESULT(0);
                 }
-                state.sync_config();
+                let lock_changed = state.sync_config();
+                if lock_changed {
+                    apply_lock_style(hwnd, state.locked);
+                }
                 state.drain_queue();
-                state.tick_animate();
+                state.tick_state();
+
+                let show = (state.overlay_enabled || state.force_show) && state.active.is_some();
+                if !show {
+                    if state.visible {
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        state.visible = false;
+                    }
+                    return LRESULT(0);
+                }
+                if !state.visible {
+                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    state.visible = true;
+                }
                 render_frame(hwnd, state);
                 LRESULT(0)
             }
 
             WM_PAINT => {
-                // UpdateLayeredWindow owns the surface; validate to silence WM_PAINT loops.
                 let mut ps = PAINTSTRUCT::default();
                 let _ = BeginPaint(hwnd, &mut ps);
                 let _ = EndPaint(hwnd, &ps);
@@ -1023,10 +970,10 @@ pub mod overlay {
                 let mut rect = windows::Win32::Foundation::RECT::default();
                 if GetWindowRect(hwnd, &mut rect).is_ok() {
                     state.window_x = rect.left;
-                    state.anchor_bottom_y = rect.bottom;
-                    let mut cfg = state.config.lock().unwrap();
+                    state.anchor_center_y = (rect.top + rect.bottom) / 2;
+                    let mut cfg = state.handle.config.lock().unwrap();
                     cfg.overlay_x = rect.left;
-                    cfg.overlay_y = rect.bottom; // store bottom anchor so grow-up is stable on restart
+                    cfg.overlay_y = state.anchor_center_y;
                     cfg.save();
                 }
                 LRESULT(0)
@@ -1043,38 +990,6 @@ pub mod overlay {
 
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
-    }
-
-    // ── Utilities ─────────────────────────────────────────────────────────────
-
-    #[cfg(target_os = "windows")]
-    unsafe fn make_font(name: &str, pt_size: i32, bold: bool) -> HFONT {
-        let height = -(pt_size * 96 / 72);
-        let weight = if bold {
-            FW_BOLD.0 as i32
-        } else {
-            FW_NORMAL.0 as i32
-        };
-        let nw: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut face = [0u16; 32];
-        let n = nw.len().min(31);
-        face[..n].copy_from_slice(&nw[..n]);
-        CreateFontW(
-            height,
-            0,
-            0,
-            0,
-            weight,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_DEFAULT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
-            DEFAULT_QUALITY.0 as u32,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            PCWSTR(face.as_ptr()),
-        )
     }
 
     // ── TTS helpers ───────────────────────────────────────────────────────────
@@ -1127,7 +1042,6 @@ pub mod overlay {
             }
             let key_name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
 
-            // Try to read Attributes\Name for a friendly display name.
             let attr_path = format!(
                 "SOFTWARE\\Microsoft\\Speech\\Voices\\Tokens\\{}\\Attributes",
                 key_name
@@ -1199,9 +1113,8 @@ pub mod overlay {
             use windows::Win32::Media::Speech::{ISpVoice, SpVoice};
             use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
 
-            // Read current TTS settings.
             let (enabled, speed, mode, re, ro, ra, voice_id) = {
-                let cfg = self.config.lock().unwrap();
+                let cfg = self.handle.config.lock().unwrap();
                 (
                     cfg.tts_enabled,
                     cfg.tts_speed.clone(),
@@ -1223,7 +1136,6 @@ pub mod overlay {
                 _ => {}
             }
 
-            // Lazily create the ISpVoice COM object.
             if self.tts_voice.is_none() {
                 if let Ok(voice) = CoCreateInstance::<_, ISpVoice>(&SpVoice, None, CLSCTX_ALL) {
                     if !voice_id.is_empty() {
@@ -1240,21 +1152,18 @@ pub mod overlay {
                 return;
             };
 
-            // Sync rate if the user changed it since last call.
             let new_rate = tts_speed_to_rate(&speed);
             if new_rate != self.tts_rate {
                 self.tts_rate = new_rate;
                 let _ = voice.SetRate(new_rate);
             }
 
-            // Determine speak flags: SPF_ASYNC=1, SPF_PURGEBEFORESPEAK=2.
             let flags: u32 = match mode {
                 TtsAudioMode::InterruptConstantly => 1 | 2,
                 TtsAudioMode::QueueAll => 1,
                 TtsAudioMode::SmartPriority => match priority {
                     VoicePriority::Emergency => 1 | 2,
                     VoicePriority::Ambient => {
-                        // Suppress if voice is already speaking.
                         if is_sapi_voice_speaking(voice) {
                             return;
                         }
@@ -1313,7 +1222,6 @@ pub mod overlay {
             let Some(tok) = token else { break };
 
             if let Ok(id_ptr) = tok.GetId() {
-                // id_ptr is a full registry path; compare just the final component.
                 let full = id_ptr.to_string().unwrap_or_default();
                 CoTaskMemFree(Some(id_ptr.0 as *mut _));
                 let token_key = full.rsplit('\\').next().unwrap_or("");
@@ -1325,22 +1233,111 @@ pub mod overlay {
         }
     }
 
-    fn play_sound(path: &str) {
-        #[cfg(target_os = "windows")]
-        {
-            let resolved = resolve_sound_path(path);
-            std::thread::spawn(move || unsafe {
-                let pw: Vec<u16> = resolved.encode_utf16().chain(std::iter::once(0)).collect();
-                let _ = windows::Win32::Media::Audio::PlaySoundW(
-                    PCWSTR(pw.as_ptr()),
-                    None,
-                    windows::Win32::Media::Audio::SND_FILENAME
-                        | windows::Win32::Media::Audio::SND_ASYNC,
-                );
-            });
+    /// Overall volume (0-100) applied to sounds played via `play_sound`, kept
+    /// as a process-wide atomic so the fire-and-forget playback thread doesn't
+    /// need a `Config` handle threaded through it. Set from `Config.sound_volume`
+    /// at startup and whenever the Settings dialog is saved.
+    static SOUND_VOLUME_PERCENT: AtomicU8 = AtomicU8::new(100);
+    /// Master mute for `play_sound`, mirroring `Config.sound_enabled`.
+    static SOUND_ENABLED: AtomicBool = AtomicBool::new(true);
+
+    pub fn set_sound_volume_percent(percent: u8) {
+        SOUND_VOLUME_PERCENT.store(percent, Ordering::Relaxed);
+    }
+
+    pub fn set_sound_enabled(enabled: bool) {
+        SOUND_ENABLED.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Name of the currently-active sound package, kept as a process-wide
+    /// value for the same reason as `SOUND_VOLUME_PERCENT` above — sound
+    /// resolution happens at play-time, so updating this is all that's
+    /// needed for a package switch to take effect on the next sound played,
+    /// with no engine restart. Set from `Config.sound_package` at startup
+    /// and whenever the Settings dialog is saved.
+    static ACTIVE_SOUND_PACKAGE: Mutex<String> = Mutex::new(String::new());
+
+    pub fn set_active_sound_package(name: &str) {
+        *ACTIVE_SOUND_PACKAGE.lock().unwrap() = name.to_string();
+    }
+
+    /// Resolves `label` to a playable path via the active sound package,
+    /// falling back to the default package. `None` if empty or unresolvable —
+    /// an unresolvable label is never a crash, just a missed sound.
+    fn resolve_sound_label(label: &str) -> Option<String> {
+        if label.is_empty() {
+            return None;
+        }
+        let active = ACTIVE_SOUND_PACKAGE.lock().unwrap().clone();
+        let active = if active.is_empty() {
+            crate::sound_packages::sound_packages::DEFAULT_PACKAGE.to_string()
+        } else {
+            active
+        };
+        crate::sound_packages::sound_packages::resolve_label(&active, label)
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+
+    /// Plays the sound file that `label` resolves to, subject to the
+    /// "Sound enabled" setting — this is what triggers use to fire alerts.
+    pub(crate) fn play_sound_label(label: &str) {
+        if let Some(path) = resolve_sound_label(label) {
+            play_sound(&path);
         }
     }
 
+    /// Plays `label`'s sound unconditionally, ignoring the "Sound enabled"
+    /// setting — used by the trigger editor's ▶ preview button, so users can
+    /// audition a sound even while alerts are muted.
+    pub(crate) fn preview_sound_label(label: &str) {
+        if let Some(path) = resolve_sound_label(label) {
+            play_sound_file(&path);
+        }
+    }
+
+    pub(crate) fn play_sound(path: &str) {
+        if !SOUND_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+        play_sound_file(path);
+    }
+
+    /// Plays `path` unconditionally, ignoring the "Sound enabled" setting —
+    /// used by the Sounds tab's preview button.
+    pub(crate) fn preview_sound(path: &str) {
+        play_sound_file(path);
+    }
+
+    fn play_sound_file(path: &str) {
+        #[cfg(target_os = "windows")]
+        {
+            let resolved = resolve_sound_path(path);
+            let volume = SOUND_VOLUME_PERCENT.load(Ordering::Relaxed) as f32 / 100.0;
+            std::thread::spawn(move || {
+                let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
+                    return;
+                };
+                let Ok(sink) = rodio::Sink::try_new(&handle) else {
+                    return;
+                };
+                sink.set_volume(volume);
+                let Ok(file) = std::fs::File::open(&resolved) else {
+                    return;
+                };
+                let Ok(source) = rodio::Decoder::new(std::io::BufReader::new(file)) else {
+                    return;
+                };
+                sink.append(source);
+                sink.sleep_until_end();
+            });
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = path;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
     fn resolve_sound_path(s: &str) -> String {
         if s.starts_with("sounds/") || s.starts_with("sounds\\") {
             if let Ok(exe) = std::env::current_exe() {
@@ -1355,50 +1352,22 @@ pub mod overlay {
         s.to_string()
     }
 
-    /// Returns `(x, anchor_bottom_y)`.  The overlay window bottom is pinned at
-    /// `anchor_bottom_y` and grows upward as cards are added.
+    /// Returns `(x, anchor_center_y)`. The overlay window is centred
+    /// vertically on `anchor_center_y` and grows/shrinks around it.
     fn initial_position(cfg: &Config) -> (i32, i32) {
         #[cfg(target_os = "windows")]
         {
             if cfg.overlay_x >= 0 && cfg.overlay_y >= 0 {
-                // overlay_y was saved as rect.bottom (the bottom anchor).
                 return (cfg.overlay_x, cfg.overlay_y);
             }
             unsafe {
                 let sw = GetSystemMetrics(SM_CXSCREEN);
                 let sh = GetSystemMetrics(SM_CYSCREEN);
-                // Default anchor: 3/4 down the screen + one-card height
-                let anchor = sh * 3 / 4 + SPOTLIGHT_H + CARD_PAD_V * 2;
+                let anchor = (sh as f32 * 0.35) as i32;
                 ((sw - WINDOW_WIDTH) / 2, anchor)
             }
         }
         #[cfg(not(target_os = "windows"))]
         (cfg.overlay_x.max(0), cfg.overlay_y.max(1))
-    }
-
-    /// Parse `#RRGGBB` or `RRGGBB` → `0x00RRGGBB`.
-    fn parse_hex_color(s: &str) -> Option<u32> {
-        let s = s.trim_start_matches('#');
-        if s.len() == 6 {
-            let r = u32::from_str_radix(&s[0..2], 16).ok()?;
-            let g = u32::from_str_radix(&s[2..4], 16).ok()?;
-            let b = u32::from_str_radix(&s[4..6], 16).ok()?;
-            Some((r << 16) | (g << 8) | b)
-        } else {
-            None
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    pub fn save_position(hwnd_raw: usize, cfg: &mut Config) {
-        unsafe {
-            let hwnd = HWND(hwnd_raw as *mut c_void);
-            let mut rect = windows::Win32::Foundation::RECT::default();
-            if GetWindowRect(hwnd, &mut rect).is_ok() {
-                cfg.overlay_x = rect.left;
-                cfg.overlay_y = rect.top;
-                cfg.save();
-            }
-        }
     }
 }

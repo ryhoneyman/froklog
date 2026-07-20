@@ -6,11 +6,12 @@
 #[cfg(feature = "tray")]
 #[allow(clippy::module_inception)]
 pub mod tray {
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
     use std::sync::RwLock;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use arc_swap::ArcSwap;
     use tray_icon::{
         menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
         TrayIconBuilder, TrayIconEvent,
@@ -18,6 +19,7 @@ pub mod tray {
     use winit::event_loop::{ControlFlow, EventLoop};
 
     use crate::config::Config;
+    use crate::state::CombatState;
     use crate::triggers::engine::TriggerEngine;
 
     // ── Menu item IDs ─────────────────────────────────────────────────────────
@@ -25,7 +27,7 @@ pub mod tray {
     const ID_STATUS: &str = "status";
     const ID_TOGGLE_LOGGING: &str = "toggle_logging";
     const ID_TOGGLE_OVERLAY: &str = "toggle_overlay";
-    const ID_OVERLAY_SETTINGS: &str = "overlay_settings";
+    const ID_TOGGLE_METER: &str = "toggle_meter";
     const ID_SETTINGS: &str = "settings";
     const ID_COPY_VIEWER_URL: &str = "copy_viewer_url";
     const ID_OPEN_VIEWER_URL: &str = "open_viewer_url";
@@ -44,10 +46,33 @@ pub mod tray {
         pub quit: Arc<AtomicBool>,
         /// Mirrors config.logging_enabled; engine monitor polls this.
         pub logging_enabled: Arc<AtomicBool>,
-        /// Prevents opening multiple settings windows simultaneously.
+        /// Prevents opening multiple Settings windows simultaneously.
         pub settings_open: Arc<AtomicBool>,
-        /// Prevents opening multiple overlay-config windows simultaneously.
-        pub overlay_config_open: Arc<AtomicBool>,
+        /// Raw HWND of the open Settings window (0 = none), so the DPS
+        /// meter's gear icon can bring an already-open dialog to the front
+        /// and switch it to the DPS Meter tab instead of no-op'ing.
+        pub settings_hwnd: Arc<AtomicIsize>,
+        /// Raw HWND of the alert overlay window (0 = not yet created).
+        pub overlay_hwnd: Arc<AtomicIsize>,
+        /// Raw HWND of the history overlay window (0 = not yet created).
+        pub overlay_history_hwnd: Arc<AtomicIsize>,
+        /// Raw HWND of the DPS meter window (0 = not yet created).
+        pub meter_hwnd: Arc<AtomicIsize>,
+        /// True while the Settings dialog's "Show All Windows" button is
+        /// active — forces the alert overlay, history overlay, and DPS meter
+        /// to render a draggable placeholder even with no real content, so
+        /// the user can reposition them without needing the (now-removed)
+        /// in-window pin. Cleared when the Settings dialog closes.
+        pub force_show_windows: Arc<AtomicBool>,
+        /// Live-aggregated combat state, built locally by the parser. Created once so
+        /// it survives engine restarts — the DPS meter overlay reads it on a timer.
+        pub combat_state: Arc<ArcSwap<CombatState>>,
+        /// Set to true to ask the parser to clear combat totals (keeps
+        /// `lines_parsed`/player identity) on the next log line. Consumed by
+        /// `parser::run`'s hot loop, then reset back to false. Created once so
+        /// it's triggerable from any UI (e.g. the DPS meter's clear button)
+        /// regardless of engine restarts.
+        pub reset_flag: Arc<AtomicBool>,
         /// Cumulative count of events successfully pushed to the server.
         pub events_sent: Arc<AtomicU64>,
         /// True while the pusher has an active WebSocket connection.
@@ -58,6 +83,10 @@ pub mod tray {
         pub trigger_engine: Arc<Mutex<Option<TriggerEngine>>>,
         /// Shared queue from trigger engine → overlay window.
         pub overlay_queue: Arc<Mutex<Vec<crate::triggers::engine::OverlayEvent>>>,
+        /// Messages that finished flying through the alert overlay, read by
+        /// the history overlay window. Created once so it survives engine
+        /// restarts, same reasoning as `combat_state`.
+        pub overlay_history: Arc<Mutex<Vec<crate::overlay_history::overlay_history::HistoryEntry>>>,
     }
 
     impl AppHandle {
@@ -69,12 +98,19 @@ pub mod tray {
                 restart: Arc::new(AtomicBool::new(false)),
                 quit: Arc::new(AtomicBool::new(false)),
                 settings_open: Arc::new(AtomicBool::new(false)),
-                overlay_config_open: Arc::new(AtomicBool::new(false)),
+                settings_hwnd: Arc::new(AtomicIsize::new(0)),
+                overlay_hwnd: Arc::new(AtomicIsize::new(0)),
+                overlay_history_hwnd: Arc::new(AtomicIsize::new(0)),
+                meter_hwnd: Arc::new(AtomicIsize::new(0)),
+                force_show_windows: Arc::new(AtomicBool::new(false)),
+                combat_state: Arc::new(ArcSwap::from_pointee(CombatState::default())),
+                reset_flag: Arc::new(AtomicBool::new(false)),
                 events_sent: Arc::new(AtomicU64::new(0)),
                 connected: Arc::new(AtomicBool::new(false)),
                 last_connect_error: Arc::new(RwLock::new(None)),
                 trigger_engine: Arc::new(Mutex::new(None)),
                 overlay_queue: Arc::new(Mutex::new(Vec::new())),
+                overlay_history: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -87,21 +123,30 @@ pub mod tray {
 
         let logging_on = handle.logging_enabled.load(Ordering::Relaxed);
         let overlay_on = handle.config.lock().unwrap().overlay_enabled;
+        let meter_on = handle.config.lock().unwrap().meter_enabled;
         let (
             tray,
             toggle_item,
             overlay_toggle_item,
+            meter_toggle_item,
             status_item,
             copy_url_item,
             open_url_item,
             menu,
-        ) = build_tray(&handle.config.lock().unwrap(), logging_on, overlay_on);
+        ) = build_tray(
+            &handle.config.lock().unwrap(),
+            logging_on,
+            overlay_on,
+            meter_on,
+        );
         #[allow(clippy::arc_with_non_send_sync)]
         let tray = Arc::new(Mutex::new(tray));
         #[allow(clippy::arc_with_non_send_sync)]
         let toggle_item = Arc::new(Mutex::new(toggle_item));
         #[allow(clippy::arc_with_non_send_sync)]
         let overlay_toggle_item = Arc::new(Mutex::new(overlay_toggle_item));
+        #[allow(clippy::arc_with_non_send_sync)]
+        let meter_toggle_item = Arc::new(Mutex::new(meter_toggle_item));
 
         let handle_clone = Arc::clone(&handle);
 
@@ -135,8 +180,22 @@ pub mod tray {
                         }
                     ) {
                         if !handle_clone.settings_open.swap(true, Ordering::Relaxed) {
-                            crate::settings_win::open_settings(Arc::clone(&handle_clone));
+                            crate::overlay_config_win::open_settings(Arc::clone(&handle_clone), 0);
+                        } else {
+                            bring_windows_forward(&handle_clone);
                         }
+                    } else if matches!(
+                        evt,
+                        tray_icon::TrayIconEvent::Click {
+                            button: tray_icon::MouseButton::Right,
+                            button_state: tray_icon::MouseButtonState::Down,
+                            ..
+                        }
+                    ) {
+                        // Right-click also opens the native context menu (handled by
+                        // the OS/tray-icon crate); bring any open windows forward at
+                        // the same time so they're not left buried behind the game.
+                        bring_windows_forward(&handle_clone);
                     }
                 }
 
@@ -149,19 +208,21 @@ pub mod tray {
                         ID_TOGGLE_OVERLAY => {
                             toggle_overlay(&handle_clone, &overlay_toggle_item);
                         }
-                        ID_OVERLAY_SETTINGS
-                            if !handle_clone
-                                .overlay_config_open
-                                .swap(true, Ordering::Relaxed) =>
-                        {
-                            crate::overlay_config_win::open_overlay_config(Arc::clone(
-                                &handle_clone,
-                            ));
+                        ID_TOGGLE_METER => {
+                            toggle_meter(&handle_clone, &meter_toggle_item);
                         }
-                        ID_SETTINGS
-                            if !handle_clone.settings_open.swap(true, Ordering::Relaxed) =>
-                        {
-                            crate::settings_win::open_settings(Arc::clone(&handle_clone));
+                        ID_SETTINGS => {
+                            if !handle_clone.settings_open.swap(true, Ordering::Relaxed) {
+                                crate::overlay_config_win::open_settings(
+                                    Arc::clone(&handle_clone),
+                                    0,
+                                );
+                            } else {
+                                // Already open (possibly buried behind the game) —
+                                // bring it (and the HUD overlays) forward instead
+                                // of silently doing nothing.
+                                bring_windows_forward(&handle_clone);
+                            }
                         }
                         ID_OPEN_VIEWER_URL => {
                             let url = handle_clone.config.lock().unwrap().stream_url();
@@ -283,6 +344,25 @@ pub mod tray {
         // Overlay live-reloads overlay_enabled from config on its timer tick.
     }
 
+    // ── DPS meter toggle ──────────────────────────────────────────────────────
+
+    fn toggle_meter(handle: &Arc<AppHandle>, meter_toggle_item: &Arc<Mutex<MenuItem>>) {
+        let now_on = {
+            let mut cfg = handle.config.lock().unwrap();
+            cfg.meter_enabled = !cfg.meter_enabled;
+            let v = cfg.meter_enabled;
+            cfg.save();
+            v
+        };
+        let label = if now_on {
+            "Hide DPS Meter"
+        } else {
+            "Show DPS Meter"
+        };
+        meter_toggle_item.lock().unwrap().set_text(label);
+        // Meter live-reloads meter_enabled from config on its timer tick.
+    }
+
     // ── Logging toggle ────────────────────────────────────────────────────────
 
     fn toggle_logging(
@@ -321,6 +401,66 @@ pub mod tray {
         };
         toggle_item.lock().unwrap().set_text(label);
     }
+
+    // ── Bring windows forward ────────────────────────────────────────────────
+
+    /// Brings every currently-open froklog window to the front on a tray
+    /// right-click. The alert/history overlays and DPS meter are
+    /// `WS_EX_TOPMOST | WS_EX_NOACTIVATE` by design (they must never steal
+    /// keyboard focus from the game), so for those we just re-assert their
+    /// topmost z-order; the Settings dialog is a normal window and needs real
+    /// foreground activation, which — per Windows' foreground-activation
+    /// rules — has to happen on its own thread, so we post it a message
+    /// rather than calling `SetForegroundWindow` on it directly here.
+    #[cfg(target_os = "windows")]
+    fn bring_windows_forward(handle: &Arc<AppHandle>) {
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            IsWindowVisible, PostMessageW, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE,
+        };
+
+        for hwnd_atomic in [
+            &handle.overlay_hwnd,
+            &handle.overlay_history_hwnd,
+            &handle.meter_hwnd,
+        ] {
+            let raw = hwnd_atomic.load(Ordering::Relaxed);
+            if raw == 0 {
+                continue;
+            }
+            let hwnd = HWND(raw as *mut std::ffi::c_void);
+            unsafe {
+                if IsWindowVisible(hwnd).as_bool() {
+                    let _ = SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
+            }
+        }
+
+        let settings = handle.settings_hwnd.load(Ordering::Relaxed);
+        if settings != 0 {
+            let hwnd = HWND(settings as *mut std::ffi::c_void);
+            unsafe {
+                let _ = PostMessageW(
+                    hwnd,
+                    crate::overlay_config_win::overlay_config::WM_BRING_TO_FRONT,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn bring_windows_forward(_handle: &Arc<AppHandle>) {}
 
     // ── Clipboard ─────────────────────────────────────────────────────────────
 
@@ -392,8 +532,10 @@ pub mod tray {
         cfg: &Config,
         logging_on: bool,
         overlay_on: bool,
+        meter_on: bool,
     ) -> (
         tray_icon::TrayIcon,
+        MenuItem,
         MenuItem,
         MenuItem,
         MenuItem,
@@ -424,8 +566,13 @@ pub mod tray {
         };
         let overlay_toggle_item =
             MenuItem::with_id(ID_TOGGLE_OVERLAY, overlay_toggle_label, true, None);
-        let overlay_settings_item =
-            MenuItem::with_id(ID_OVERLAY_SETTINGS, "Overlay Settings…", true, None);
+
+        let meter_toggle_label = if meter_on {
+            "Hide DPS Meter"
+        } else {
+            "Show DPS Meter"
+        };
+        let meter_toggle_item = MenuItem::with_id(ID_TOGGLE_METER, meter_toggle_label, true, None);
 
         let settings_item = MenuItem::with_id(ID_SETTINGS, "Settings…", true, None);
         let is_reg = cfg.is_registered();
@@ -439,9 +586,10 @@ pub mod tray {
         menu.append(&toggle_item).unwrap();
         menu.append(&PredefinedMenuItem::separator()).unwrap();
         menu.append(&overlay_toggle_item).unwrap();
-        menu.append(&overlay_settings_item).unwrap();
+        menu.append(&meter_toggle_item).unwrap();
         menu.append(&PredefinedMenuItem::separator()).unwrap();
         menu.append(&settings_item).unwrap();
+        menu.append(&PredefinedMenuItem::separator()).unwrap();
         menu.append(&open_url_item).unwrap();
         menu.append(&copy_url_item).unwrap();
         menu.append(&sep).unwrap();
@@ -459,6 +607,7 @@ pub mod tray {
             tray,
             toggle_item,
             overlay_toggle_item,
+            meter_toggle_item,
             status_item,
             copy_url_item,
             open_url_item,
@@ -496,11 +645,17 @@ pub mod tray {
         if !logging_on {
             return "Logging disabled".into();
         }
+        if !cfg.local_ready() {
+            return "Not configured (missing log file)".into();
+        }
+        if !cfg.remote_logging_enabled {
+            return "Local only (remote logging off)".into();
+        }
         if !cfg.is_ready() {
             if !cfg.is_registered() {
-                return "Not registered".into();
+                return "Local only (not registered)".into();
             }
-            return "Not configured (missing log file or server URL)".into();
+            return "Local only (missing server URL)".into();
         }
         if !connected {
             return "Reconnecting…".into();
@@ -526,12 +681,14 @@ pub mod tray {
             .as_deref()
             .and_then(|p| std::path::Path::new(p).file_name()?.to_str())
             .unwrap_or("no log");
+        if !cfg.local_ready() {
+            return "froklog — not configured".into();
+        }
+        if !cfg.remote_logging_enabled {
+            return format!("froklog ● {log} — local only (remote off)");
+        }
         if !cfg.is_registered() {
-            return if cfg.log_path.is_some() {
-                format!("froklog ○ {log} — not registered")
-            } else {
-                "froklog — not configured".into()
-            };
+            return format!("froklog ○ {log} — not registered");
         }
         if !connected {
             return format!("froklog ○ {log} — reconnecting");
@@ -552,13 +709,15 @@ pub mod tray {
 
         let bytes = if !logging_on {
             RED
+        } else if !cfg.local_ready() {
+            GRAY
+        } else if !cfg.remote_logging_enabled {
+            // Remote push intentionally off — local engine is fully up, so this
+            // isn't a warning state.
+            GREEN
         } else if !cfg.is_registered() {
-            // Partially configured: orange if log chosen, gray if nothing set.
-            if cfg.log_path.is_some() {
-                ORANGE
-            } else {
-                GRAY
-            }
+            // Log chosen, remote push wanted, but not registered yet — orange.
+            ORANGE
         } else if !connected {
             // Registered but WS link is down — show orange to signal reconnecting.
             ORANGE

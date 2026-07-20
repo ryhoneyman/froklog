@@ -95,7 +95,7 @@ pub mod neural_impl {
 
     /// Return the most contextually useful slot value for the model to condition on.
     /// Priority: mob/target entity names first, then spell names, then actor names.
-    fn pick_primary_slot<'a>(slots: &'a HashMap<String, String>) -> Option<&'a str> {
+    fn pick_primary_slot(slots: &HashMap<String, String>) -> Option<&str> {
         for key in &[
             "mob", "player", "healer", "target", "spell", "ability", "caster", "src",
         ] {
@@ -157,11 +157,12 @@ pub mod neural_impl {
         } else {
             None
         };
-        for opt_tag in [verbosity_tag, humor_tag, patience_tag] {
-            if let Some(tag) = opt_tag {
-                if let Some(&id) = meta.ctrl.get(tag) {
-                    ids.push(id);
-                }
+        for tag in [verbosity_tag, humor_tag, patience_tag]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(&id) = meta.ctrl.get(tag) {
+                ids.push(id);
             }
         }
 

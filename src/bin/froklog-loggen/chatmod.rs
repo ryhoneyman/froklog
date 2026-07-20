@@ -624,6 +624,7 @@ impl<'a> NeuralCtx<'a> {
     }
 
     /// Same interface as `ChatCtx::respond()`.
+    #[allow(clippy::too_many_arguments)]
     pub fn respond(
         &mut self,
         trigger: &ChatTrigger<'_>,
@@ -815,7 +816,7 @@ fn trigger_kind_and_slots(trigger: &ChatTrigger<'_>) -> (&'static str, HashMap<S
 pub enum ChatDispatch<'a> {
     Phrasebook(ChatCtx<'a>),
     #[cfg(feature = "neural")]
-    Neural(NeuralCtx<'a>),
+    Neural(Box<NeuralCtx<'a>>),
 }
 
 impl<'a> ChatDispatch<'a> {

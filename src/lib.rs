@@ -17,4 +17,12 @@ pub mod overlay;
 #[cfg(feature = "tray")]
 pub mod overlay_config_win;
 #[cfg(feature = "tray")]
-pub mod settings_win;
+pub mod overlay_dps;
+#[cfg(feature = "tray")]
+pub mod overlay_draw;
+#[cfg(feature = "tray")]
+pub mod overlay_history;
+#[cfg(feature = "tray")]
+pub mod sound_packages;
+#[cfg(feature = "tray")]
+pub mod spell_icons;
