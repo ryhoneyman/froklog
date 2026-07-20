@@ -7,4 +7,10 @@ fn main() {
             .file("compat/glibc_compat.c")
             .compile("glibc_compat");
     }
+
+    // Embed the frog icon as froklog.exe's file icon. No-ops when not
+    // targeting Windows (native Linux builds, other binaries' host checks).
+    embed_resource::compile_for("assets/froklog.rc", ["froklog"], embed_resource::NONE)
+        .manifest_optional()
+        .unwrap();
 }
