@@ -10,7 +10,7 @@ pub mod tailer;
 pub mod tray;
 pub mod triggers;
 
-#[cfg(feature = "tray")]
+#[cfg(feature = "triggers")]
 pub mod assets;
 #[cfg(feature = "tray")]
 pub mod overlay;
@@ -22,7 +22,7 @@ pub mod overlay_dps;
 pub mod overlay_draw;
 #[cfg(feature = "tray")]
 pub mod overlay_history;
-#[cfg(feature = "tray")]
+#[cfg(feature = "triggers")]
 pub mod sound_packages;
 #[cfg(feature = "tray")]
 pub mod spell_icons;

@@ -34,7 +34,11 @@ path = "src/bin/froklog-loggen/main.rs"
 [features]
 default = []
 # Windows systray client (no visible window; requires Windows cross-compile)
-tray = ["dep:tray-icon", "dep:winit", "dep:image", "dep:zip"]
+tray = ["triggers", "dep:tray-icon", "dep:winit", "dep:image", "dep:zip"]
+# Data-driven trigger engine on its own. It is pure Rust — regex, glob and
+# serde, no platform APIs — so a non-Windows client can reuse the matching,
+# variables and templates and supply its own output for the actions.
+triggers = ["dep:zip"]
 # Neural chat backend — gates ort and serde_json (already a dep) usage in NeuralBackend
 neural = ["dep:tract-onnx", "dep:sentencepiece-rs"]
 [dependencies]
