@@ -188,8 +188,19 @@ pub static RE_LOOT_HOARD: Lazy<Regex> = Lazy::new(|| {
 });
 
 // "You looted a Darkbrood Mask +1 from Innoruuk, the Prince of Hate's corpse to create a Darkbrood Mask +1"
+// `result` is the item you end up holding, which carries the new tier — the
+// consumed item's own tier says nothing about what you now own.
 pub static RE_LOOT_ENHANCE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^You looted (?P<item>.+?) from (?P<mob>.+?)'s corpse to create ").unwrap()
+    Regex::new(r"^You looted (?P<item>.+?) from (?P<mob>.+?)'s corpse to create (?P<result>.+?)\.?$")
+        .unwrap()
+});
+
+// "You have successfully merged two items together to create a new item: Boots of the Long Road +2"
+pub static RE_ITEM_MERGE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^You have successfully merged two items together to create a new item: (?P<result>.+?)\.?$",
+    )
+    .unwrap()
 });
 
 static RE_CURRENCY_PARSE: Lazy<Regex> =

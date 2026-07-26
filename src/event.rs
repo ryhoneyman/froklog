@@ -165,7 +165,17 @@ pub enum CombatEvent {
     /// Item stored in Dragon Hoard from a corpse.
     ItemHoard { ts: u32, mob: u32, item: String },
     /// Item consumed to create an upgraded item (enchant/enhance loot).
-    ItemEnhance { ts: u32, mob: u32, item: String },
+    /// `result` is what you are left holding, including its new tier suffix.
+    ItemEnhance {
+        ts: u32,
+        mob: u32,
+        item: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+    },
+    /// Two held items merged at the merchant//merge UI rather than on a corpse.
+    /// There is no mob involved, so `mob` is 0.
+    ItemMerge { ts: u32, mob: u32, result: String },
 }
 
 impl CombatEvent {
@@ -189,7 +199,8 @@ impl CombatEvent {
             | Self::ItemLoot { ts, .. }
             | Self::ItemSell { ts, .. }
             | Self::ItemHoard { ts, .. }
-            | Self::ItemEnhance { ts, .. } => *ts,
+            | Self::ItemEnhance { ts, .. }
+            | Self::ItemMerge { ts, .. } => *ts,
         }
     }
 }

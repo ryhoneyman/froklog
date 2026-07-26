@@ -18,7 +18,7 @@ use crate::patterns::{
     norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_warder_owner,
     parse_who_classes, RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED,
     RE_DOT, RE_DS, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
-    RE_LOOT_ENHANCE, RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST,
+    RE_ITEM_MERGE, RE_LOOT_ENHANCE, RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST,
     RE_RIPOSTE, RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
 use crate::state::{CombatState, EntityCombatStats, MobSighting};
@@ -870,6 +870,7 @@ pub fn run(
         // "You looted X from mob's corpse to create Y"
         } else if let Some(caps) = RE_LOOT_ENHANCE.captures(line) {
             let item = caps["item"].to_owned();
+            let result = caps.name("result").map(|m| m.as_str().trim().to_owned());
             let mob_name = normalize_article_case(&caps["mob"]);
             let mob = resolve_loot_mob(&mut state, &mob_name, current_ts);
             emit(
@@ -878,6 +879,18 @@ pub fn run(
                     ts: current_ts,
                     mob,
                     item,
+                    result,
+                },
+            );
+
+        // "You have successfully merged two items together to create a new item: X +N"
+        } else if let Some(caps) = RE_ITEM_MERGE.captures(line) {
+            emit(
+                &event_tx,
+                CombatEvent::ItemMerge {
+                    ts: current_ts,
+                    mob: 0,
+                    result: caps["result"].trim().to_owned(),
                 },
             );
 
@@ -1468,6 +1481,29 @@ fn publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn re_item_merge_captures_result() {
+        let line = "You have successfully merged two items together to create a new item: Boots of the Long Road +2";
+        let caps = RE_ITEM_MERGE
+            .captures(line)
+            .expect("RE_ITEM_MERGE should match the manual merge line");
+        assert_eq!(&caps["result"], "Boots of the Long Road +2");
+    }
+
+    #[test]
+    fn re_loot_enhance_captures_result() {
+        let line = "You looted a Ebon Scythe +1 from a gnoll's corpse to create a Ebon Scythe +2";
+        let caps = RE_LOOT_ENHANCE
+            .captures(line)
+            .expect("RE_LOOT_ENHANCE should match");
+        assert_eq!(&caps["item"], "a Ebon Scythe +1");
+        assert_eq!(
+            caps.name("result").map(|m| m.as_str()),
+            Some("a Ebon Scythe +2"),
+            "the resulting item carries the new tier"
+        );
+    }
 
     #[test]
     fn re_melee_comma_name_src() {
