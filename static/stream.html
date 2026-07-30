@@ -95,12 +95,6 @@
     font-size: 11px; color: #aaa; background: #252525; border: 1px solid #3a3a3a;
     border-radius: 3px; padding: 1px 4px; cursor: pointer; font-family: monospace;
   }
-  #tl-live-btn {
-    font-size: 11px; color: #888; background: #202020; border: 1px solid #3a3a3a;
-    border-radius: 3px; padding: 2px 7px; cursor: pointer; font-family: monospace;
-    white-space: nowrap;
-  }
-  #tl-live-btn.live { color: #4f4; border-color: #3c6c3c; background: #1a2a1a; }
   #tl-session {
     font-size: 11px; color: #aaa; background: #252525; border: 1px solid #3a3a3a;
     border-radius: 3px; padding: 1px 4px; cursor: pointer; font-family: monospace;
@@ -436,7 +430,6 @@
     <option value="16">16×</option>
     <option value="32">32×</option>
   </select>
-  <button id="tl-live-btn" onclick="goLive()">Go Live</button>
   <select id="tl-session" title="Session" onchange="onSessionChange(this.value)"></select>
 </div>
 
@@ -2531,7 +2524,6 @@ const tlBar      = document.getElementById('timeline-bar');
 const tlStart    = document.getElementById('tl-label-start');
 const tlEnd      = document.getElementById('tl-label-end');
 const tlPosLabel = document.getElementById('tl-pos-label');
-const tlLiveBtn  = document.getElementById('tl-live-btn');
 
 function fmtTs(ts) {
   if (!ts) return '';
@@ -2578,19 +2570,9 @@ function setScrubberToEnd() {
 }
 
 function updateLiveBtn() {
+  // The single Go Live control is the pill next to the connection badge —
+  // the timeline bar no longer duplicates it.
   syncStatusIndicator();
-  if (!tlCanGoLive) {
-    tlLiveBtn.style.display = 'none';
-    return;
-  }
-  tlLiveBtn.style.display = '';
-  if (tlIsLive) {
-    tlLiveBtn.textContent = '● Live';
-    tlLiveBtn.classList.add('live');
-  } else {
-    tlLiveBtn.textContent = 'Go Live';
-    tlLiveBtn.classList.remove('live');
-  }
 }
 
 function updatePlayPauseBtn() {
