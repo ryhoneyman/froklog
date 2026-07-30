@@ -152,6 +152,8 @@
   .enc-row.selected { background: #252535; color: #cdd6f4; }
   .enc-row.enc-active { color: #7ce87c; background: rgba(60,220,60,0.06); }
   .enc-row .enc-count { margin-left: auto; color: #666; font-size: 10px; text-transform: none; }
+  .fl-enc-comp { color: #777; font-size: 10px; margin-left: 10px; white-space: nowrap;
+                 overflow: hidden; text-overflow: ellipsis; }
   .enc-row.enc-named { color: #e8c76a; background: rgba(232,199,106,0.06); }
   .enc-row.enc-named.enc-active { color: #7ce87c; }
   .mob-row.enc-member { padding-left: 18px; }
@@ -1324,6 +1326,8 @@ let lastBatchWallTimeSecs = 0;
 // ── UI state ──────────────────────────────────────────────────────────────────
 let selectedMob      = null;
 let selectedEnc      = null;   // encounter key (start_ts) — pull-level scoping
+let encManuallySelected = false; // true only for a user click (not live auto-follow)
+let tlEncScope       = null;   // {start, end}: timeline bar scoped to a selected pull
 let pendingMobRestore = null;  // mob id to re-select after a seek reset, if still in window
 let liveAutoSelect   = true;   // auto-select most recent active mob in live mode; disabled by manual pick, re-enabled by Go Live
 let detailMode   = 'damage';
@@ -1337,15 +1341,38 @@ function selectEnc(key) {
   pendingMobRestore = null;
   selectedEnc = key;
   selectedMob = null;
+  encManuallySelected = key !== null;
+  // Scope the timeline bar to this pull's window (small pad past the end).
+  tlEncScope = null;
+  if (key !== null && lastData) {
+    const enc = (lastData.encounters || []).find(e => e.key === key);
+    if (enc && enc.end_ts > enc.start_ts) tlEncScope = { start: enc.start_ts, end: enc.end_ts + 5 };
+  }
   if (key !== null) detailMode = 'damage';
   history.replaceState(null, '', key !== null ? '#enc-' + key : location.pathname + location.search);
   if (lastData) { lastData = buildRenderState(); rerender(); }
+  updateTimelineBar();
+}
+
+/// ⟲ on a selected pull: replay it from its first event at the chosen speed.
+function replayEncounter(key) {
+  const enc = lastData ? (lastData.encounters || []).find(e => e.key === key) : null;
+  if (!enc) return;
+  if (tlIsLive) liveAutoSelect = false;
+  encManuallySelected = true;
+  tlEncScope = { start: enc.start_ts, end: enc.end_ts + 5 };
+  if (tlPaused) { tlPaused = false; updatePlayPauseBtn(); }
+  seekToLogTs(enc.start_ts);
+  updateTimelineBar();
 }
 
 function selectMob(id) {
   if (tlIsLive) liveAutoSelect = false;
   pendingMobRestore = null;
   selectedEnc = null;
+  encManuallySelected = false;
+  tlEncScope = null;
+  updateTimelineBar();
 
   selectedMob = id;
   history.replaceState(null, '', id !== null ? '#mob-' + id : location.pathname + location.search);
@@ -1390,8 +1417,11 @@ function deselectMob() {
   if (selectedMob !== null || selectedEnc !== null) {
     selectedMob = null;
     selectedEnc = null;
+    encManuallySelected = false;
+    tlEncScope = null;
     history.replaceState(null, '', location.pathname + location.search);
     if (lastData) { lastData = buildRenderState(); rerender(); }
+    updateTimelineBar();
   }
 }
 function setMode(mode) { detailMode = mode; if (lastData) rerender(); }
@@ -1446,11 +1476,13 @@ function buildFightLabel(d) {
   if (selectedEnc !== null) {
     const enc = (d.encounters || []).find(e => e.key === selectedEnc);
     if (enc) {
-      let title = Object.entries(enc.names)
+      // Title matches the pull list — the named (true casing) or "Pull #N";
+      // the composition rides along as a small subtitle.
+      const title = enc.named ? `★ ${enc.named}` : `Pull #${enc.num}`;
+      const comp = Object.entries(enc.names)
         .sort((a, b) => b[1] - a[1])
         .map(([n, c]) => c > 1 ? `${n} ×${c}` : n)
         .join(', ');
-      if (enc.named) title = `★ ${title}`;
       const accent = enc.any_active && tlIsLive ? '#3cdc3c' : enc.all_dead ? '#464646' : '#c8aa1e';
       el.style.borderLeftColor = accent;
       const totalDmg = enc.members.reduce((s, id) =>
@@ -1463,7 +1495,10 @@ function buildFightLabel(d) {
         `<div class="fl-stat-block fl-stat-dur"><span class="fl-stat-label">Duration</span><span class="fl-secs">${fmtTime(encSecs)}</span></div>`,
         `<div class="fl-stat-block fl-stat-seen"><span class="fl-stat-label">Seen</span><span class="fl-seen">${fmtTsPos(enc.start_ts)}</span></div>`,
       ].join('');
-      el.innerHTML = `<div class="fl-name-wrap"><span class="fl-name">${truncate(title, 42)}</span></div><div class="fl-stats">${blocks}</div>`;
+      const replayBtn = `<span class="fl-restart" onclick="event.stopPropagation();replayEncounter(${enc.key})" title="Replay this pull from the beginning">&#8634;</span>`;
+      el.innerHTML = `<div class="fl-name-wrap"><span class="fl-name">${truncate(title, 26)}</span>`
+        + `<span class="fl-enc-comp">${truncate(comp, 48)}</span></div>`
+        + `<div class="fl-stats">${blocks}${replayBtn}</div>`;
       return;
     }
   }
@@ -2304,15 +2339,27 @@ function fmtTsPos(ts) {
   return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
 }
 
+/// Display bounds for the scrubber: a manually-selected pull scopes the bar
+/// to its own window; otherwise the full session/log range.
+function tlDisplayBounds() {
+  if (tlEncScope) return [tlEncScope.start, tlEncScope.end];
+  return [logFirstTs || tlFirstTs, logLastTs || tlLastTs];
+}
+
 function updateTimelineBar() {
   // Require valid wall-clock bounds from the server for seek to work.
   if (!tlFirstTs || !tlLastTs) return;
-  // Use log-event timestamps for the display range check when available;
-  // they span the full EQ session even if the wall-clock window is narrow
-  // (e.g. a dump-mode replay that finished in under a second).
-  const dispFirst = logFirstTs || tlFirstTs;
-  const dispLast  = logLastTs  || tlLastTs;
-  if (dispLast <= dispFirst) return;
+  // The bar earns its space: hidden while watching live with nothing
+  // manually selected. Clicking a pull summons it (scoped to that pull);
+  // any non-live state keeps it visible so replay controls are never lost.
+  const shouldShow = encManuallySelected || !tlIsLive;
+  if (!shouldShow) {
+    tlBar.classList.remove('visible');
+    document.documentElement.style.setProperty('--tl-height', '0px');
+    return;
+  }
+  const [dispFirst, dispLast] = tlDisplayBounds();
+  if (!dispFirst || !dispLast || dispLast <= dispFirst) return;
   tlBar.classList.add('visible');
   document.documentElement.style.setProperty('--tl-height', '28px');
   tlStart.textContent = fmtTs(dispFirst);
@@ -2383,8 +2430,7 @@ scrubber.addEventListener('touchend',  () => { scrubberDragging = false; commitS
 scrubber.addEventListener('input', () => {
   updateScrubberTrack();
   const frac = scrubber.value / 1000;
-  const dispFirst = logFirstTs || tlFirstTs;
-  const dispLast  = logLastTs  || tlLastTs;
+  const [dispFirst, dispLast] = tlDisplayBounds();
   if (dispFirst && dispLast) {
     const ts = Math.round(dispFirst + frac * (dispLast - dispFirst));
     tlPosLabel.textContent = fmtTsPos(ts);
@@ -2399,6 +2445,11 @@ function commitSeek() {
   // At the far right of the bar: go live in normal mode; in session mode stay
   // within the session and seek to the session end instead of going live.
   if (frac >= 0.999) {
+    if (tlEncScope) {
+      // Pull-scoped bar: far right is the pull's end, not "go live".
+      seekToLogTs(tlEncScope.end);
+      return;
+    }
     if (SESSION_LOG_TS > 0) {
       const dispLast = logLastTs || tlLastTs;
       if (dispLast) seekToLogTs(dispLast);
@@ -2417,9 +2468,10 @@ function commitSeek() {
   updateLiveBtn();
   updatePlayPauseBtn();
 
-  // Prefer log-event timestamps for seeking.
-  if (logFirstTs && logLastTs && logLastTs > logFirstTs) {
-    const targetLogTs = Math.round(logFirstTs + frac * (logLastTs - logFirstTs));
+  // Prefer log-event timestamps for seeking (pull-scoped when a pull is selected).
+  const [seekFirst, seekLast] = tlDisplayBounds();
+  if (seekFirst && seekLast && seekLast > seekFirst) {
+    const targetLogTs = Math.round(seekFirst + frac * (seekLast - seekFirst));
     // Try cache-first seek; fall back to full re-stream if cache not ready.
     if (!seekWithCache(targetLogTs, seekPaused, speed)) {
       pendingMobRestore = selectedMob;
@@ -2447,6 +2499,9 @@ function goLive() {
   tlPaused = false;
   liveAutoSelect = true;
   pendingMobRestore = null;
+  // Back to live view: drop the pull-scoped bar (it hides until the next click).
+  encManuallySelected = false;
+  tlEncScope = null;
   document.getElementById('tl-speed').value = '1';
   updateLiveBtn();
   updatePlayPauseBtn();
@@ -2494,8 +2549,7 @@ function togglePlayPause() {
 
 // Seek to a log-event timestamp, keeping the current play/pause state.
 function seekToLogTs(targetLogTs) {
-  const dispFirst = logFirstTs || tlFirstTs;
-  const dispLast  = logLastTs  || tlLastTs;
+  const [dispFirst, dispLast] = tlDisplayBounds();
   if (!dispFirst || !dispLast || dispLast <= dispFirst || !tlFirstTs || !tlLastTs) return;
   const frac = Math.max(0, Math.min(1, (targetLogTs - dispFirst) / (dispLast - dispFirst)));
   const speed = parseFloat(document.getElementById('tl-speed').value) || 1.0;
