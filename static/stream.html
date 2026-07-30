@@ -2120,24 +2120,47 @@ function renderGraph() {
   const canvasRate = document.getElementById('graph-canvas-rate');
   if (!canvas || !canvasRate) return;
 
-  if (selectedMob === null) { destroyChart(); return; }
+  if (selectedMob === null && selectedEnc === null) { destroyChart(); return; }
 
-  const mob     = selectedMob;
-  const mobInfo = S.mobs[mob];
-  if (!mobInfo) { destroyChart(); return; }
+  const tlMap = {
+    damage: S.mobDmgTL, tanked: S.mobTankTL, healing: S.mobHealTL,
+    healed: S.mobHealedTL, avoid: S.mobAvoidTL,
+  }[detailMode];
+  const yl = {
+    damage:  ['Total Damage',   'DPS'],
+    tanked:  ['Total Incoming', 'Incoming DPS'],
+    healing: ['Total Healing',  'HPS'],
+    healed:  ['Total Healed',   'HPS Received'],
+    avoid:   ['Total Avoids',   'Avoids / 5s'],
+  }[detailMode];
+  if (!tlMap || !yl) { destroyChart(); return; }
+  const [yLabelTotal, yLabelRate] = yl;
 
-  let tl, yLabelTotal, yLabelRate;
-  if      (detailMode === 'damage')  { tl = S.mobDmgTL[mob];    yLabelTotal = 'Total Damage';   yLabelRate = 'DPS'; }
-  else if (detailMode === 'tanked')  { tl = S.mobTankTL[mob];   yLabelTotal = 'Total Incoming'; yLabelRate = 'Incoming DPS'; }
-  else if (detailMode === 'healing') { tl = S.mobHealTL[mob];   yLabelTotal = 'Total Healing';  yLabelRate = 'HPS'; }
-  else if (detailMode === 'healed')  { tl = S.mobHealedTL[mob]; yLabelTotal = 'Total Healed';   yLabelRate = 'HPS Received'; }
-  else if (detailMode === 'avoid')   { tl = S.mobAvoidTL[mob];  yLabelTotal = 'Total Avoids';   yLabelRate = 'Avoids / 5s'; }
-  else                               { destroyChart(); return; }
+  let tl, fightStart, fightEnd;
+  const encG = selectedEnc !== null && lastData
+    ? (lastData.encounters || []).find(e => e.key === selectedEnc) : null;
+  if (encG) {
+    // Pull selected: merge member-mob timelines per player over the pull window.
+    tl = {};
+    for (const id of encG.members) {
+      const m = tlMap[id];
+      if (!m) continue;
+      for (const [name, evs] of Object.entries(m)) {
+        (tl[name] = tl[name] || []).push(...evs);
+      }
+    }
+    for (const evs of Object.values(tl)) evs.sort((a, b) => a.ts - b.ts);
+    fightStart = encG.start_ts;
+    fightEnd   = Math.max(encG.end_ts, encG.start_ts + 1);
+  } else {
+    const mobInfo = S.mobs[selectedMob];
+    if (!mobInfo) { destroyChart(); return; }
+    tl = tlMap[selectedMob];
+    fightStart = mobInfo.firstTs;
+    fightEnd   = mobInfo.lastTs;
+  }
 
   if (!tl || Object.keys(tl).length === 0) { destroyChart(); return; }
-
-  const fightStart = mobInfo.firstTs;
-  const fightEnd   = mobInfo.lastTs;
   const numBuckets = Math.max(1, Math.ceil((fightEnd - fightStart) / GRAPH_BUCKET));
 
   const players = Object.entries(tl)
