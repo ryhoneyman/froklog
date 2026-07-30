@@ -812,8 +812,8 @@ async fn owner_markers(
     let token = ingest::extract_bearer(headers)?;
     let reg = state.registry.read().await;
     let entry = reg.get(stream_id)?;
-    let authorized = froklog::auth::tokens_match(&entry.stream_token, &token)
-        || state.is_admin_token(&token);
+    let authorized =
+        froklog::auth::tokens_match(&entry.stream_token, &token) || state.is_admin_token(&token);
     if authorized {
         Some(Arc::clone(&entry.markers))
     } else {

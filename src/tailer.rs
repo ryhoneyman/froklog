@@ -110,7 +110,7 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
         // may still be flushing the line, so keep accumulating rather than
         // emitting a fragment.
         let at_eof_final = n == 0 && stop_at_eof;
-        if !buf.ends_with(b"\n") && !(at_eof_final && !buf.is_empty()) {
+        if !buf.ends_with(b"\n") && (!at_eof_final || buf.is_empty()) {
             if at_eof_final {
                 info!("Replay complete (EOF reached before --to cutoff)");
                 return;

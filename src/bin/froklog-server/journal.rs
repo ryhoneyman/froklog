@@ -68,9 +68,12 @@ pub(crate) fn open_db(data_dir: &std::path::Path, stream_id: &str) -> std::io::R
     let dir = data_dir.join(stream_id);
     std::fs::create_dir_all(&dir)?;
     let conn = Connection::open(dir.join("froklog.db")).map_err(sql_err)?;
-    conn.pragma_update(None, "journal_mode", "WAL").map_err(sql_err)?;
-    conn.pragma_update(None, "synchronous", "NORMAL").map_err(sql_err)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(sql_err)?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(sql_err)?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(sql_err)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(sql_err)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS batches (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -327,7 +330,8 @@ impl Journal {
             }
             n
         };
-        self.index.retain(|e| e.log_ts.unwrap_or(e.wall_ts) >= cutoff_ts);
+        self.index
+            .retain(|e| e.log_ts.unwrap_or(e.wall_ts) >= cutoff_ts);
         Ok((deleted, self.index.first().map(|e| e.rowid)))
     }
 }
@@ -545,8 +549,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut j = Journal::open(dir.path(), "burst").unwrap();
         for i in 0..5u32 {
-            j.append(100 + i as u64, None, i, &format!(r#"{{"seq":{i},"events":[]}}"#))
-                .unwrap();
+            j.append(
+                100 + i as u64,
+                None,
+                i,
+                &format!(r#"{{"seq":{i},"events":[]}}"#),
+            )
+            .unwrap();
         }
         let batches = j.read_burst(1, 3);
         assert_eq!(batches.len(), 3);

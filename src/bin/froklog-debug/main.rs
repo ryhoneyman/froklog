@@ -1267,7 +1267,10 @@ fn main() {
             t!("MATCH", format!("RE_CC_WAKE — {tgt:?} awakened"));
             matched = true;
         } else if froklog::patterns::RE_HEARTBEAT.is_match(line) {
-            t!("MATCH", "RE_HEARTBEAT — combat heartbeat (stun/OOM/interrupt)".to_string());
+            t!(
+                "MATCH",
+                "RE_HEARTBEAT — combat heartbeat (stun/OOM/interrupt)".to_string()
+            );
             matched = true;
         } else if let Some(caps) = RE_RESIST.captures(line) {
             let tgt = normalize_article_case(&caps["tgt"]);

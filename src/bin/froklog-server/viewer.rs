@@ -55,22 +55,22 @@ pub async fn stream_page_handler(
             // uses, so the page scopes stats to the given window.
             (params.from_ts.unwrap_or(0), params.to_ts.unwrap_or(0))
         } else if let (Some(num), Some(si_arc)) = (params.session, session_index) {
-                let si = si_arc.read().await;
-                let sessions = si.list();
-                let start = sessions
-                    .iter()
-                    .find(|s| s.num == num)
-                    .map(|s| s.start_log_ts)
-                    .unwrap_or(0);
-                let end = sessions
-                    .iter()
-                    .find(|s| s.num > num)
-                    .map(|s| s.start_log_ts)
-                    .unwrap_or(0);
-                (start, end)
-            } else {
-                (0, 0)
-            };
+            let si = si_arc.read().await;
+            let sessions = si.list();
+            let start = sessions
+                .iter()
+                .find(|s| s.num == num)
+                .map(|s| s.start_log_ts)
+                .unwrap_or(0);
+            let end = sessions
+                .iter()
+                .find(|s| s.num > num)
+                .map(|s| s.start_log_ts)
+                .unwrap_or(0);
+            (start, end)
+        } else {
+            (0, 0)
+        };
         let ws_path = format!("/stream/{stream_id}/ws?vtok={vtok}");
         let sessions_path = format!("/stream/{stream_id}/sessions?vtok={vtok}");
         // player_name and vtok are client-supplied: HTML-escape for the badge
@@ -216,7 +216,7 @@ fn js_str_escape(s: &str) -> String {
             '"' => out.push_str("\\\""),
             '<' => out.push_str("\\u003c"),
             '>' => out.push_str("\\u003e"),
-            '\n' | '\r' => out.push_str(" "),
+            '\n' | '\r' => out.push(' '),
             _ => out.push(c),
         }
     }

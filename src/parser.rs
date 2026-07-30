@@ -16,10 +16,11 @@ use crate::event::{
 };
 use crate::patterns::{
     norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_warder_owner,
-    parse_who_classes, RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED,
-    RE_CC_PARK, RE_CC_WAKE, RE_DOT, RE_DS, RE_HEARTBEAT, RE_DS_BURN_YOU, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
-    RE_ITEM_MERGE, RE_LOOT_ENHANCE, RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST,
-    RE_RIPOSTE, RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
+    parse_who_classes, RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CC_PARK, RE_CC_WAKE,
+    RE_CURRENCY_CORPSE, RE_DIED, RE_DOT, RE_DS, RE_DS_BURN_YOU, RE_DS_PROC, RE_EXTRA_DMG,
+    RE_HAS_TAKEN, RE_HEAL, RE_HEARTBEAT, RE_HIT_BY_SPELL, RE_ITEM_MERGE, RE_LOOT_ENHANCE,
+    RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST, RE_RIPOSTE,
+    RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
 use crate::state::{CombatState, EntityCombatStats, MobSighting};
 
@@ -1298,8 +1299,7 @@ pub fn run(
             // heal-turtles, but don't emit a Heal event — the viewer's healer
             // lists are for the player group.
             let src_is_mob = !state.known_players.contains(&src)
-                && (state.confirmed_mobs.contains(&src)
-                    || (src.contains(' ') && tgt == src));
+                && (state.confirmed_mobs.contains(&src) || (src.contains(' ') && tgt == src));
             if src_is_mob {
                 update_mob_list(&mut state, &src, current_ts);
             } else {
@@ -2040,7 +2040,11 @@ mod tests {
             ],
             "Rysk",
         );
-        assert_eq!(state.mob_list.len(), 1, "burn attributes to the same instance");
+        assert_eq!(
+            state.mob_list.len(),
+            1,
+            "burn attributes to the same instance"
+        );
         let tank = state
             .mob_tanking
             .get(&state.mob_list[0].id)
@@ -2065,7 +2069,10 @@ mod tests {
             "Rysk",
         );
         assert_eq!(state.mob_list.len(), 1, "mez + wake + hit = one instance");
-        assert!(!state.mob_list[0].parked, "awakened mob is no longer parked");
+        assert!(
+            !state.mob_list[0].parked,
+            "awakened mob is no longer parked"
+        );
     }
 
     #[test]
@@ -2092,7 +2099,7 @@ mod tests {
         assert_eq!(state.mob_list.len(), 1);
         let healer = state.entities.get("an orc thaumaturgist");
         assert!(
-            healer.map_or(true, |e| e.total_heals == 0),
+            healer.is_none_or(|e| e.total_heals == 0),
             "mob self-heal must not credit healer stats"
         );
     }

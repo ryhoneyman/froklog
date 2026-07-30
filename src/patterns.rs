@@ -242,8 +242,10 @@ pub static RE_LOOT_HOARD: Lazy<Regex> = Lazy::new(|| {
 // `result` is the item you end up holding, which carries the new tier — the
 // consumed item's own tier says nothing about what you now own.
 pub static RE_LOOT_ENHANCE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^You looted (?P<item>.+?) from (?P<mob>.+?)'s corpse to create (?P<result>.+?)\.?$")
-        .unwrap()
+    Regex::new(
+        r"^You looted (?P<item>.+?) from (?P<mob>.+?)'s corpse to create (?P<result>.+?)\.?$",
+    )
+    .unwrap()
 });
 
 // "You have successfully merged two items together to create a new item: Boots of the Long Road +2"

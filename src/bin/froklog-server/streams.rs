@@ -98,7 +98,6 @@ impl StreamEntry {
             utc_offset_secs: Arc::new(AtomicI64::new(0)),
         })
     }
-
 }
 
 /// Inner registry — held behind an `Arc<RwLock<…>>`.
