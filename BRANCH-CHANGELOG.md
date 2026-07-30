@@ -405,6 +405,18 @@ encounters starred correctly across a real session.
   the curious: separate CSS grids don't share max-content track sizing —
   every track except the flexible name column must be fixed.)
 
+## 20. Encounter-centric header and replay
+
+- The fight header now carries the same identity as the pull list: the named
+  with its true casing ("★ Retlon Brenclog") or "Pull #N", with the
+  composition as a small subtitle instead of being the title.
+- The timeline bar is hidden while watching live; clicking a pull summons it
+  scoped to that pull's own time window, with a replay-from-start control
+  (↺). The scrubber, position labels, and far-right behavior all operate
+  within the pull's bounds while scoped; Go Live or deselecting returns to
+  the session view (and hides the bar again when live). Any non-live state
+  keeps the bar visible so transport controls are never stranded mid-replay.
+
 ---
 
 *(subsequent changes appended as they land)*
