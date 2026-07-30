@@ -2,6 +2,7 @@ mod admin;
 mod config;
 mod ingest;
 mod journal;
+mod markers;
 mod ratelimit;
 mod session_index;
 mod streams;
@@ -219,11 +220,11 @@ async fn main() {
                         let reg = registry.read().await;
                         reg.list_admin()
                             .into_iter()
-                            .map(|i| (i.stream_id, i.journal, i.session_index))
+                            .map(|i| (i.stream_id, i.journal, i.session_index, i.markers))
                             .collect()
                     };
-                    for (stream_id, journal, session_index) in streams {
-                        match prune_stream_data(&journal, &session_index, cutoff).await {
+                    for (stream_id, journal, session_index, markers) in streams {
+                        match prune_stream_data(&journal, &session_index, &markers, cutoff).await {
                             Ok((batches, sessions)) if batches > 0 || sessions > 0 => {
                                 info!(
                                     "Retention [{stream_id}]: removed {batches} batches, {sessions} sessions"
@@ -251,6 +252,10 @@ async fn main() {
         .route("/stream/{id}", delete(reset_stream_handler))
         .route("/stream/{id}/purge", delete(delete_stream_handler))
         .route("/stream/{id}/prune", post(prune_stream_handler))
+        // Time markers (raid/group slices)
+        .route("/stream/{id}/marker", post(add_marker_handler))
+        .route("/stream/{id}/marker/{mid}", delete(delete_marker_handler))
+        .route("/stream/{id}/markers", get(list_markers_handler))
         // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
@@ -648,12 +653,16 @@ async fn prune_stream_handler(
                     warn!("Prune [{stream_id}] [{ip}]: bad token");
                     return StatusCode::UNAUTHORIZED.into_response();
                 }
-                (Arc::clone(&entry.journal), Arc::clone(&entry.session_index))
+                (
+                    Arc::clone(&entry.journal),
+                    Arc::clone(&entry.session_index),
+                    Arc::clone(&entry.markers),
+                )
             }
         }
     };
 
-    match prune_stream_data(&handles.0, &handles.1, cutoff).await {
+    match prune_stream_data(&handles.0, &handles.1, &handles.2, cutoff).await {
         Ok((deleted_batches, deleted_sessions)) => {
             info!(
                 "Prune [{stream_id}] [{ip}]: {deleted_batches} batches, {deleted_sessions} sessions removed (cutoff {cutoff})"
@@ -672,11 +681,12 @@ async fn prune_stream_handler(
     }
 }
 
-/// Prune one stream's batches older than `cutoff` and clean up its sessions.
-/// Shared by the prune endpoint and the retention sweep.
+/// Prune one stream's batches older than `cutoff` and clean up its sessions
+/// and markers. Shared by the prune endpoint and the retention sweep.
 async fn prune_stream_data(
     journal: &journal::SharedJournal,
     session_index: &session_index::SharedSessionIndex,
+    markers: &markers::SharedMarkers,
     cutoff: u64,
 ) -> std::io::Result<(usize, usize)> {
     let (deleted_batches, min_remaining) = {
@@ -687,7 +697,128 @@ async fn prune_stream_data(
         let mut si = session_index.write().await;
         si.prune(min_remaining)?
     };
+    markers.prune(cutoff)?;
     Ok((deleted_batches, deleted_sessions))
+}
+
+// ── Time markers (raid/group slices) ─────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AddMarkerBody {
+    /// e.g. "raid_start", "raid_end", "group_start", "group_end".
+    kind: String,
+    #[serde(default)]
+    label: String,
+    /// True-epoch log-time seconds. Omitted = the server's current time,
+    /// which matches live event timestamps now that both are true epoch.
+    ts: Option<u64>,
+}
+
+/// `POST /stream/:id/marker` — set a time marker. Owner (stream token) or admin.
+async fn add_marker_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+    Json(body): Json<AddMarkerBody>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let Some(markers) = owner_markers(&state, &stream_id, &headers).await else {
+        warn!("Marker [{stream_id}] [{ip}]: bad or missing token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if body.kind.is_empty() || body.kind.len() > 64 || body.label.len() > 200 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let ts = body.ts.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    });
+    match markers.add(ts, &body.kind, &body.label) {
+        Ok(m) => {
+            info!("Marker [{stream_id}] [{ip}]: {} @ {ts}", m.kind);
+            Json(m).into_response()
+        }
+        Err(e) => {
+            warn!("Marker [{stream_id}] [{ip}]: write failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `DELETE /stream/:id/marker/:mid` — remove a marker. Owner or admin.
+async fn delete_marker_handler(
+    Path((stream_id, marker_id)): Path<(String, i64)>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let Some(markers) = owner_markers(&state, &stream_id, &headers).await else {
+        warn!("Marker delete [{stream_id}] [{ip}]: bad or missing token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match markers.delete(marker_id) {
+        Ok(true) => StatusCode::OK.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            warn!("Marker delete [{stream_id}] [{ip}]: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `GET /stream/:id/markers?vtok=` — list markers. View-token auth (read-only).
+async fn list_markers_handler(
+    Path(stream_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
+    State(state): State<ServerState>,
+) -> Response {
+    let markers = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(entry) => {
+                let valid = params
+                    .vtok
+                    .as_deref()
+                    .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
+                    .unwrap_or(false);
+                if !valid {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                Arc::clone(&entry.markers)
+            }
+        }
+    };
+    match markers.list() {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            warn!("Markers [{stream_id}]: list failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Resolve the stream's markers handle when the request carries the stream
+/// token or the admin token. `None` = unauthorized or unknown stream.
+async fn owner_markers(
+    state: &ServerState,
+    stream_id: &str,
+    headers: &HeaderMap,
+) -> Option<markers::SharedMarkers> {
+    let token = ingest::extract_bearer(headers)?;
+    let reg = state.registry.read().await;
+    let entry = reg.get(stream_id)?;
+    let authorized = froklog::auth::tokens_match(&entry.stream_token, &token)
+        || state.is_admin_token(&token);
+    if authorized {
+        Some(Arc::clone(&entry.markers))
+    } else {
+        None
+    }
 }
 
 // ── HTTP stats snapshot (poll fallback for viewers) ───────────────────────────

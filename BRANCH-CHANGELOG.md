@@ -206,6 +206,28 @@ retroactive session boundaries after a restart.
   default-construction paths were consolidated so future code can't construct
   a half-wrong default config.
 
+## 10. Time markers — raid/group slices
+
+**Design choice.** Streams get user-defined time markers ("raid_start",
+"raid_end", "group_start", …, plus a free-form label), stored alongside the
+batches. The owner (stream token, or admin) sets and deletes them —
+`POST /stream/<id>/marker` (timestamp optional; defaults to now, which is in
+the same true-epoch domain as event timestamps) and
+`DELETE /stream/<id>/marker/<mid>`. Anyone with view access can list them via
+`GET /stream/<id>/markers`.
+
+Viewing a slice reuses the machinery the session filter already had: the
+viewer page accepts `?from_ts=&to_ts=` (log-time epoch seconds) and scopes the
+stats to that window — so a raid view is just the stream URL plus the two
+marker timestamps. Markers are pruned with the data they annotate by the
+retention sweep and manual prune.
+
+Deliberately not in this change (build on the API later): marker buttons in
+the viewer UI, and client-side auto-markers from an in-game phrase. Both sit
+cleanly on top of these endpoints without storage changes — this was the
+"we can always do this after the data is indexed in SQL" part, and the index
+made it a ~150-line feature.
+
 ---
 
 *(subsequent changes appended as they land)*

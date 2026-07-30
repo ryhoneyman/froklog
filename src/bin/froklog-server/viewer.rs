@@ -24,6 +24,10 @@ const CATCHUP_BURST: usize = 64;
 pub struct ViewQuery {
     pub vtok: Option<String>,
     pub session: Option<u32>,
+    /// Explicit time-slice scoping (log-time epoch seconds), e.g. from a
+    /// raid_start/raid_end marker pair. Overrides `session` when present.
+    pub from_ts: Option<u64>,
+    pub to_ts: Option<u64>,
 }
 
 /// `GET /stream/:id?vtok=<view_token>` — serves the viewer HTML page.
@@ -46,8 +50,11 @@ pub async fn stream_page_handler(
                 entry.map(|e| Arc::clone(&e.session_index)),
             )
         };
-        let (session_log_ts, session_end_log_ts): (u64, u64) =
-            if let (Some(num), Some(si_arc)) = (params.session, session_index) {
+        let (session_log_ts, session_end_log_ts): (u64, u64) = if params.from_ts.is_some() {
+            // Marker/explicit slice: same template slots the session filter
+            // uses, so the page scopes stats to the given window.
+            (params.from_ts.unwrap_or(0), params.to_ts.unwrap_or(0))
+        } else if let (Some(num), Some(si_arc)) = (params.session, session_index) {
                 let si = si_arc.read().await;
                 let sessions = si.list();
                 let start = sessions
@@ -674,6 +681,9 @@ async fn handle_client_msg(
 #[derive(Deserialize)]
 pub struct PlayerQuery {
     pub session: Option<u32>,
+    /// Explicit time-slice scoping (log-time epoch seconds); overrides `session`.
+    pub from_ts: Option<u64>,
+    pub to_ts: Option<u64>,
 }
 
 /// `GET /player/:game/:server/:name` — serves the viewer page for a public stream.
@@ -704,8 +714,9 @@ pub async fn player_page_handler(
     let response = match entry_data {
         None => StatusCode::NOT_FOUND.into_response(),
         Some((stream_id, player_name, session_index)) => {
-            let (session_log_ts, session_end_log_ts): (u64, u64) = if let Some(num) = params.session
-            {
+            let (session_log_ts, session_end_log_ts): (u64, u64) = if params.from_ts.is_some() {
+                (params.from_ts.unwrap_or(0), params.to_ts.unwrap_or(0))
+            } else if let Some(num) = params.session {
                 let si = session_index.read().await;
                 let sessions = si.list();
                 let start = sessions

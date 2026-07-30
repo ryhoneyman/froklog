@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, watch, RwLock};
 
 use crate::journal::{Journal, SharedJournal};
+use crate::markers::{Markers, SharedMarkers};
 use crate::session_index::{SessionIndex, SharedSessionIndex};
 
 const BROADCAST_CAPACITY: usize = 64;
@@ -35,6 +36,8 @@ pub struct StreamEntry {
     pub journal: SharedJournal,
     /// Session boundary index — one entry per play session within this journal.
     pub session_index: SharedSessionIndex,
+    /// User-defined time markers (raid/group start-end slices).
+    pub markers: SharedMarkers,
     /// Fan-out channel: every viewer WebSocket subscribes to this.
     /// Carries raw EventBatch JSON strings (the same content written to disk).
     pub broadcast_tx: broadcast::Sender<Arc<String>>,
@@ -70,6 +73,7 @@ impl StreamEntry {
         }
         let journal = Arc::new(tokio::sync::RwLock::new(journal_inner));
         let session_index = Arc::new(tokio::sync::RwLock::new(si_inner));
+        let markers = Arc::new(Markers::open(data_dir, &stream_id)?);
 
         let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (public_revoke_tx, _) = watch::channel(());
@@ -85,6 +89,7 @@ impl StreamEntry {
             public_revoke_tx,
             journal,
             session_index,
+            markers,
             broadcast_tx,
             client_connected: Arc::new(AtomicBool::new(false)),
             utc_offset_secs: Arc::new(AtomicI64::new(0)),
@@ -203,6 +208,7 @@ impl StreamRegistry {
                 journal: e.journal.clone(),
                 journal_path: self.data_dir.join(&e.stream_id).join("froklog.db"),
                 session_index: e.session_index.clone(),
+                markers: e.markers.clone(),
             })
             .collect()
     }
@@ -224,6 +230,8 @@ pub struct AdminStreamInfo {
     pub journal_path: PathBuf,
     /// Handle to the session index for per-session breakdown.
     pub session_index: SharedSessionIndex,
+    /// Handle to the stream's time markers (retention sweep prunes these too).
+    pub markers: SharedMarkers,
 }
 
 /// Thread-safe handle to the registry shared across all Axum handlers.
