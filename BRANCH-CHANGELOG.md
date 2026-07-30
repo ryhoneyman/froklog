@@ -71,6 +71,28 @@ WebSocket upgrade, and the admin panel until it finished. The ingest path now gr
 the per-stream handles it needs, releases the shared lock immediately, and does its
 disk work without holding anything global.
 
+## 6. Prune endpoint and optional automatic retention
+
+**Design choice.** Two ways to prune, one deliberate exclusion:
+
+- `POST /stream/<id>/prune` with `{"days": N}` (or `{"before": <unix_ts>}`)
+  deletes everything older than the cutoff and reclaims the disk space.
+  Authenticated with the **stream token** (the owner credential the pushing
+  client holds) or the admin token. The shareable **view token cannot prune**:
+  a view link is meant to be handed out, and anyone holding it must be able to
+  watch but never destroy history. So yes — each member can prune their own
+  data, using the same credential their client already has, without needing the
+  admin.
+- `retention_days` in the server config (default 0 = off) turns on a daily
+  sweep that applies the same cutoff to every stream automatically. This also
+  closes the "unbounded disk growth" gap: before this branch there was no way
+  to cap a stream's size at all short of wiping it.
+
+**Why days-based:** the cutoff compares against event log timestamps, so "keep
+90 days" means 90 days of game history regardless of when it was uploaded.
+(Until the true-epoch time change lands, log timestamps can be offset from
+server time by the streamer's timezone — irrelevant at day granularity.)
+
 ---
 
 *(subsequent changes appended as they land)*

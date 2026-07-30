@@ -14,6 +14,10 @@ pub struct ServerConfig {
     pub rate_max: u32,
     pub rate_window_secs: u64,
     pub ban_secs: u64,
+    /// Automatically delete stream data older than this many days.
+    /// 0 (the default) disables automatic pruning entirely.
+    #[serde(default)]
+    pub retention_days: u64,
 }
 
 impl Default for ServerConfig {
@@ -27,6 +31,7 @@ impl Default for ServerConfig {
             rate_max: 100,
             rate_window_secs: 10,
             ban_secs: 300,
+            retention_days: 0,
         }
     }
 }
@@ -144,6 +149,11 @@ rate_window_secs = {rate_window_secs}
 
 # How long (in seconds) a banned IP stays blocked.
 ban_secs = {ban_secs}
+
+# Automatically delete stream data older than this many days (daily sweep).
+# 0 disables automatic pruning. Owners can always prune their own stream
+# manually via POST /stream/<id>/prune.
+retention_days = {retention_days}
 "#,
         bind = cfg.bind,
         data_dir = cfg.data_dir,
@@ -153,6 +163,7 @@ ban_secs = {ban_secs}
         rate_max = cfg.rate_max,
         rate_window_secs = cfg.rate_window_secs,
         ban_secs = cfg.ban_secs,
+        retention_days = cfg.retention_days,
     );
 
     match std::fs::write(path, contents) {
@@ -192,6 +203,11 @@ pub fn apply_env_overrides(cfg: &mut ServerConfig) {
     if let Ok(v) = std::env::var("FROKLOG_BAN_SECS") {
         if let Ok(n) = v.parse() {
             cfg.ban_secs = n;
+        }
+    }
+    if let Ok(v) = std::env::var("FROKLOG_RETENTION_DAYS") {
+        if let Ok(n) = v.parse() {
+            cfg.retention_days = n;
         }
     }
 }

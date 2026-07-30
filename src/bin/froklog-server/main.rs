@@ -156,6 +156,49 @@ async fn main() {
         }
     });
 
+    // Optional retention sweep: prune data older than retention_days from every
+    // stream, once at startup and then daily. Disabled when retention_days = 0.
+    if cfg.retention_days > 0 {
+        info!(
+            "Retention: pruning stream data older than {} day(s), swept daily",
+            cfg.retention_days
+        );
+        tokio::spawn({
+            let registry = Arc::clone(&state.registry);
+            let days = cfg.retention_days;
+            async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+                loop {
+                    interval.tick().await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let cutoff = now.saturating_sub(days.saturating_mul(86_400));
+                    // Clone handles under a short lock, prune outside it.
+                    let streams: Vec<_> = {
+                        let reg = registry.read().await;
+                        reg.list_admin()
+                            .into_iter()
+                            .map(|i| (i.stream_id, i.journal, i.session_index))
+                            .collect()
+                    };
+                    for (stream_id, journal, session_index) in streams {
+                        match prune_stream_data(&journal, &session_index, cutoff).await {
+                            Ok((batches, sessions)) if batches > 0 || sessions > 0 => {
+                                info!(
+                                    "Retention [{stream_id}]: removed {batches} batches, {sessions} sessions"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => warn!("Retention [{stream_id}]: prune failed: {e}"),
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     let cors = CorsLayer::new().allow_origin(Any);
 
     let app = Router::new()
@@ -168,6 +211,7 @@ async fn main() {
         .route("/stream/{id}", patch(patch_stream_handler))
         .route("/stream/{id}", delete(reset_stream_handler))
         .route("/stream/{id}/purge", delete(delete_stream_handler))
+        .route("/stream/{id}/prune", post(prune_stream_handler))
         // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
@@ -497,6 +541,112 @@ async fn delete_stream_handler(
 
     info!("Delete [{stream_id}] [{ip}]: stream removed");
     StatusCode::OK.into_response()
+}
+
+// ── Stream prune (owner or admin) ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PruneStreamBody {
+    /// Delete everything older than this many days (measured against the
+    /// event log timestamps). Mutually exclusive with `before`.
+    days: Option<u64>,
+    /// Delete everything with a log timestamp older than this unix time.
+    before: Option<u64>,
+}
+
+/// `POST /stream/:id/prune` — delete batches older than a cutoff and reclaim
+/// disk space. Sessions that no longer own any batch are dropped.
+///
+/// Authenticated with the per-stream `stream_token` (the owner credential the
+/// pushing client holds) or the global admin token. The shareable view token
+/// deliberately cannot prune: anyone holding a view link can watch, and must
+/// not be able to destroy history.
+async fn prune_stream_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+    Json(body): Json<PruneStreamBody>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let token = match ingest::extract_bearer(&headers) {
+        Some(t) => t,
+        None => {
+            warn!("Prune [{stream_id}] [{ip}]: missing token");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+
+    let cutoff = match (body.days, body.before) {
+        (Some(days), None) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            now.saturating_sub(days.saturating_mul(86_400))
+        }
+        (None, Some(before)) => before,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "body must contain exactly one of: days, before",
+            )
+                .into_response();
+        }
+    };
+
+    // Owner (stream token) or admin may prune; clone handles under a short lock.
+    let handles = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(entry) => {
+                let authorized = froklog::auth::tokens_match(&entry.stream_token, &token)
+                    || state.is_admin_token(&token);
+                if !authorized {
+                    warn!("Prune [{stream_id}] [{ip}]: bad token");
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                (Arc::clone(&entry.journal), Arc::clone(&entry.session_index))
+            }
+        }
+    };
+
+    match prune_stream_data(&handles.0, &handles.1, cutoff).await {
+        Ok((deleted_batches, deleted_sessions)) => {
+            info!(
+                "Prune [{stream_id}] [{ip}]: {deleted_batches} batches, {deleted_sessions} sessions removed (cutoff {cutoff})"
+            );
+            Json(json!({
+                "deleted_batches": deleted_batches,
+                "deleted_sessions": deleted_sessions,
+                "cutoff": cutoff,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            warn!("Prune [{stream_id}] [{ip}]: failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Prune one stream's batches older than `cutoff` and clean up its sessions.
+/// Shared by the prune endpoint and the retention sweep.
+async fn prune_stream_data(
+    journal: &journal::SharedJournal,
+    session_index: &session_index::SharedSessionIndex,
+    cutoff: u64,
+) -> std::io::Result<(usize, usize)> {
+    let (deleted_batches, min_remaining) = {
+        let mut j = journal.write().await;
+        j.prune(cutoff)?
+    };
+    let deleted_sessions = {
+        let mut si = session_index.write().await;
+        si.prune(min_remaining)?
+    };
+    Ok((deleted_batches, deleted_sessions))
 }
 
 // ── HTTP stats snapshot (poll fallback for viewers) ───────────────────────────
