@@ -520,6 +520,14 @@ keep their protection (they take hits, receive heals, or have classes).
 Verified live: The Prophet's encounter reassembled with full damage/tank
 data the moment the page reloaded.
 
+## 28. One Go Live control
+
+Per dev feedback on the shared viewer: the timeline bar's Go Live button was
+redundant next to the new pill by the connection badge — two identical
+controls read as a glitch. The bar button (and its orphaned CSS/handle) are
+removed; the pill is the single Go Live control, visible exactly when going
+live is possible and you aren't already there.
+
 ---
 
 *(subsequent changes appended as they land)*
