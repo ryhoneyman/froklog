@@ -207,7 +207,9 @@
      each row's name/class width. */
   .sum-row, .sum-hdr {
     display: grid;
-    grid-template-columns: minmax(50px, 1fr) max-content 48px 40px 56px;
+    /* All tracks fixed except the 1fr name column — separate grid containers
+       don't share max-content sizing, so only fixed tracks align across rows. */
+    grid-template-columns: minmax(40px, 1fr) 64px 48px 40px 56px;
     gap: 4px; align-items: center; padding: 0 6px;
   }
   .sum-row { height: 18px; font-size: 11px; }
