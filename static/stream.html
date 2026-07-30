@@ -627,6 +627,7 @@ function formatCopperShort(c) {
 const S = {
   players:  {},  // name -> PlayerStats
   lootTimes: [], // log-ts of every loot action — pull-boundary signal
+  heartbeats: [], // log-ts of combat heartbeats (stunned/OOM/interrupted)
   mobs:     {},  // mob_id (number) -> { name, lastTs, dead }
   mobDmg:   {},  // mob_id -> { player_name -> { dmg, dmgByType, dmgBySpell } }
   mobTank:  {},  // mob_id -> { player_name -> { dmg, dmgByType } }
@@ -784,6 +785,7 @@ function resetState() {
   S.lootOrder = [];
   S.lootOrderSet = new Set();
   S.lootTimes = [];
+  S.heartbeats = [];
   for (const k of Object.keys(allMobLootEver)) delete allMobLootEver[k];
   selectedMob = null;
   lastData    = null;
@@ -896,6 +898,13 @@ function applyEvent(ev) {
         tlEntry(S.mobHealTL,   ev.mob, ev.src).push({ts: ev.ts, v: ev.amt});
         tlEntry(S.mobHealedTL, ev.mob, ev.tgt).push({ts: ev.ts, v: ev.amt});
       }
+      break;
+    }
+    case 'hb': {
+      // Combat heartbeat: the player is stunned/OOM/interrupted — combat is
+      // ongoing even though no mob is named (they may all be on a merc or
+      // tank whose lines never reach this log). Bridges encounter gaps.
+      S.heartbeats.push(ev.ts);
       break;
     }
     case 'cc': {
@@ -1197,6 +1206,15 @@ function buildRenderState() {
   // your log) must NOT split the pull, so without a loot signal the ordinary
   // idle gap is the only cut.
   const lootBetween = (a, b) => S.lootTimes.some(t => t > a && t <= b);
+  // Walk heartbeats forward from an encounter's end: each stun/OOM line
+  // within the gap proves combat continued, extending the effective window.
+  const hbExtend = (end) => {
+    let e = end;
+    for (const t of S.heartbeats) {
+      if (t > e && t <= e + ENC_GAP) e = t;
+    }
+    return e;
+  };
   const chrono = mob_list
     .filter(m => m.first_ts)
     .sort((a, b) => a.first_ts - b.first_ts || a.id - b.id);
@@ -1204,7 +1222,7 @@ function buildRenderState() {
   let curEnc = null;
   for (const m of chrono) {
     const joins = curEnc
-      && m.first_ts <= curEnc.end_ts + ENC_GAP
+      && m.first_ts <= hbExtend(curEnc.end_ts) + ENC_GAP
       && !(curEnc.all_dead && lootBetween(curEnc.end_ts, m.first_ts));
     if (!joins) {
       curEnc = {

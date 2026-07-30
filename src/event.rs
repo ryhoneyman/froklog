@@ -188,6 +188,12 @@ pub enum CombatEvent {
         #[serde(default, skip_serializing_if = "is_false")]
         off: bool,
     },
+    /// Combat heartbeat: a player-state line (stunned, out of mana,
+    /// interrupted, life-drained) proving the fight is ongoing while the
+    /// player looks idle and no mob is named. Throttled to one per
+    /// log-second. Viewers use these to keep encounter windows open.
+    #[serde(rename = "hb")]
+    Heartbeat { ts: u32 },
 }
 
 impl CombatEvent {
@@ -213,7 +219,8 @@ impl CombatEvent {
             | Self::ItemHoard { ts, .. }
             | Self::ItemEnhance { ts, .. }
             | Self::ItemMerge { ts, .. }
-            | Self::Cc { ts, .. } => *ts,
+            | Self::Cc { ts, .. }
+            | Self::Heartbeat { ts } => *ts,
         }
     }
 }

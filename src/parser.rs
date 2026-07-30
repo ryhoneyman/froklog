@@ -17,7 +17,7 @@ use crate::event::{
 use crate::patterns::{
     norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_warder_owner,
     parse_who_classes, RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED,
-    RE_CC_PARK, RE_CC_WAKE, RE_DOT, RE_DS, RE_DS_BURN_YOU, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
+    RE_CC_PARK, RE_CC_WAKE, RE_DOT, RE_DS, RE_HEARTBEAT, RE_DS_BURN_YOU, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
     RE_ITEM_MERGE, RE_LOOT_ENHANCE, RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST,
     RE_RIPOSTE, RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
@@ -106,6 +106,9 @@ pub fn run(
     let mut last_publish = Instant::now();
     // Unix timestamp (seconds) of the most recently parsed EQ log line.
     let mut current_ts: u32 = 0;
+    // Last log-second a combat heartbeat was emitted (throttle: stun spam
+    // can produce many lines per second).
+    let mut last_heartbeat_ts: u32 = 0;
 
     for raw_line in &rx {
         if reset_flag.swap(false, Ordering::Relaxed) {
@@ -824,6 +827,14 @@ pub fn run(
                         off: true,
                     },
                 );
+            }
+            matched = true;
+
+        // ── Combat heartbeat: player stunned / OOM / interrupted ──────────────
+        } else if RE_HEARTBEAT.is_match(line) {
+            if current_ts != 0 && current_ts != last_heartbeat_ts {
+                last_heartbeat_ts = current_ts;
+                emit(&event_tx, CombatEvent::Heartbeat { ts: current_ts });
             }
             matched = true;
 

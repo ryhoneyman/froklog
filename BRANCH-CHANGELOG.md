@@ -360,6 +360,24 @@ fragments):
 - **Pull headers renamed** to "Pull #N · 9:57 AM" with count and duration;
   the composition list lives in the fight header and the indented member rows.
 
+## 17. Combat heartbeats — stuns and out-of-mana no longer end an encounter
+
+**User-identified gap.** A stunned or mana-dry player looks idle in the log,
+and if the mobs are meanwhile beating on a merc/pet/tank (whose combat never
+appears in this player's log), the whole log goes silent mid-fight — the
+15-second gap would then split the encounter even though "if the mobs are
+still hitting, the encounter is not done."
+
+The player-state lines that prove combat is ongoing are now parsed as a
+throttled (1/log-second) heartbeat event: "You are stunned!" / "no longer
+stunned" / "can't cast spells while stunned", "Insufficient Mana to cast this
+spell!", spell interrupts, concentration recovery, and life-force drain
+(thousands of each in the real logs). Heartbeats extend an encounter's
+effective window when chaining pulls, so a stun-locked stretch bridges the
+gap; they never *start* an encounter (a stray out-of-combat interrupt is
+harmless). New `hb` event kind — client and server deploy in lockstep, as
+with `cc`.
+
 ---
 
 *(subsequent changes appended as they land)*
