@@ -330,6 +330,36 @@ refinement still open: mez-parked mobs idle >15s can split a pull until
 crowd-control lines are parsed into a "parked" state (designed, not yet
 implemented).
 
+## 16. Encounter refinements — driven by live play-testing with the user
+
+Three rounds of "this is one encounter" feedback against real pulls exposed
+and fixed the following, verified against the raw log (a 5-name, 3-minute
+pull with max 3-second internal gaps that the viewer had been splitting into
+fragments):
+
+- **The real culprit: viewer case-flapping.** Events carry each log line's
+  original casing ("Orc slaver" attacking, "orc slaver" attacked); the
+  viewer's mob tracker treated a case flip on the same instance id as "id
+  reused — reset," wiping the fight window on nearly every event. Fights
+  showed 1-second durations and pulls shattered into blocks. Name comparison
+  is now case-insensitive (lowercase preferred for display, matching the
+  client). One warrior cleave pull went from 3+ fragments to a single
+  227-second, 9-instance encounter after the fix.
+- **Loot is the pull boundary, not a timer.** Between kills of the same pull
+  you tab to the next target without looting; you loot corpses when the pull
+  is over. The corpse-boundary cut now fires only when the pull is fully dead
+  AND looting occurred — chain-killing never splits, looting-then-repulling
+  always does.
+- **Crowd control parks mobs** (from the earlier mez design, now
+  implemented): "has been mesmerized/enthralled" lines register an unengaged
+  add as a pull member the moment CC lands, suspend its idle/instance-gap
+  timers (with a 5-minute silent-wear-off ceiling), and show a blue "mez"
+  badge; "has been awakened by" (or any fresh combat line) releases it. New
+  `cc` event type — client and server must deploy in lockstep (an old server
+  rejects batches containing unknown event kinds).
+- **Pull headers renamed** to "Pull #N · 9:57 AM" with count and duration;
+  the composition list lives in the fight header and the indented member rows.
+
 ---
 
 *(subsequent changes appended as they land)*
