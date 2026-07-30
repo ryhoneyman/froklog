@@ -786,8 +786,18 @@ function trackMob(mob, name, ts) {
   // DoT ticks on a dead mob arrive as "X's corpse" — strip the suffix so the
   // mob keeps its original name in the list.
   if (name.endsWith("'s corpse")) name = name.slice(0, -("'s corpse".length));
-  // A known player should never be treated as a mob.
-  if (S.players[name]) return;
+  // A known player should never be treated as a mob — but a "player" known
+  // ONLY from casting heals (no damage dealt, none received, no /who class)
+  // that now appears in a mob position is a mob self-heal misclassified by
+  // older client data (e.g. "The Prophet healed himself…" journaled before
+  // the parser learned to skip mob self-heals). Mob-position evidence wins:
+  // reclassify it so the mob isn't banned from its own encounter.
+  if (S.players[name]) {
+    const pl = S.players[name];
+    const healOnlyGhost = !pl.dmg && !pl.healed && !(pl.classes && pl.classes.length);
+    if (!healOnlyGhost) return;
+    delete S.players[name];
+  }
   // Case-INSENSITIVE name comparison: events carry each log line's original
   // casing ("Orc slaver" when it attacks, "orc slaver" when attacked), and a
   // case flip is the SAME mob — treating it as an id reuse reset the fight
