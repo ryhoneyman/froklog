@@ -750,6 +750,15 @@ const PET_NAMES = (() => {
   return s;
 })();
 function isPetName(name) { return PET_NAMES.has(name); }
+// pet name -> owning player, from 'pet' events. Global (not in S): like
+// /who classes, ownership knowledge outlives combat resets and seeks.
+const petOwners = {};
+// The Pet badge, naming the owner once known: "Pet · Ruin".
+function petChipHtml(name) {
+  if (!isPetName(name) && !petOwners[name]) return null;
+  const o = petOwners[name];
+  return `<span class="pet" title="${o ? 'Pet of ' + o : 'Summoned pet — owner not yet seen'}">Pet${o ? ' · ' + o : ''}</span>`;
+}
 
 function classColor(cls) { return CLASS_COLOR[cls] || CLASS_COLOR['']; }
 
@@ -1158,6 +1167,14 @@ function applyEvent(ev) {
       p.classes = ev.classes || [];
       p.cls = p.classes[0] || '';
       p.level = ev.level || 0;
+      break;
+    }
+    case 'pet': {
+      // Ownership learned (warder possessive, or a Burnout landing on a
+      // generated-name pet). Pets are renamed on every summon, so newer
+      // associations simply overwrite; like /who classes this outlives
+      // combat resets and seeks.
+      petOwners[ev.name] = ev.owner;
       break;
     }
     case 'currency_loot': {
@@ -2234,7 +2251,7 @@ function damageCard(e, elapsed, barColor = null) {
   const typeRows  = byType.map(r => typeRow(r.type, r.damage, total, bc, elapsed)).join('');
   const spellRows = spells.length ? `<hr class="spell-sep">` + spells.map(r => typeRow(truncate(r.spell, 17), r.damage, total, '#3c64a0', elapsed)).join('') : '';
   const clsHtml = classCodesHtml(classes);
-  const lvlHtml = isPetName(e.name) ? '<span class="pet">Pet</span>' : (e.level ? `<span class="lvl">${e.level}</span>` : '');
+  const lvlHtml = petChipHtml(e.name) || (e.level ? `<span class="lvl">${e.level}</span>` : '');
   return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Damage</span><span class="c-rate">DPS</span></div>${typeRows}${spellRows}<div class="card-pad"></div></div>`;
 }
 
@@ -2246,7 +2263,7 @@ function healerCard(e, elapsed) {
   const spells = e.heals_by_spell || [];
   const spellRows = (!spells.length && total > 0) ? typeRow('heal', total, total, healColor, elapsed, true) : spells.map(r => typeRow(truncate(r.spell, 17), r.healed, total, healColor, elapsed, true)).join('');
   const clsHtml = classCodesHtml(classes);
-  const lvlHtml = isPetName(e.name) ? '<span class="pet">Pet</span>' : (e.level ? `<span class="lvl">${e.level}</span>` : '');
+  const lvlHtml = petChipHtml(e.name) || (e.level ? `<span class="lvl">${e.level}</span>` : '');
   return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Spell</span><span class="c-val">Healed</span><span class="c-rate">HPS</span></div>${spellRows}<div class="card-pad"></div></div>`;
 }
 
@@ -2258,7 +2275,7 @@ function healeeCard(e, elapsed) {
   const spells = e.healed_received_by_spell || [];
   const spellRows = (!spells.length && total > 0) ? typeRow('heal', total, total, healColor, elapsed, true) : spells.map(r => typeRow(truncate(r.spell, 17), r.healed, total, healColor, elapsed, true)).join('');
   const clsHtml = classCodesHtml(classes);
-  const lvlHtml = isPetName(e.name) ? '<span class="pet">Pet</span>' : (e.level ? `<span class="lvl">${e.level}</span>` : '');
+  const lvlHtml = petChipHtml(e.name) || (e.level ? `<span class="lvl">${e.level}</span>` : '');
   return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Spell</span><span class="c-val">Healed</span><span class="c-rate">HPS</span></div>${spellRows}<div class="card-pad"></div></div>`;
 }
 
@@ -2271,7 +2288,7 @@ function avoidCard(e) {
     return `<div class="type-row"><span class="c-type"><span class="type-bar" style="width:${pct}%;background:#2a6a8a"></span><span class="type-label">${r.type}</span></span><span class="c-val">${r.count}</span><span class="c-rate">${pct}%</span></div>`;
   }).join('');
   const clsHtml = classCodesHtml(classes);
-  const lvlHtml = isPetName(e.name) ? '<span class="pet">Pet</span>' : (e.level ? `<span class="lvl">${e.level}</span>` : '');
+  const lvlHtml = petChipHtml(e.name) || (e.level ? `<span class="lvl">${e.level}</span>` : '');
   return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div><div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Count</span><span class="c-rate">%</span></div>${rows}<div class="card-pad"></div></div>`;
 }
 

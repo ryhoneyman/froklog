@@ -141,6 +141,15 @@ pub enum CombatEvent {
         #[serde(default)]
         level: u8,
     },
+    /// A pet's owner became known — warder possessive names, or a
+    /// pet-buff cast (Burnout) landing on a generated-name pet. Summoned
+    /// pets get a fresh random name every summon, so associations are
+    /// re-learned and overwritten as they happen.
+    Pet {
+        ts: u32,
+        name: String,
+        owner: String,
+    },
     /// Player logged in — emitted when "Welcome to EverQuest Legends!" is seen in the log.
     /// Used by the server to cut a new session boundary in the archive.
     Login { ts: u32 },
@@ -212,6 +221,7 @@ impl CombatEvent {
             | Self::Absorb { ts, .. }
             | Self::Resist { ts, .. }
             | Self::Who { ts, .. }
+            | Self::Pet { ts, .. }
             | Self::Login { ts }
             | Self::CurrencyLoot { ts, .. }
             | Self::ItemLoot { ts, .. }

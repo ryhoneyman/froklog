@@ -305,6 +305,52 @@ pub fn parse_warder_owner(name: &str) -> Option<&str> {
         .filter(|owner| !owner.is_empty() && !owner.contains(' '))
 }
 
+/// "<Pet> goes berserk." — the visible landing of a Burnout-family pet haste.
+/// Paired with the preceding "begins casting Burnout" this reveals which
+/// player owns which summoned pet: Burnout is only castable on the caster's
+/// OWN pet, and generated pet names carry no owner of their own.
+pub static RE_PET_BERSERK: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(?P<name>[A-Z][a-z]+) goes berserk\.$").unwrap());
+
+/// Spells castable only on the caster's own pet whose landing is visible in
+/// the log. Prefix-matched so ranks ("Burnout II") count.
+pub fn is_pet_buff_spell(spell: &str) -> bool {
+    spell.starts_with("Burnout")
+}
+
+/// The classic EQ summoned-pet name generator (Gabann, Labarer, Xobtik…) —
+/// the same syllable table the web viewer uses for its Pet badge. Summoned
+/// pets draw a random name from this fixed space on every summon.
+pub fn is_generated_pet_name(name: &str) -> bool {
+    use std::collections::HashSet;
+    static NAMES: Lazy<HashSet<String>> = Lazy::new(|| {
+        let p1 = ["G", "J", "K", "L", "V", "X", "Z"];
+        let p2 = ["", "ab", "ar", "as", "eb", "en", "ib", "ob", "on"];
+        let p3 = ["", "an", "ar", "ek", "ob"];
+        let p4 = ["er", "ab", "n", "tik"];
+        // Real-word collisions excluded, mirroring the viewer.
+        let blocked = ["Laser", "Ektik"];
+        let mut s = HashSet::new();
+        for a in p1 {
+            for b in p2 {
+                for c in p3 {
+                    if b.is_empty() && c.is_empty() {
+                        continue;
+                    }
+                    for d in p4 {
+                        let name = format!("{a}{b}{c}{d}");
+                        if !blocked.contains(&name.as_str()) {
+                            s.insert(name);
+                        }
+                    }
+                }
+            }
+        }
+        s
+    });
+    NAMES.contains(name)
+}
+
 pub fn normalize_article_case(name: &str) -> String {
     if let Some(rest) = name.strip_prefix("A ") {
         format!("a {rest}")

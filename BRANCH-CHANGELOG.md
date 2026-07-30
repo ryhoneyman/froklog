@@ -562,6 +562,27 @@ Encounters now collect every named member; headers, pull rows, and the
 playback dropdown show "★ A + B" (two spelled out, "+N" beyond). The
 first-engaged named still anchors anything keyed on a single name.
 
+## 32. Pet ownership
+
+Summoned pets draw a random generated name on every summon (Labarer,
+Gabann, Xobtik — a fixed syllable space both viewer and parser now share),
+so a pet was recognizable as *a* pet but never as *someone's* pet; only
+Beastlord warders ("X`s warder") carried their owner in the name.
+
+The log offers a clean recurring signature: Burnout-family pet hastes are
+castable only on the caster's own pet, and their landing is the visible
+"<Pet> goes berserk." line. "Ruin begins casting Burnout" followed within
+10 s by "Labarer goes berserk" proves Labarer is Ruin's — re-proven on
+every rebuff, which is exactly what per-summon renaming needs. The parser
+records the association (known_pets) and emits a new `pet {name, owner}`
+event; warder detection now emits it too. Verified on a real session:
+three independent Burnout pairs, all agreeing.
+
+Display is association-first, attribution-unchanged: the viewer's Pet
+badge becomes "Pet · Ruin" (tooltip "Pet of Ruin"), and damage rows stay
+per-entity — folding pet damage into the owner's row is deliberately left
+as a future option rather than assumed.
+
 ---
 
 *(subsequent changes appended as they land)*
