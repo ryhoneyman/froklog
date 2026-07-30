@@ -393,6 +393,18 @@ classifies as named until its first mid-sentence line arrives, then
 reclassifies. Verified live: Chokehold, Bloodgurgler, and Marrowbane
 encounters starred correctly across a real session.
 
+## 19. Viewer layout polish
+
+- **Resizable columns**: drag handles on the Mobs and Summary panels
+  (120-800 px, widths persisted per browser via localStorage, double-click to
+  reset). Verified across reloads.
+- **Summary panel headers and true columns**: each data tab now renders a
+  sticky header row (Player / Damage / % / DPS, labels following the tab),
+  and rows share fixed grid tracks with the header so values align in real
+  columns instead of drifting with name/class width. (Lesson recorded for
+  the curious: separate CSS grids don't share max-content track sizing —
+  every track except the flexible name column must be fixed.)
+
 ---
 
 *(subsequent changes appended as they land)*
