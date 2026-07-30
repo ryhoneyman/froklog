@@ -302,6 +302,34 @@ else" deterministically marks a new run; ids are remapped once at ingestion
 seeks, loot, links — untouched. New runs now append their fights at the top
 of the list with fresh totals, including in historical data.
 
+## 15. Encounters: pulls are now the reporting unit
+
+**Feature (user-requested: "I pulled 5 mobs, fighting all as a unit — report
+for the entire life of the encounter").** The viewer derives encounters by
+chaining mob instances whose activity windows overlap or follow within 15
+log-seconds, with a corpse-boundary cut: when every mob in a pull is dead, the
+next fresh mob starts a new encounter even inside the gap — so chain-pulling a
+camp slices into individual pulls instead of one endless block.
+
+- The mob list groups into pull blocks (newest first): a header row with the
+  composition ("orc legionnaire ×2, royal guard"), mob count, and duration,
+  with member mobs indented beneath.
+- Selecting a pull (click the header) scopes everything to it: combined
+  Damage, DPS over the pull's own duration, per-player breakdowns on every
+  tab, and merged loot for the whole pull.
+- In live mode the viewer auto-follows the current pull, so the headline
+  number while fighting five mobs as a unit is the unit's DPS.
+
+**Honest limitation, verified against the game's own Extended Targets window:**
+EQ log lines carry no individual identity, so N same-named concurrent mobs
+pool their per-individual attribution (a real 5-mob pull of 3 legionnaires +
+2 guards captures as 3 instances until deaths separate them — each corpse
+closes an instance, so counts converge to truth as the pull dies). The
+encounter's combined damage, duration, and DPS are exact regardless. Known
+refinement still open: mez-parked mobs idle >15s can split a pull until
+crowd-control lines are parsed into a "parked" state (designed, not yet
+implemented).
+
 ---
 
 *(subsequent changes appended as they land)*
