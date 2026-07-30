@@ -510,10 +510,27 @@ const allMobsEver  = {};   // mob_id -> { name }
 // centurion" vs "You slash Marrowbane") — so a name that stays capitalized
 // after enough lines is a named. Session-level knowledge, survives seeks.
 const lowercaseNames = new Set();
+// Behavioral demotion: a NAMED is by definition a unique spawn. Two corpses
+// of the same name within one window (Innoruuk`s Chosen, Cleric of Innoruuk:
+// capitalized farm-elites in Hate) prove population > 1 — demoted for the
+// session. Validated on real raid logs: every true named (17/17, incl. one
+// farmed 72 times) never died twice in a window; every capitalized elite did.
+const demotedNames = new Set();
+const lastKillTs = new Map();  // name(lower) -> last slay log-ts
+const DEMOTE_WINDOW = 90;
+function noteKillForDemotion(name, ts) {
+  const key = name.toLowerCase();
+  const prev = lastKillTs.get(key);
+  if (prev !== undefined && ts - prev <= DEMOTE_WINDOW && ts !== prev) {
+    demotedNames.add(key);
+  }
+  lastKillTs.set(key, ts);
+}
 function isNamedMob(name) {
   const c = name[0];
   return c === c.toUpperCase() && c !== c.toLowerCase()
-    && !lowercaseNames.has(name.toLowerCase());
+    && !lowercaseNames.has(name.toLowerCase())
+    && !demotedNames.has(name.toLowerCase());
 }
 const allMobOrderEver = []; // mob_ids in first-appearance order (oldest first)
 // Loot cache that spans seeks: populated from ALL cached batches, not just up
@@ -977,6 +994,7 @@ function applyEvent(ev) {
     case 'slay': {
       bumpTs(ev.ts);
       if (S.mobs[ev.mob]) S.mobs[ev.mob].dead = true;
+      if (ev.tgt) noteKillForDemotion(ev.tgt, ev.ts);
       break;
     }
     case 'miss': {
