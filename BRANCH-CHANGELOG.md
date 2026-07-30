@@ -378,6 +378,21 @@ gap; they never *start* an encounter (a stray out-of-combat interrupt is
 harmless). New `hb` event kind — client and server deploy in lockstep, as
 with `cc`.
 
+## 18. Named-vs-trash classification
+
+**Feature.** The game itself distinguishes named mobs from trash in its text:
+trash names are lowercased mid-sentence ("You slash orc centurion"), named
+mobs never are ("You slash Marrowbane"). The viewer keeps a session-level
+registry of names ever seen in lowercase form; a name that stays capitalized
+is a named. Named mobs render gold in the mob list, and an encounter
+containing one becomes a starred header titled by the named
+("★ Marrowbane · 10:41 AM") instead of "Pull #N" — which also gives boss
+pulls a human name in the list. Self-correcting edge case: trash seen only
+via sentence-start lines (e.g. it has only attacked, never been hit)
+classifies as named until its first mid-sentence line arrives, then
+reclassifies. Verified live: Chokehold, Bloodgurgler, and Marrowbane
+encounters starred correctly across a real session.
+
 ---
 
 *(subsequent changes appended as they land)*
