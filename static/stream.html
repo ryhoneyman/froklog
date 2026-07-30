@@ -47,11 +47,12 @@
   #status.poll  { color: #fa0; }
   #status.error { color: #f44; }
   #status.done  { color: #7ab8f5; }
-  #status.golive {
+  #golive-pill {
     color: #f9e2af; cursor: pointer; border: 1px solid #6c5c2c;
     border-radius: 4px; padding: 2px 8px; background: #262210;
+    font: inherit; font-size: 11px; margin-right: 8px;
   }
-  #status.golive:hover { background: #363213; color: #ffe9b8; }
+  #golive-pill:hover { background: #363213; color: #ffe9b8; }
   #player-name  { color: #a4f; }
 
   #time-display {
@@ -413,7 +414,8 @@
     <span class="td-now" id="wall-clock"></span>
     <span class="td-log"  id="log-clock"></span>
   </div>
-  <div id="status" class="error" onclick="statusClick()" title="Click to return to live">● disconnected</div>
+  <button id="golive-pill" onclick="goLive()" style="display:none" title="Return to the live view">&#9205; Go Live</button>
+  <div id="status" class="error" title="Streamer's client connection">● disconnected</div>
 </div>
 
 <div id="timeline-bar">
@@ -2270,7 +2272,7 @@ function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url   = `${proto}://${location.host}${WS_PATH}`;
   ws = new WebSocket(url);
-  ws.onopen    = () => { setStatus('live', '● live'); tlIsLive = true; tlPaused = false; updateLiveBtn(); updatePlayPauseBtn(); };
+  ws.onopen    = () => { tlIsLive = true; tlPaused = false; updateLiveBtn(); updatePlayPauseBtn(); };
   ws.onmessage = e => {
     let msg;
     try { msg = JSON.parse(e.data); } catch(_) { return; }
@@ -2289,7 +2291,6 @@ function connectWS() {
       if (!msg.is_live) {
         tlIsLive = false;
         tlCanGoLive = false;
-        setStatus('poll', '◉ recorded');
         updateLiveBtn();
         updatePlayPauseBtn();
         updateWallClock();
@@ -2347,6 +2348,11 @@ function connectWS() {
     }
     if (msg.t === 'stream_done') {
       cacheComplete = true;
+      // The server sends stream_done only when no ingest client is connected:
+      // the stream is not live anymore. Green/Go-Live must reflect the
+      // STREAM's state, so retire them in favor of the ended badge.
+      tlCanGoLive = false;
+      updateLiveBtn();
       if (sessionPreloading) {
         // Preload complete (completed recording) — show full session state at end.
         tlPaused = true;
@@ -2795,16 +2801,19 @@ function setStatus(cls, txt) {
   el.className = cls; el.textContent = txt;
 }
 
-/// The top-right badge doubles as the always-visible way back to live:
-/// "● live" while live; a clickable "⏵ Go Live" pill during replay/pause.
-function statusClick() {
-  if (tlCanGoLive && !tlIsLive && ws) goLive();
-}
-
+/// Top-right semantics: the badge reports the STREAMER'S CLIENT connection
+/// (green connected / gray disconnected); the separate "⏵ Go Live" pill is
+/// the navigation control, shown only when the client is connected but the
+/// viewer isn't watching live.
 function syncStatusIndicator() {
-  if (!ws || !tlCanGoLive) return; // disconnected / recorded badges stay as-is
-  if (tlIsLive) setStatus('live', '● live');
-  else setStatus('golive', '⏵ Go Live');
+  const pill = document.getElementById('golive-pill');
+  if (!ws) { if (pill) pill.style.display = 'none'; return; } // reconnecting badge stays
+  if (tlCanGoLive) {
+    setStatus('live', '● client connected');
+  } else {
+    setStatus('poll', '○ client disconnected');
+  }
+  if (pill) pill.style.display = (tlCanGoLive && !tlIsLive) ? '' : 'none';
 }
 
 // ── Clocks ────────────────────────────────────────────────────────────────────
