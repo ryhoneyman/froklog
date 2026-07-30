@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, watch, RwLock};
-use tracing::warn;
 
 use crate::journal::{Journal, SharedJournal};
 use crate::session_index::{SessionIndex, SharedSessionIndex};
@@ -87,15 +86,6 @@ impl StreamEntry {
         })
     }
 
-    /// Append a raw EventBatch JSON string to the on-disk journal.
-    /// `wall_ts` is the server-side unix seconds when the batch was received.
-    /// `log_ts` is the max EQ log-event unix timestamp from the batch.
-    pub async fn append_journal(&self, wall_ts: u64, log_ts: Option<u64>, seq: u32, json: &str) {
-        let mut j = self.journal.write().await;
-        if let Err(e) = j.append(wall_ts, log_ts, seq, json) {
-            warn!("Journal [{}]: write error: {e}", self.stream_id);
-        }
-    }
 }
 
 /// Inner registry — held behind an `Arc<RwLock<…>>`.
@@ -206,7 +196,7 @@ impl StreamRegistry {
                 public_stream: e.public_stream,
                 is_replay: e.is_replay,
                 journal: e.journal.clone(),
-                journal_path: self.data_dir.join(&e.stream_id).join("journal.jsonl"),
+                journal_path: self.data_dir.join(&e.stream_id).join("froklog.db"),
                 session_index: e.session_index.clone(),
             })
             .collect()

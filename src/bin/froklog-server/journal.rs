@@ -1,57 +1,47 @@
-/// Persistent on-disk journal for a single stream.
+/// Persistent per-stream storage backed by embedded SQLite.
 ///
-/// Layout: `<data_dir>/<stream_id>/journal.jsonl`
+/// Layout: `<data_dir>/<stream_id>/froklog.db` (WAL mode).
 ///
-/// New records use a 25-byte binary header (magic=0x01) followed by
-/// zlib-compressed batch JSON. Legacy records are newline-delimited JSON
-/// (magic=`{`) and remain readable indefinitely. Both formats coexist in the
-/// same file; `open()` detects format per-record from the first byte.
+/// Tables (created here, shared with `session_index.rs` and markers):
+///   batches  (id INTEGER PRIMARY KEY AUTOINCREMENT, wall_ts, log_ts, seq, batch BLOB)
+///   sessions (num INTEGER PRIMARY KEY, start_batch_id, start_log_ts, start_wall_ts, label)
+///   markers  (id INTEGER PRIMARY KEY AUTOINCREMENT, ts, kind, label)
 ///
-/// Binary record layout:
-///   [u8  0x01]  magic
-///   [u64 LE  ]  wall_ts  (unix seconds)
-///   [u64 LE  ]  log_ts   (EQ log unix seconds; 0 = absent)
-///   [u32 LE  ]  seq
-///   [u32 LE  ]  clen     (byte length of compressed payload)
-///   [N bytes ]  zlib-compressed batch JSON
+/// Batch JSON is zlib-compressed in the BLOB, same compression as the old
+/// binary journal format. The in-memory seek index (`Vec<IndexEntry>`, ordered
+/// by insertion) is preserved from the old design: viewer positions stay
+/// ephemeral per-connection `usize` offsets into this vec, and SQLite row ids
+/// are the permanent handles (sessions anchor to ids so pruning old rows never
+/// shifts a session boundary).
 ///
-/// An in-memory index maps wall_ts → byte offset so seek is O(log n).
-use std::io::{BufRead, Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
-use std::sync::Arc;
+/// The old `journal.jsonl` format is NOT migrated; when one is present next to
+/// an empty database a notice is logged and the file is ignored.
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use serde::{Deserialize, Serialize};
+use rusqlite::Connection;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
-#[derive(Serialize, Deserialize)]
-struct JournalLine {
-    /// Wall-clock unix seconds when this batch was received by the server.
-    wall_ts: u64,
-    /// Max EQ log-event unix timestamp from the batch (for replay pacing).
-    #[serde(default)]
-    log_ts: Option<u64>,
-    seq: u32,
-    batch: serde_json::Value,
-}
-
-/// One entry in the seek index.
+/// One entry in the in-memory seek index, ordered by insertion (= by `rowid`).
 #[derive(Clone, Copy)]
 pub struct IndexEntry {
     pub wall_ts: u64,
     /// Max EQ log-event unix timestamp in this batch, if recorded.
     pub log_ts: Option<u64>,
-    pub byte_offset: u64,
+    /// Permanent SQLite row id of this batch. Monotonic, never reused.
+    pub rowid: i64,
 }
 
-/// The append-only, seekable disk journal for one stream.
+/// The durable, seekable batch store for one stream.
 pub struct Journal {
-    path: PathBuf,
-    /// Seek index: sorted ascending by wall_ts. Protected by the same outer
-    /// RwLock as the rest of the StreamEntry so no extra lock is needed.
+    /// SQLite handle. `Connection` is Send but not Sync, so it sits behind a
+    /// std Mutex; every lock is held only for one short, non-awaiting call.
+    conn: Mutex<Connection>,
+    /// Seek index rebuilt from the DB on open and maintained on append/prune.
     pub index: Vec<IndexEntry>,
 }
 
@@ -68,117 +58,88 @@ fn decompress_batch(data: &[u8]) -> Option<String> {
     Some(out)
 }
 
-/// Read one record (JSONL or binary) from `reader`, returning the batch JSON string.
-fn read_one_record<R: BufRead>(reader: &mut R) -> Option<String> {
-    let mut magic = [0u8; 1];
-    reader.read_exact(&mut magic).ok()?;
-    match magic[0] {
-        b'{' => {
-            // Legacy JSONL: read rest of line, parse JournalLine, return batch field.
-            let mut rest = Vec::new();
-            reader.read_until(b'\n', &mut rest).ok()?;
-            let mut line = vec![b'{'];
-            line.extend_from_slice(&rest);
-            let s = std::str::from_utf8(&line).ok()?;
-            let jl: JournalLine = serde_json::from_str(s.trim_end()).ok()?;
-            serde_json::to_string(&jl.batch).ok()
-        }
-        0x01 => {
-            // Binary: 24-byte header then compressed payload.
-            let mut hdr = [0u8; 24];
-            reader.read_exact(&mut hdr).ok()?;
-            let clen = u32::from_le_bytes(hdr[20..24].try_into().unwrap()) as usize;
-            let mut compressed = vec![0u8; clen];
-            reader.read_exact(&mut compressed).ok()?;
-            decompress_batch(&compressed)
-        }
-        _ => None,
-    }
+fn sql_err(e: rusqlite::Error) -> std::io::Error {
+    std::io::Error::other(e)
+}
+
+/// Open the per-stream database, applying pragmas and creating the schema.
+/// Shared by `Journal` and `SessionIndex` (separate connections, same file).
+pub(crate) fn open_db(data_dir: &std::path::Path, stream_id: &str) -> std::io::Result<Connection> {
+    let dir = data_dir.join(stream_id);
+    std::fs::create_dir_all(&dir)?;
+    let conn = Connection::open(dir.join("froklog.db")).map_err(sql_err)?;
+    conn.pragma_update(None, "journal_mode", "WAL").map_err(sql_err)?;
+    conn.pragma_update(None, "synchronous", "NORMAL").map_err(sql_err)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(sql_err)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS batches (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            wall_ts INTEGER NOT NULL,
+            log_ts  INTEGER,
+            seq     INTEGER NOT NULL,
+            batch   BLOB NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+            num           INTEGER PRIMARY KEY,
+            start_batch_id INTEGER NOT NULL,
+            start_log_ts  INTEGER NOT NULL,
+            start_wall_ts INTEGER NOT NULL,
+            label         TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS markers (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts    INTEGER NOT NULL,
+            kind  TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT ''
+        );",
+    )
+    .map_err(sql_err)?;
+    Ok(conn)
 }
 
 impl Journal {
-    /// Open (or create) the journal file and build the seek index from existing content.
+    /// Open (or create) the stream database and load the seek index.
     pub fn open(data_dir: &std::path::Path, stream_id: &str) -> std::io::Result<Self> {
-        let dir = data_dir.join(stream_id);
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("journal.jsonl");
+        let conn = open_db(data_dir, stream_id)?;
 
         let mut index = Vec::new();
-
-        if path.exists() {
-            let file = std::fs::File::open(&path)?;
-            let mut reader = std::io::BufReader::new(file);
-            let mut offset: u64 = 0;
-
-            loop {
-                let record_offset = offset;
-                let mut magic = [0u8; 1];
-                match reader.read_exact(&mut magic) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(e),
-                }
-                offset += 1;
-
-                if magic[0] == b'{' {
-                    // Legacy JSONL record.
-                    let mut rest = Vec::new();
-                    let n = reader.read_until(b'\n', &mut rest)?;
-                    offset += n as u64;
-                    let mut line = vec![b'{'];
-                    line.extend_from_slice(&rest);
-                    if let Ok(s) = std::str::from_utf8(&line) {
-                        if let Ok(jl) = serde_json::from_str::<JournalLine>(s.trim_end()) {
-                            index.push(IndexEntry {
-                                wall_ts: jl.wall_ts,
-                                log_ts: jl.log_ts,
-                                byte_offset: record_offset,
-                            });
-                        }
-                    }
-                } else if magic[0] == 0x01 {
-                    // Binary record: read 24-byte header, skip compressed payload.
-                    let mut hdr = [0u8; 24];
-                    match reader.read_exact(&mut hdr) {
-                        Ok(()) => {}
-                        Err(_) => break,
-                    }
-                    offset += 24;
-                    let wall_ts = u64::from_le_bytes(hdr[0..8].try_into().unwrap());
-                    let log_ts_raw = u64::from_le_bytes(hdr[8..16].try_into().unwrap());
-                    let clen = u32::from_le_bytes(hdr[20..24].try_into().unwrap()) as usize;
-                    let mut skip = vec![0u8; clen];
-                    match reader.read_exact(&mut skip) {
-                        Ok(()) => {}
-                        Err(_) => break,
-                    }
-                    offset += clen as u64;
-                    index.push(IndexEntry {
-                        wall_ts,
-                        log_ts: if log_ts_raw == 0 {
-                            None
-                        } else {
-                            Some(log_ts_raw)
-                        },
-                        byte_offset: record_offset,
-                    });
-                } else {
-                    // Unknown byte — skip to next newline as best-effort recovery.
-                    let mut rest = Vec::new();
-                    let n = reader.read_until(b'\n', &mut rest)?;
-                    offset += n as u64;
-                }
+        {
+            let mut stmt = conn
+                .prepare("SELECT id, wall_ts, log_ts FROM batches ORDER BY id")
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(IndexEntry {
+                        rowid: row.get(0)?,
+                        wall_ts: row.get::<_, i64>(1)? as u64,
+                        log_ts: row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                    })
+                })
+                .map_err(sql_err)?;
+            for row in rows {
+                index.push(row.map_err(sql_err)?);
             }
-            info!(
-                "Journal [{stream_id}]: loaded {} batches from disk",
-                index.len()
+        }
+
+        // Old-format journal present but not migrated (by design).
+        let legacy = data_dir.join(stream_id).join("journal.jsonl");
+        if legacy.exists() && index.is_empty() {
+            warn!(
+                "Journal [{stream_id}]: legacy journal.jsonl found — old data is NOT migrated and will be ignored"
             );
         }
 
-        Ok(Self { path, index })
+        if !index.is_empty() {
+            info!("Journal [{stream_id}]: loaded {} batches", index.len());
+        }
+
+        Ok(Self {
+            conn: Mutex::new(conn),
+            index,
+        })
     }
 
-    /// Append a raw EventBatch JSON string received at `wall_ts` to disk and update the index.
+    /// Append a raw EventBatch JSON string received at `wall_ts` and update the index.
     /// `log_ts` is the max EQ log-event unix timestamp from the batch (used for replay pacing).
     pub fn append(
         &mut self,
@@ -188,40 +149,56 @@ impl Journal {
         batch_json: &str,
     ) -> std::io::Result<()> {
         let compressed = compress_batch(batch_json)?;
-        let clen = compressed.len() as u32;
-
-        let mut header = [0u8; 25];
-        header[0] = 0x01;
-        header[1..9].copy_from_slice(&wall_ts.to_le_bytes());
-        header[9..17].copy_from_slice(&log_ts.unwrap_or(0).to_le_bytes());
-        header[17..21].copy_from_slice(&seq.to_le_bytes());
-        header[21..25].copy_from_slice(&clen.to_le_bytes());
-
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-
-        let byte_offset = file.seek(SeekFrom::End(0))?;
-        file.write_all(&header)?;
-        file.write_all(&compressed)?;
-        file.flush()?;
+        let conn = self.conn.lock().expect("journal db mutex");
+        conn.prepare_cached(
+            "INSERT INTO batches (wall_ts, log_ts, seq, batch) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .map_err(sql_err)?
+        .execute(rusqlite::params![
+            wall_ts as i64,
+            log_ts.map(|v| v as i64),
+            seq as i64,
+            compressed,
+        ])
+        .map_err(sql_err)?;
+        let rowid = conn.last_insert_rowid();
+        drop(conn);
 
         self.index.push(IndexEntry {
             wall_ts,
             log_ts,
-            byte_offset,
+            rowid,
         });
         Ok(())
     }
 
-    /// Return the total number of batches stored on disk.
+    /// Return the total number of batches stored.
     pub fn len(&self) -> usize {
         self.index.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.index.len() == 0
+        self.index.is_empty()
+    }
+
+    /// The row id the NEXT appended batch will receive.
+    /// Used to anchor a session boundary cut just before its first batch arrives.
+    pub fn next_batch_id(&self) -> i64 {
+        let conn = self.conn.lock().expect("journal db mutex");
+        // AUTOINCREMENT: next id is strictly greater than any id ever used,
+        // tracked in sqlite_sequence even after deletes.
+        conn.query_row(
+            "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='batches'), 0) + 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| self.index.last().map(|e| e.rowid + 1).unwrap_or(1))
+    }
+
+    /// Index position of the first batch with `rowid >= id`.
+    /// Row ids are insertion-ordered, so this is a true binary search.
+    pub fn pos_of_id(&self, id: i64) -> usize {
+        self.index.partition_point(|e| e.rowid < id)
     }
 
     /// Wall-clock unix timestamp of the first batch (if any).
@@ -246,69 +223,65 @@ impl Journal {
 
     /// Find the index position of the first batch with wall_ts >= target_ts.
     /// Returns `self.index.len()` when target_ts is past the end.
+    /// wall_ts is server-assigned under the journal write lock, so it is
+    /// monotonic and binary search is valid.
     pub fn seek_index(&self, target_ts: u64) -> usize {
-        // Binary search for the leftmost entry with wall_ts >= target_ts.
-        let mut lo = 0usize;
-        let mut hi = self.index.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.index[mid].wall_ts < target_ts {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
+        self.index.partition_point(|e| e.wall_ts < target_ts)
     }
 
-    /// Find the index position of the first batch with log_ts >= target_ts.
-    /// Entries that lack a log_ts fall back to their wall_ts for comparison.
-    /// Returns `self.index.len()` when target_ts is past the end.
+    /// Find the index position of the first batch (in journal order) with
+    /// log_ts >= target_ts. Entries without a log_ts fall back to wall_ts.
+    ///
+    /// This is a linear scan on purpose: log_ts is only sorted for a
+    /// well-behaved live clock. Historical imports pushed into a stream with
+    /// newer data (or a client clock stepping backwards) produce unsorted
+    /// sequences, and a binary search over unsorted data lands at an arbitrary
+    /// position. The index lives in RAM, so first-match is microseconds.
     pub fn seek_index_by_log_ts(&self, target_ts: u64) -> usize {
-        let mut lo = 0usize;
-        let mut hi = self.index.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let ts = self.index[mid].log_ts.unwrap_or(self.index[mid].wall_ts);
-            if ts < target_ts {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
+        self.index
+            .iter()
+            .position(|e| e.log_ts.unwrap_or(e.wall_ts) >= target_ts)
+            .unwrap_or(self.index.len())
     }
 
-    /// Read a single batch JSON from disk by its index position.
-    /// Returns `None` if the position is out of range or the file cannot be read.
+    /// Read a single batch JSON by its index position.
+    /// Returns `None` if the position is out of range or the row cannot be read.
     pub fn read_at(&self, pos: usize) -> Option<Arc<String>> {
         let entry = self.index.get(pos)?;
-        let mut file = std::fs::File::open(&self.path).ok()?;
-        file.seek(SeekFrom::Start(entry.byte_offset)).ok()?;
-        let mut reader = std::io::BufReader::new(file);
-        read_one_record(&mut reader).map(Arc::new)
+        let conn = self.conn.lock().expect("journal db mutex");
+        let blob: Vec<u8> = conn
+            .prepare_cached("SELECT batch FROM batches WHERE id = ?1")
+            .ok()?
+            .query_row([entry.rowid], |row| row.get(0))
+            .ok()?;
+        drop(conn);
+        decompress_batch(&blob).map(Arc::new)
     }
 
-    /// Read up to `count` batches sequentially from disk starting at index position `pos`.
-    /// Opens the file once and reads contiguous records, avoiding per-batch file overhead.
+    /// Read up to `count` batches sequentially starting at index position `pos`.
     /// Returns fewer than `count` entries only when the journal is exhausted.
     pub fn read_burst(&self, pos: usize, count: usize) -> Vec<Arc<String>> {
         if pos >= self.index.len() || count == 0 {
             return Vec::new();
         }
         let end = (pos + count).min(self.index.len());
-        let entry = &self.index[pos];
-        let mut file = match std::fs::File::open(&self.path) {
-            Ok(f) => f,
+        let first_id = self.index[pos].rowid;
+        let last_id = self.index[end - 1].rowid;
+
+        let conn = self.conn.lock().expect("journal db mutex");
+        let mut stmt = match conn
+            .prepare_cached("SELECT batch FROM batches WHERE id BETWEEN ?1 AND ?2 ORDER BY id")
+        {
+            Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        if file.seek(SeekFrom::Start(entry.byte_offset)).is_err() {
-            return Vec::new();
-        }
-        let mut reader = std::io::BufReader::new(file);
+        let rows = match stmt.query_map([first_id, last_id], |row| row.get::<_, Vec<u8>>(0)) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
         let mut results = Vec::with_capacity(end - pos);
-        for _ in pos..end {
-            match read_one_record(&mut reader) {
+        for blob in rows.flatten() {
+            match decompress_batch(&blob) {
                 Some(json) => results.push(Arc::new(json)),
                 None => break,
             }
@@ -316,27 +289,46 @@ impl Journal {
         results
     }
 
-    /// Read the wall_ts for a given index position without deserialising the full line.
+    /// Read the wall_ts for a given index position.
     pub fn ts_at(&self, pos: usize) -> Option<u64> {
         self.index.get(pos).map(|e| e.wall_ts)
     }
 
     /// Read the EQ log-event timestamp for a given index position.
-    /// Falls back to `wall_ts` for old journal entries that predate this field.
+    /// Falls back to `wall_ts` for entries that lack a log_ts.
     pub fn log_ts_at(&self, pos: usize) -> Option<u64> {
         self.index.get(pos).map(|e| e.log_ts.unwrap_or(e.wall_ts))
     }
 
-    /// Truncate the on-disk journal to zero bytes and clear the in-memory index.
+    /// Delete all stored batches and clear the in-memory index.
     pub fn clear(&mut self) -> std::io::Result<()> {
-        if self.path.exists() {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&self.path)?;
-        }
+        let conn = self.conn.lock().expect("journal db mutex");
+        conn.execute("DELETE FROM batches", []).map_err(sql_err)?;
+        drop(conn);
         self.index.clear();
         Ok(())
+    }
+
+    /// Delete every batch whose log timestamp (fallback: wall timestamp) is
+    /// older than `cutoff_ts`, reclaim the space, and rebuild the index.
+    /// Returns (batches_deleted, smallest_remaining_rowid).
+    pub fn prune(&mut self, cutoff_ts: u64) -> std::io::Result<(usize, Option<i64>)> {
+        let deleted = {
+            let conn = self.conn.lock().expect("journal db mutex");
+            let n = conn
+                .execute(
+                    "DELETE FROM batches WHERE COALESCE(log_ts, wall_ts) < ?1",
+                    [cutoff_ts as i64],
+                )
+                .map_err(sql_err)?;
+            if n > 0 {
+                // Reclaim freed pages; per-stream DBs are small so this is quick.
+                conn.execute_batch("VACUUM").map_err(sql_err)?;
+            }
+            n
+        };
+        self.index.retain(|e| e.log_ts.unwrap_or(e.wall_ts) >= cutoff_ts);
+        Ok((deleted, self.index.first().map(|e| e.rowid)))
     }
 }
 
@@ -348,17 +340,17 @@ mod tests {
     use super::*;
 
     fn make_journal(entries: &[(u64, Option<u64>)]) -> Journal {
-        Journal {
-            path: std::path::PathBuf::new(),
-            index: entries
-                .iter()
-                .map(|&(wall_ts, log_ts)| IndexEntry {
-                    wall_ts,
-                    log_ts,
-                    byte_offset: 0,
-                })
-                .collect(),
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = Journal::open(dir.path(), "mem").unwrap();
+        for (i, &(wall_ts, log_ts)) in entries.iter().enumerate() {
+            j.append(wall_ts, log_ts, i as u32, r#"{"seq":0,"events":[]}"#)
+                .unwrap();
         }
+        // tempdir is deleted here; the open connection keeps working on the
+        // unlinked file for the duration of the test (POSIX) — index-only
+        // assertions below never touch disk again anyway.
+        std::mem::forget(dir);
+        j
     }
 
     // ── len / is_empty ────────────────────────────────────────────────────────────
@@ -478,6 +470,18 @@ mod tests {
         let j = make_journal(&[(100, Some(10))]);
         assert_eq!(j.seek_index_by_log_ts(999), 1);
     }
+    #[test]
+    fn seek_by_log_ts_unsorted_history_import() {
+        // A historical import (log_ts 10, 20) lands AFTER newer live data
+        // (log_ts 100): the array is not sorted by log_ts. First-match in
+        // journal order is conservative — it may land early but never skips
+        // batches at-or-after the target, unlike binary search on unsorted
+        // data which lands at an arbitrary position.
+        let j = make_journal(&[(1000, Some(100)), (2000, Some(10)), (3000, Some(20))]);
+        assert_eq!(j.seek_index_by_log_ts(50), 0);
+        assert_eq!(j.seek_index_by_log_ts(15), 0);
+        assert_eq!(j.seek_index_by_log_ts(150), 3); // nothing >= 150 anywhere
+    }
 
     // ── open / append / read_at (disk) ────────────────────────────────────────────
     #[test]
@@ -492,7 +496,6 @@ mod tests {
         assert_eq!(j.first_ts(), Some(1000));
 
         let content = j.read_at(0).unwrap();
-        // read_at returns the batch field, not the full journal line
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(parsed["seq"].as_u64().unwrap(), 0);
     }
@@ -535,5 +538,78 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let j = Journal::open(dir.path(), "empty_stream").unwrap();
         assert!(j.read_at(0).is_none());
+    }
+
+    #[test]
+    fn read_burst_reads_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = Journal::open(dir.path(), "burst").unwrap();
+        for i in 0..5u32 {
+            j.append(100 + i as u64, None, i, &format!(r#"{{"seq":{i},"events":[]}}"#))
+                .unwrap();
+        }
+        let batches = j.read_burst(1, 3);
+        assert_eq!(batches.len(), 3);
+        let first: serde_json::Value = serde_json::from_str(&batches[0]).unwrap();
+        assert_eq!(first["seq"].as_u64().unwrap(), 1);
+    }
+
+    // ── ids / prune ───────────────────────────────────────────────────────────────
+    #[test]
+    fn next_batch_id_and_pos_of_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = Journal::open(dir.path(), "ids").unwrap();
+        assert_eq!(j.next_batch_id(), 1);
+        j.append(100, Some(10), 0, r#"{"seq":0,"events":[]}"#)
+            .unwrap();
+        j.append(200, Some(20), 1, r#"{"seq":1,"events":[]}"#)
+            .unwrap();
+        assert_eq!(j.next_batch_id(), 3);
+        assert_eq!(j.pos_of_id(1), 0);
+        assert_eq!(j.pos_of_id(2), 1);
+        assert_eq!(j.pos_of_id(3), 2); // past the end
+    }
+
+    #[test]
+    fn prune_deletes_old_and_keeps_ids_stable() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = Journal::open(dir.path(), "prune").unwrap();
+        j.append(1000, Some(100), 0, r#"{"seq":0,"events":[]}"#)
+            .unwrap();
+        j.append(2000, Some(200), 1, r#"{"seq":1,"events":[]}"#)
+            .unwrap();
+        j.append(3000, Some(300), 2, r#"{"seq":2,"events":[]}"#)
+            .unwrap();
+
+        let (deleted, min_id) = j.prune(250).unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(j.len(), 1);
+        assert_eq!(min_id, Some(3)); // surviving batch keeps its original id
+        assert_eq!(j.log_first_ts(), Some(300));
+
+        // New appends continue after the highest id ever used, never reusing 1/2.
+        assert_eq!(j.next_batch_id(), 4);
+        j.append(4000, Some(400), 3, r#"{"seq":3,"events":[]}"#)
+            .unwrap();
+        assert_eq!(j.pos_of_id(4), 1);
+
+        // Survives a reopen.
+        drop(j);
+        let j2 = Journal::open(dir.path(), "prune").unwrap();
+        assert_eq!(j2.len(), 2);
+        assert_eq!(j2.log_first_ts(), Some(300));
+        assert_eq!(j2.next_batch_id(), 5);
+    }
+
+    #[test]
+    fn prune_nothing_to_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = Journal::open(dir.path(), "prune_noop").unwrap();
+        j.append(1000, Some(100), 0, r#"{"seq":0,"events":[]}"#)
+            .unwrap();
+        let (deleted, min_id) = j.prune(50).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(min_id, Some(1));
+        assert_eq!(j.len(), 1);
     }
 }

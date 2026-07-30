@@ -1,24 +1,25 @@
-/// Per-stream session index: tracks play-session boundaries within a single journal.
+/// Per-stream session index: tracks play-session boundaries within a stream.
 ///
-/// Layout: `<data_dir>/<stream_id>/sessions.jsonl`
-///
-/// Each line is a JSON object:
-///   `{"num":<u32>,"start_journal_idx":<usize>,"start_log_ts":<u64>,"start_wall_ts":<u64>,"label":<str>}`
+/// Stored in the stream's SQLite database (`froklog.db`, `sessions` table,
+/// schema created in `journal.rs::open_db`).
 ///
 /// Sessions are cut by two mechanisms (in priority order):
 ///   1. A `Login` event received in an ingest batch ("Welcome to EverQuest Legends!").
 ///   2. WS client reconnect after a gap of ≥ RECONNECT_GAP_SECS with no pushes.
 ///
-/// For journals that predate session tracking, `retroactive_scan` detects boundaries
-/// from gaps of ≥ GAP_SECS between consecutive combat-event log timestamps.
-use std::io::{BufRead, Write};
-use std::path::PathBuf;
+/// A session anchors to the permanent row id of its first batch
+/// (`start_batch_id`), NOT a positional index: pruning old batches never shifts
+/// a session boundary. Positions are derived on demand via
+/// `Journal::pos_of_id`.
+///
+/// For journals that predate session tracking, `retroactive_scan` detects
+/// boundaries from gaps of ≥ GAP_SECS between consecutive batch log timestamps.
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Utc};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::warn;
 
 use crate::journal::IndexEntry;
 
@@ -33,8 +34,8 @@ pub const RECONNECT_GAP_SECS: u64 = 600; // 10 minutes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
     pub num: u32,
-    /// Index into the journal where this session's first batch lives.
-    pub start_journal_idx: usize,
+    /// Permanent row id of this session's first batch in the `batches` table.
+    pub start_batch_id: i64,
     /// EQ log-event timestamp of the first event in this session.
     pub start_log_ts: u64,
     /// Wall-clock unix timestamp when the session-start batch was received.
@@ -44,44 +45,64 @@ pub struct SessionEntry {
 }
 
 pub struct SessionIndex {
-    path: PathBuf,
+    conn: std::sync::Mutex<Connection>,
     sessions: Vec<SessionEntry>,
 }
 
+fn sql_err(e: rusqlite::Error) -> std::io::Error {
+    std::io::Error::other(e)
+}
+
 impl SessionIndex {
-    /// Open (or create) the sessions file and load existing entries.
+    /// Open the stream database and load existing session entries.
     pub fn open(data_dir: &std::path::Path, stream_id: &str) -> std::io::Result<Self> {
-        let dir = data_dir.join(stream_id);
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("sessions.jsonl");
+        let conn = crate::journal::open_db(data_dir, stream_id)?;
         let mut sessions = Vec::new();
-        if path.exists() {
-            let file = std::fs::File::open(&path)?;
-            let reader = std::io::BufReader::new(file);
-            for line in reader.lines() {
-                let line = line?;
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<SessionEntry>(trimmed) {
-                    Ok(s) => sessions.push(s),
-                    Err(e) => warn!("SessionIndex [{stream_id}]: skipping malformed line: {e}"),
-                }
+        {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT num, start_batch_id, start_log_ts, start_wall_ts, label
+                     FROM sessions ORDER BY num",
+                )
+                .map_err(sql_err)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(SessionEntry {
+                        num: row.get::<_, i64>(0)? as u32,
+                        start_batch_id: row.get(1)?,
+                        start_log_ts: row.get::<_, i64>(2)? as u64,
+                        start_wall_ts: row.get::<_, i64>(3)? as u64,
+                        label: row.get(4)?,
+                    })
+                })
+                .map_err(sql_err)?;
+            for row in rows {
+                sessions.push(row.map_err(sql_err)?);
             }
         }
-        Ok(Self { path, sessions })
+        Ok(Self {
+            conn: std::sync::Mutex::new(conn),
+            sessions,
+        })
     }
 
-    /// Append a new session entry to disk and the in-memory list.
+    /// Append a new session entry to the database and the in-memory list.
     pub fn append(&mut self, entry: SessionEntry) -> std::io::Result<()> {
-        let line = serde_json::to_string(&entry)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        writeln!(file, "{line}")?;
+        let conn = self.conn.lock().expect("session db mutex");
+        conn.prepare_cached(
+            "INSERT INTO sessions (num, start_batch_id, start_log_ts, start_wall_ts, label)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .map_err(sql_err)?
+        .execute(rusqlite::params![
+            entry.num as i64,
+            entry.start_batch_id,
+            entry.start_log_ts as i64,
+            entry.start_wall_ts as i64,
+            entry.label,
+        ])
+        .map_err(sql_err)?;
+        drop(conn);
         self.sessions.push(entry);
         Ok(())
     }
@@ -98,21 +119,64 @@ impl SessionIndex {
         self.sessions.is_empty()
     }
 
-    /// Journal index of the most recently recorded session start, if any.
-    pub fn last_start_idx(&self) -> Option<usize> {
-        self.sessions.last().map(|s| s.start_journal_idx)
+    /// Batch id of the most recently recorded session start, if any.
+    pub fn last_start_id(&self) -> Option<i64> {
+        self.sessions.last().map(|s| s.start_batch_id)
     }
 
-    /// Truncate the on-disk sessions file to zero bytes and clear the in-memory list.
+    /// Delete all sessions from the database and the in-memory list.
     pub fn clear(&mut self) -> std::io::Result<()> {
-        if self.path.exists() {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&self.path)?;
-        }
+        let conn = self.conn.lock().expect("session db mutex");
+        conn.execute("DELETE FROM sessions", []).map_err(sql_err)?;
+        drop(conn);
         self.sessions.clear();
         Ok(())
+    }
+
+    /// After batches older than a cutoff were pruned, drop sessions that no
+    /// longer own any batch. `min_remaining_id` is the smallest surviving batch
+    /// row id (`None` = journal now empty → drop all sessions).
+    ///
+    /// The newest session that started before the surviving range is kept and
+    /// re-anchored to the first surviving batch, so every remaining batch
+    /// always belongs to a session.
+    pub fn prune(&mut self, min_remaining_id: Option<i64>) -> std::io::Result<usize> {
+        let Some(min_id) = min_remaining_id else {
+            let n = self.sessions.len();
+            self.clear()?;
+            return Ok(n);
+        };
+
+        // Newest session at-or-before the surviving range keeps ownership of it.
+        let keep_from = self
+            .sessions
+            .iter()
+            .rposition(|s| s.start_batch_id <= min_id)
+            .unwrap_or(0);
+
+        let removed = keep_from;
+        if removed > 0 {
+            let first_kept_num = self.sessions[keep_from].num as i64;
+            let conn = self.conn.lock().expect("session db mutex");
+            conn.execute("DELETE FROM sessions WHERE num < ?1", [first_kept_num])
+                .map_err(sql_err)?;
+            drop(conn);
+            self.sessions.drain(..keep_from);
+        }
+
+        // Re-anchor the (now) first session to the first surviving batch.
+        if let Some(first) = self.sessions.first_mut() {
+            if first.start_batch_id < min_id {
+                first.start_batch_id = min_id;
+                let conn = self.conn.lock().expect("session db mutex");
+                conn.execute(
+                    "UPDATE sessions SET start_batch_id = ?1 WHERE num = ?2",
+                    rusqlite::params![min_id, first.num as i64],
+                )
+                .map_err(sql_err)?;
+            }
+        }
+        Ok(removed)
     }
 
     /// Scan an existing journal index for combat-event time gaps and populate
@@ -126,7 +190,7 @@ impl SessionIndex {
         let first_log_ts = first.log_ts.unwrap_or(first.wall_ts);
         self.append(SessionEntry {
             num: 1,
-            start_journal_idx: 0,
+            start_batch_id: first.rowid,
             start_log_ts: first_log_ts,
             start_wall_ts: first.wall_ts,
             label: format_label(first_log_ts),
@@ -142,7 +206,7 @@ impl SessionIndex {
                 num += 1;
                 self.append(SessionEntry {
                     num,
-                    start_journal_idx: i,
+                    start_batch_id: curr.rowid,
                     start_log_ts: curr_ts,
                     start_wall_ts: curr.wall_ts,
                     label: format_label(curr_ts),
@@ -183,10 +247,11 @@ mod tests {
     fn make_idx(entries: &[(u64, Option<u64>)]) -> Vec<IndexEntry> {
         entries
             .iter()
-            .map(|&(wall_ts, log_ts)| IndexEntry {
+            .enumerate()
+            .map(|(i, &(wall_ts, log_ts))| IndexEntry {
                 wall_ts,
                 log_ts,
-                byte_offset: 0,
+                rowid: (i + 1) as i64,
             })
             .collect()
     }
@@ -206,7 +271,7 @@ mod tests {
         let idx = make_idx(&[(1000, Some(100)), (1060, Some(160)), (1120, Some(220))]);
         si.retroactive_scan(&idx).unwrap();
         assert_eq!(si.len(), 1);
-        assert_eq!(si.sessions[0].start_journal_idx, 0);
+        assert_eq!(si.sessions[0].start_batch_id, 1);
     }
 
     #[test]
@@ -221,8 +286,8 @@ mod tests {
         ]);
         si.retroactive_scan(&idx).unwrap();
         assert_eq!(si.len(), 2);
-        assert_eq!(si.sessions[0].start_journal_idx, 0);
-        assert_eq!(si.sessions[1].start_journal_idx, 2);
+        assert_eq!(si.sessions[0].start_batch_id, 1);
+        assert_eq!(si.sessions[1].start_batch_id, 3);
         assert_eq!(si.sessions[1].num, 2);
     }
 
@@ -232,7 +297,7 @@ mod tests {
         let mut si = SessionIndex::open(dir.path(), "s4").unwrap();
         si.append(SessionEntry {
             num: 1,
-            start_journal_idx: 0,
+            start_batch_id: 1,
             start_log_ts: 100,
             start_wall_ts: 200,
             label: "existing".into(),
@@ -251,7 +316,7 @@ mod tests {
             let mut si = SessionIndex::open(dir.path(), "s5").unwrap();
             si.append(SessionEntry {
                 num: 1,
-                start_journal_idx: 0,
+                start_batch_id: 1,
                 start_log_ts: 500,
                 start_wall_ts: 600,
                 label: "May 17, 2026".into(),
@@ -259,7 +324,7 @@ mod tests {
             .unwrap();
             si.append(SessionEntry {
                 num: 2,
-                start_journal_idx: 42,
+                start_batch_id: 42,
                 start_log_ts: 9000,
                 start_wall_ts: 9100,
                 label: "May 18, 2026".into(),
@@ -268,7 +333,56 @@ mod tests {
         }
         let si2 = SessionIndex::open(dir.path(), "s5").unwrap();
         assert_eq!(si2.len(), 2);
-        assert_eq!(si2.sessions[1].start_journal_idx, 42);
+        assert_eq!(si2.sessions[1].start_batch_id, 42);
         assert_eq!(si2.sessions[1].label, "May 18, 2026");
+    }
+
+    #[test]
+    fn prune_drops_dead_sessions_and_reanchors() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut si = SessionIndex::open(dir.path(), "s6").unwrap();
+        for (num, id, ts) in [(1u32, 1i64, 100u64), (2, 10, 5000), (3, 20, 9000)] {
+            si.append(SessionEntry {
+                num,
+                start_batch_id: id,
+                start_log_ts: ts,
+                start_wall_ts: ts,
+                label: format!("s{num}"),
+            })
+            .unwrap();
+        }
+
+        // Batches 1..=14 pruned; oldest survivor is id 15 (mid-session-2).
+        let removed = si.prune(Some(15)).unwrap();
+        assert_eq!(removed, 1); // session 1 gone
+        assert_eq!(si.len(), 2);
+        // Session 2 survives, re-anchored to the first surviving batch.
+        assert_eq!(si.sessions[0].num, 2);
+        assert_eq!(si.sessions[0].start_batch_id, 15);
+        assert_eq!(si.sessions[1].num, 3);
+        assert_eq!(si.sessions[1].start_batch_id, 20);
+
+        // Persisted: reload sees the same state.
+        drop(si);
+        let si2 = SessionIndex::open(dir.path(), "s6").unwrap();
+        assert_eq!(si2.len(), 2);
+        assert_eq!(si2.sessions[0].start_batch_id, 15);
+    }
+
+    #[test]
+    fn prune_empty_journal_drops_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut si = SessionIndex::open(dir.path(), "s7").unwrap();
+        si.append(SessionEntry {
+            num: 1,
+            start_batch_id: 1,
+            start_log_ts: 100,
+            start_wall_ts: 100,
+            label: "x".into(),
+        })
+        .unwrap();
+        let removed = si.prune(None).unwrap();
+        assert_eq!(removed, 1);
+        assert!(si.is_empty());
     }
 }

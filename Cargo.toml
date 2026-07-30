@@ -80,6 +80,11 @@ serde_json = "1"
 # Compression for on-disk journal records
 flate2 = "1"
 
+# Embedded per-stream storage (froklog-server journal/sessions/markers).
+# `bundled` compiles SQLite into the binary on both Windows and Linux —
+# no system dependency, no DLL to ship. Only binaries that use it link it.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 # Structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
