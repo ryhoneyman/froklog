@@ -465,6 +465,18 @@ pull and keep the same replay.** Three fixes deliver both:
   context — scoped bar, ↺, Play — so you can watch one mob's numbers through
   the pull's playback. Clicking a non-member mob leaves the pull as before.
 
+## 25. Honest status semantics: client connection vs. Go Live
+
+The top-right badge used to say "● live" whenever the WebSocket was open —
+even while replaying, and regardless of whether the streamer was still
+playing. It now reports exactly one thing, the **streamer's client
+connection**: green "● client connected" / gray "○ client disconnected"
+(covering completed recordings and mid-view disconnects via stream_done).
+Returning to live is a separate control — a "⏵ Go Live" pill that appears
+next to the badge only when the client is connected and the viewer isn't
+watching live (it also lives in the timeline bar). Status is status; buttons
+are buttons.
+
 ---
 
 *(subsequent changes appended as they land)*
