@@ -173,6 +173,39 @@ retroactive session boundaries after a restart.
 - Also: updating a stream's public flag no longer silently loses its
   "recorded replay" status across a server restart.
 
+## 9. Client robustness — five bugs resolved
+
+- **A single accented character no longer kills the tailer.** EQ logs are
+  Windows-1252, not UTF-8; the tailer's strict-UTF-8 line reader panicked on
+  the first non-ASCII byte — silently losing data in the tray build, and
+  hanging `froklog-replay` forever. Lines are now read as raw bytes and
+  decoded tolerantly (a bad byte renders as � in chat text; combat parsing is
+  unaffected). Verified by injecting a 0xE9 byte into a replay log: identical
+  parse results, no crash.
+- **Deleting/recreating the log no longer silences the client until restart.**
+  A common EQ habit is deleting the log file; the game recreates it, but the
+  tailer kept reading a position past the new end forever. It now detects the
+  size regression (a portable check — works the same on Windows, which has no
+  inodes) and reopens from the start.
+- **Half-written lines are no longer emitted as fragments.** A line the game
+  was still flushing at the moment of the read could be delivered as two
+  broken halves; the tailer now waits for the newline before emitting.
+- **"Replay complete." now means complete.** The replay tool used to wait for
+  the file reader, sleep two seconds, and declare success — a big import could
+  still have unsent batches in the pipeline. It now waits for the pusher to
+  drain everything. Relatedly, events discarded while the server is
+  unreachable are now counted and logged instead of vanishing silently.
+- **The headless (Linux) client can recover.** If its engine stopped (e.g. the
+  tailer exited), the non-tray build slept forever as a zombie; it now
+  restarts the engine in a loop, mirroring what the Windows tray build already
+  did.
+- **A corrupt client config is preserved instead of destroyed.** A TOML typo
+  used to silently reset all settings — server URL, stream tokens, layout —
+  and the next save overwrote the file. The broken file is now backed up
+  (`config.toml.broken`), the error is printed, and the duplicated
+  default-construction paths were consolidated so future code can't construct
+  a half-wrong default config.
+
 ---
 
 *(subsequent changes appended as they land)*

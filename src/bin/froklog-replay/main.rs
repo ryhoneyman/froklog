@@ -24,7 +24,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     --speed 10.0
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use chrono::NaiveDateTime;
@@ -244,7 +243,7 @@ fn main() {
     }
 
     // Pusher
-    {
+    let pusher_handle = {
         let url = push_url.clone();
         let token = stream_token.clone();
         thread::Builder::new()
@@ -265,19 +264,19 @@ fn main() {
                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 ));
             })
-            .expect("spawn pusher");
-    }
+            .expect("spawn pusher")
+    };
 
-    // Wait for the tailer to finish replaying.
-    loop {
-        thread::sleep(Duration::from_millis(200));
-        if done.load(Ordering::Relaxed) {
-            // Give the pusher a moment to flush the last batch.
-            thread::sleep(Duration::from_secs(2));
-            info!("Replay complete.");
-            break;
-        }
+    // Wait for the full pipeline to drain: the tailer's EOF closes the line
+    // channel, the parser then closes the event channel, and the pusher
+    // flushes every pending batch before returning. Joining the pusher is the
+    // real "done" — the old fixed 2 s grace could print "Replay complete."
+    // with batches still unsent.
+    let _ = done; // tailer completion is implied by the pipeline drain
+    if pusher_handle.join().is_err() {
+        tracing::error!("Pusher thread panicked before draining");
     }
+    info!("Replay complete.");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

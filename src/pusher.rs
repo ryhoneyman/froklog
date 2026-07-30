@@ -64,8 +64,15 @@ pub async fn push_to_server(
                     *guard = Some(e.to_string());
                 }
                 // Drain accumulated events to avoid unbounded memory growth during
-                // prolonged reconnect loops.
-                while event_rx.try_recv().is_ok() {}
+                // prolonged reconnect loops — but say how much was lost, so a
+                // flaky server during an import can't discard history silently.
+                let mut dropped = 0u64;
+                while event_rx.try_recv().is_ok() {
+                    dropped += 1;
+                }
+                if dropped > 0 {
+                    warn!("Pusher: discarded {dropped} events while server unreachable");
+                }
                 if restart.load(Ordering::Relaxed) || quit.load(Ordering::Relaxed) {
                     return;
                 }
