@@ -202,16 +202,28 @@
     border-bottom: 1px solid #2a2a2a;
   }
   .sum-hdr .sh-name { flex: 1; }
-  .sum-row {
-    display: flex; align-items: center; padding: 0 6px;
-    height: 18px; font-size: 11px;
+  /* Shared grid tracks: every row (and the header) uses the same column
+     template, so values line up in true columns instead of drifting with
+     each row's name/class width. */
+  .sum-row, .sum-hdr {
+    display: grid;
+    grid-template-columns: minmax(50px, 1fr) max-content 48px 40px 56px;
+    gap: 4px; align-items: center; padding: 0 6px;
   }
+  .sum-row { height: 18px; font-size: 11px; }
   .sum-row:hover { background: #222; }
-  .sum-name { flex: 1; color: #eee; overflow: hidden; white-space: nowrap; }
-  .sum-class { font-size: 10px; margin-left: 4px; flex-shrink: 0; }
-  .sum-val  { min-width: 44px; text-align: right; color: #ccc; flex-shrink: 0; }
-  .sum-rate { min-width: 52px; text-align: right; color: #888; font-size: 10px; flex-shrink: 0; }
-  .sum-pct  { min-width: 36px; text-align: right; color: #666; font-size: 10px; flex-shrink: 0; }
+  .sum-hdr {
+    height: 17px; font-size: 9px; text-transform: uppercase; letter-spacing: .06em;
+    color: #667; border-bottom: 1px solid #2a2a2a; position: sticky; top: 0;
+    background: #191919; z-index: 1;
+  }
+  .sum-hdr span { text-align: right; }
+  .sum-hdr .h-name { text-align: left; }
+  .sum-name { color: #eee; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .sum-class { font-size: 10px; }
+  .sum-val  { text-align: right; color: #ccc; }
+  .sum-rate { text-align: right; color: #888; font-size: 10px; }
+  .sum-pct  { text-align: right; color: #666; font-size: 10px; }
 
   /* ── Card grid ── */
   #cards { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
@@ -1752,7 +1764,7 @@ function renderSummary(d) {
       const list = mergeMembers(d.mob_avoid, 'total');
       rows = list.map(e => sumRow(e.name, e.classes, e.total, '', '')).join('');
     }
-    rowsEl.innerHTML = rows;
+    rowsEl.innerHTML = sumHdr(detailMode) + rows;
     return;
   }
   if (selectedMob !== null) {
@@ -1797,7 +1809,25 @@ function renderSummary(d) {
       rows = (d.avoidance || []).map(e => sumRow(e.name, e.classes, e.total, '', '')).join('');
     }
   }
-  rowsEl.innerHTML = rows;
+  rowsEl.innerHTML = sumHdr(detailMode) + rows;
+}
+
+/// Column headers matching sumRow's grid tracks, labeled per data tab.
+function sumHdr(mode) {
+  const labels = {
+    damage:  ['Damage', 'DPS'],
+    tanked:  ['Tanked', 'DPS'],
+    healing: ['Heals',  'HPS'],
+    healed:  ['Healed', 'HPS'],
+    avoid:   ['Count',  ''],
+  }[mode] || ['', ''];
+  return `<div class="sum-hdr">
+    <span class="h-name">Player</span>
+    <span></span>
+    <span>${labels[0]}</span>
+    <span>%</span>
+    <span>${labels[1]}</span>
+  </div>`;
 }
 
 function sumRow(name, classes, val, rate, rateLabel, pct) {
