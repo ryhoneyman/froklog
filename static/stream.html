@@ -209,7 +209,7 @@
     display: grid;
     /* All tracks fixed except the 1fr name column — separate grid containers
        don't share max-content sizing, so only fixed tracks align across rows. */
-    grid-template-columns: minmax(40px, 1fr) 64px 48px 40px 56px;
+    grid-template-columns: minmax(80px, 1fr) 62px 48px 42px 42px;
     gap: 4px; align-items: center; padding: 0 6px;
   }
   .sum-row { height: 18px; font-size: 11px; }
@@ -221,6 +221,7 @@
   }
   .sum-hdr span { text-align: right; }
   .sum-hdr .h-name { text-align: left; }
+  .sum-hdr span:nth-child(2) { text-align: left; }
   .sum-name { color: #eee; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .sum-class { font-size: 10px; }
   .sum-val  { text-align: right; color: #ccc; }
@@ -1825,7 +1826,7 @@ function sumHdr(mode) {
   }[mode] || ['', ''];
   return `<div class="sum-hdr">
     <span class="h-name">Player</span>
-    <span></span>
+    <span>Class</span>
     <span>${labels[0]}</span>
     <span>%</span>
     <span>${labels[1]}</span>
@@ -1834,7 +1835,8 @@ function sumHdr(mode) {
 
 function sumRow(name, classes, val, rate, rateLabel, pct) {
   const clsArr = Array.isArray(classes) ? classes : (classes ? [classes] : []);
-  const rateStr = (rate === null || rate === undefined || rateLabel === '') ? (rateLabel === '' ? '' : '—') : `${rate} ${rateLabel}`;
+  // The unit lives in the column header now — cells carry just the number.
+  const rateStr = (rate === null || rate === undefined || rateLabel === '') ? (rateLabel === '' ? '' : '—') : `${fmtK(rate)}`;
   const pctStr  = (pct != null) ? pct.toFixed(1)+'%' : '';
   return `<div class="sum-row">
     <span class="sum-name">${name}</span>
