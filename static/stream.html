@@ -481,6 +481,8 @@ const SESSION_END_LOG_TS = __SESSION_END_LOG_TS__;
 // the full history over the WebSocket.
 // Each entry: { logTs: number, batch: EventBatch }
 const cachedBatches = [];
+// Dedup index for re-streamed batches: "seq:logTs" -> cached entry.
+const cacheIndex = new Map();
 // Client-run epoch for mob-id namespacing: the parser's mob-instance ids
 // restart at 1 whenever the pushing client restarts, and the pusher's batch
 // seq restarts at 0 with it. Without namespacing, a new run's "mob 5" merges
@@ -1296,7 +1298,7 @@ function buildRenderState() {
 
   // fight_elapsed_secs: scope to the selected encounter or mob so the header
   // label and card rates cover the pull's / mob's own fight window.
-  const selEnc = selectedEnc !== null ? encounters.find(e => e.key === selectedEnc) : null;
+  const selEnc = (selectedEnc !== null && selectedMob === null) ? encounters.find(e => e.key === selectedEnc) : null;
   const fight_elapsed_secs = selEnc
     ? Math.max(selEnc.end_ts - selEnc.start_ts, 1)
     : (selectedMob !== null && S.mobs[selectedMob])
@@ -1392,9 +1394,16 @@ function replayEncounter(key) {
 function selectMob(id) {
   if (tlIsLive) liveAutoSelect = false;
   pendingMobRestore = null;
-  selectedEnc = null;
-  encManuallySelected = false;
-  tlEncScope = null;
+  // Clicking a MEMBER of the selected pull keeps the pull's replay context
+  // (scoped bar, ⟲, Play-replays-pull) while the panels drill into that mob.
+  const encSel = selectedEnc !== null && lastData
+    ? (lastData.encounters || []).find(e => e.key === selectedEnc) : null;
+  const memberOfSel = !!(encSel && id !== null && encSel.members.includes(id));
+  if (!memberOfSel) {
+    selectedEnc = null;
+    encManuallySelected = false;
+    tlEncScope = null;
+  }
   updateTimelineBar();
 
   selectedMob = id;
@@ -1498,7 +1507,8 @@ function buildFightLabel(d) {
   const el = document.getElementById('fight-label');
 
   // Encounter (pull) selected: combined stats over the pull's whole life.
-  if (selectedEnc !== null) {
+  // A selected member mob takes precedence in the panels; the pull keeps the bar.
+  if (selectedEnc !== null && selectedMob === null) {
     const enc = (d.encounters || []).find(e => e.key === selectedEnc);
     if (enc) {
       // Title matches the pull list — the named (true casing) or "Pull #N";
@@ -1609,7 +1619,7 @@ function renderLootRows() {
   const playerName = document.getElementById('player-name').textContent;
   const hdr = `<div class="loot-player-hdr">${playerName || '—'}</div>`;
 
-  if (selectedEnc !== null && lastData) {
+  if (selectedEnc !== null && selectedMob === null && lastData) {
     const enc = (lastData.encounters || []).find(e => e.key === selectedEnc);
     if (enc) {
       const blocks = enc.members.map(id => {
@@ -1829,7 +1839,7 @@ function renderSummary(d) {
   const hasRealElapsed = !mobEntry || (mobEntry.first_ts && mobEntry.last_ts && mobEntry.last_ts > mobEntry.first_ts);
 
   let rows = '';
-  const selEncEntry = selectedEnc !== null ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
+  const selEncEntry = (selectedEnc !== null && selectedMob === null) ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
   if (selEncEntry) {
     // Encounter scope: merge member-mob stats per player; rates over the
     // pull's own duration.
@@ -1978,7 +1988,7 @@ function renderCards(d) {
 
   // Pull selected: cards cover the encounter — same scope as the header and
   // summary, so every number on screen agrees.
-  const encEntry = selectedEnc !== null ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
+  const encEntry = (selectedEnc !== null && selectedMob === null) ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
   if (encEntry) {
     const ids = encEntry.members;
     if (detailMode === 'damage' || detailMode === 'tanked') {
@@ -2137,7 +2147,7 @@ function renderGraph() {
   const [yLabelTotal, yLabelRate] = yl;
 
   let tl, fightStart, fightEnd;
-  const encG = selectedEnc !== null && lastData
+  const encG = (selectedEnc !== null && selectedMob === null && lastData)
     ? (lastData.encounters || []).find(e => e.key === selectedEnc) : null;
   if (encG) {
     // Pull selected: merge member-mob timelines per player over the pull window.
@@ -2287,6 +2297,7 @@ function connectWS() {
         // For the latest session (SESSION_END_LOG_TS = 0) logLastTs keeps the
         // journal end from msg.log_last_ts, which is the correct session end.
         cachedBatches.length = 0;
+        cacheIndex.clear();
         cacheComplete = false;
         sessionPreloading = false;
         resetState();
@@ -2368,6 +2379,24 @@ function connectWS() {
     }
     if (msg.t === 'batch') {
       try {
+        // Empty batches carry nothing to apply or cache.
+        if (!msg.batch.events || !msg.batch.events.length) return;
+        const rawLogTs = Math.max(...msg.batch.events.map(e => e.ts));
+
+        // Re-streamed batch (replay/seek resends journal content we already
+        // hold): reuse the CACHED, already-remapped copy. Prevents duplicate
+        // cache entries (which double-counted damage on later cache rebuilds)
+        // and epoch double-bumps when a replay crosses a client-run boundary.
+        const dupKey = msg.batch.seq + ':' + rawLogTs;
+        const cachedDup = cacheIndex.get(dupKey);
+        if (cachedDup) {
+          if (!sessionPreloading) {
+            applyBatch(cachedDup.batch);
+            scheduleRender();
+          }
+          return;
+        }
+
         // Detect a new client run (seq restarted at 0) and namespace this
         // batch's mob ids by run. Done once at ingestion so cache replays,
         // live applies, and loot all see the remapped ids. mob 0 = "unknown"
@@ -2375,14 +2404,12 @@ function connectWS() {
         // this only fires on genuine client restarts.
         if (msg.batch.seq === 0 && lastBatchSeq !== null) mobEpoch++;
         lastBatchSeq = msg.batch.seq;
-        if (mobEpoch > 0 && msg.batch.events) {
+        if (mobEpoch > 0) {
           for (const ev of msg.batch.events) {
             if (ev.mob) ev.mob += mobEpoch * 1000000;
           }
         }
-        const batchLogTs = msg.batch.events && msg.batch.events.length
-          ? Math.max(...msg.batch.events.map(e => e.ts))
-          : (S.lastTs || 0);
+        const batchLogTs = rawLogTs;
         // In session mode: stop at the session end boundary.
         if (SESSION_END_LOG_TS > 0 && batchLogTs > SESSION_END_LOG_TS) {
           cacheComplete = true;
@@ -2403,7 +2430,9 @@ function connectWS() {
         // They are not applied to state and not cached — no cross-session leakage.
         if (SESSION_LOG_TS > 0 && batchLogTs < SESSION_LOG_TS) return;
         // Cache every in-session batch for client-side seeking.
-        cachedBatches.push({ logTs: batchLogTs, batch: msg.batch });
+        const cb = { logTs: batchLogTs, batch: msg.batch };
+        cachedBatches.push(cb);
+        cacheIndex.set(dupKey, cb);
         // During preloading, only accumulate the cache; state will be rebuilt
         // from the cache once preloading completes (snapSessionToStart).
         // This prevents pre-seek state from contaminating the session view.
@@ -2660,6 +2689,12 @@ function togglePlayPause() {
   if (sessionPreloading) return;
   if (!tlFirstTs || !tlLastTs) return;
   if (tlIsLive) {
+    // A pull is selected and we're live: Play means "replay this pull" —
+    // the natural button next to the pull-scoped bar.
+    if (encManuallySelected && selectedEnc !== null) {
+      replayEncounter(selectedEnc);
+      return;
+    }
     // Pause from live: seek to the last known position and stay paused.
     tlPaused = true;
     tlIsLive = false;
