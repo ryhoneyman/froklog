@@ -503,6 +503,23 @@ operationally fragile; the log itself is the primary source. If a stubborn
 edge case ever survives both layers, the clean escape hatch is a small
 owner-curated override list server-side — not built until needed.
 
+## 27. Historical data can't ban a mob from its own fight
+
+**Bug resolved (user-reported live: "fighting The Prophet but current combat
+is inaccurate").** The Prophet was missing from its own encounter. Root
+cause chain: before the mob-self-heal parser fix landed, "The Prophet healed
+himself … by Inner Fire" was journaled as a player Heal event; every session
+replay recreated a "player" entry for The Prophet from that history; and the
+viewer's player-guard then refused to track the real mob — even in brand-new,
+correctly-parsed fights. Old data poisoned new truth.
+
+Fix: mob-position evidence outranks heal-only ghosts. A "player" known ONLY
+from casting heals (zero damage dealt, zero received, no /who class) that
+appears in a mob position gets reclassified as the mob it is. Real healers
+keep their protection (they take hits, receive heals, or have classes).
+Verified live: The Prophet's encounter reassembled with full damage/tank
+data the moment the page reloaded.
+
 ---
 
 *(subsequent changes appended as they land)*
