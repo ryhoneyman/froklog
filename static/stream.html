@@ -129,6 +129,11 @@
     padding: 0 6px; font-size: 11px; font-weight: bold; color: #999;
     border-bottom: 1px solid #2a2a2a; flex-shrink: 0;
   }
+  #enc-select {
+    width: 100%; background: #161616; color: #999; border: none;
+    font: bold 11px inherit; padding: 2px 0; cursor: pointer; outline: none;
+  }
+  #enc-select option { background: #161616; color: #bbb; font-weight: normal; }
   #mob-scroll { overflow-y: auto; flex: 1; min-height: 0; }
   .mob-row {
     display: flex; align-items: center; padding: 0 4px;
@@ -430,7 +435,13 @@
 
 <div id="layout" onclick="deselectMob()">
   <div id="mobs">
-    <div class="panel-hdr">Mobs</div>
+    <div class="panel-hdr">
+      <select id="enc-select" title="Jump to a pull for playback"
+              onclick="event.stopPropagation()"
+              onchange="encSelectChanged(this.value)">
+        <option value="">Mobs — all pulls</option>
+      </select>
+    </div>
     <div id="mob-scroll"><div id="mob-rows"></div></div>
   </div>
   <div class="col-resizer" data-target="mobs" title="Drag to resize — double-click to reset"></div>
@@ -1355,6 +1366,17 @@ function selectEnc(key) {
   updateTimelineBar();
 }
 
+/// Pull index dropdown above the mob list: jump straight to an encounter.
+function encSelectChanged(value) {
+  if (value) {
+    selectEnc(+value);
+    const row = document.querySelector(`.enc-row[data-enc-key="${value}"]`);
+    if (row) row.scrollIntoView({ block: 'start' });
+  } else {
+    deselectMob();
+  }
+}
+
 /// ⟲ on a selected pull: replay it from its first event at the chosen speed.
 function replayEncounter(key) {
   const enc = lastData ? (lastData.encounters || []).find(e => e.key === key) : null;
@@ -1646,6 +1668,28 @@ function renderMobList(d) {
   const container  = document.getElementById('mob-rows');
   const saved      = scroller.scrollTop;
   const mobs       = d.mob_list || [];
+
+  // Pull index dropdown: rebuild only when the encounter set changes (a
+  // rebuild while the dropdown is open would snap it shut), keep its value
+  // in sync with the current selection.
+  const encSel = document.getElementById('enc-select');
+  if (encSel) {
+    const encsAll = d.encounters || [];
+    const sig = encsAll.length + ':' + encsAll.filter(e => e.named).length
+      + ':' + (encsAll.length ? encsAll[encsAll.length - 1].key : 0);
+    if (encSel.dataset.sig !== sig) {
+      encSel.dataset.sig = sig;
+      encSel.innerHTML = '<option value="">Mobs — all pulls</option>'
+        + [...encsAll].reverse().map(e => {
+            const t = new Date(e.start_ts * 1000)
+              .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            const label = e.named ? `★ ${e.named} · ${t}` : `Pull #${e.num} · ${t}`;
+            return `<option value="${e.key}">${label}</option>`;
+          }).join('');
+    }
+    const want = selectedEnc !== null ? String(selectedEnc) : '';
+    if (encSel.value !== want) encSel.value = want;
+  }
 
   // Build a map of existing DOM rows keyed by mob id string so we can reuse
   // them across renders.  Reusing nodes avoids tearing down elements that may
