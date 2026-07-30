@@ -118,9 +118,12 @@ pub static RE_HEARTBEAT: Lazy<Regex> = Lazy::new(|| {
 });
 
 // "Player begins casting SpellName."
+// Spell charset includes ':' and '-': "Lesser Summoning: Water" style names
+// silently failed the whole match before, so colon-spells never produced
+// Cast events at all.
 pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"^(?P<src>[A-Za-z][A-Za-z`', ]*) begins? casting (?P<spell>[A-Za-z][A-Za-z `']+?)\.",
+        r"^(?P<src>[A-Za-z][A-Za-z`', ]*) begins? casting (?P<spell>[A-Za-z][A-Za-z `':-]+?)\.",
     )
     .unwrap()
 });
@@ -316,6 +319,14 @@ pub static RE_PET_BERSERK: Lazy<Regex> =
 /// the log. Prefix-matched so ranks ("Burnout II") count.
 pub fn is_pet_buff_spell(spell: &str) -> bool {
     spell.starts_with("Burnout")
+}
+
+/// Pet-summoning spells, by the shapes seen on the server: mage
+/// "Lesser Summoning: Water" (any rank/element), enchanter animations
+/// ("Sisna's Animation"). The generated-name pet that first appears in
+/// combat after one of these belongs to the caster.
+pub fn is_pet_summon_spell(spell: &str) -> bool {
+    spell.contains("Summoning:") || spell.ends_with(" Animation")
 }
 
 /// The classic EQ summoned-pet name generator (Gabann, Labarer, Xobtik…) —

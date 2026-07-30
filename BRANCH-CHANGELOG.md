@@ -583,6 +583,14 @@ badge becomes "Pet · Ruin" (tooltip "Pet of Ruin"), and damage rows stay
 per-entity — folding pet damage into the owner's row is deliberately left
 as a future option rather than assumed.
 
+Second correlation for classes without a Burnout tell (enchanter, necro):
+a player's pet-summon cast ("Lesser Summoning: Water", "Sisna's
+Animation") followed within 60 s by the first attack of a
+never-before-associated generated-name pet. Already-owned pets are never
+re-owned by someone else's summon. Bug found en route: RE_CAST's spell
+charset had no ':' — colon-named spells ("Lesser Summoning: Water") never
+matched, so those casts produced no Cast events at all.
+
 ---
 
 *(subsequent changes appended as they land)*
