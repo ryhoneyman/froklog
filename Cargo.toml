@@ -95,6 +95,13 @@ crossbeam-channel = "0.5"
 # Timestamp formatting for fight start display
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
+# True-epoch conversion of naive EQ log timestamps: the embedded IANA tz
+# database applies the correct historical DST rule per date, identically on
+# Windows and Linux (Windows' own tz data applies current-year rules to old
+# dates, which would make imports convert differently per platform).
+chrono-tz = "0.10"
+iana-time-zone = "0.1"
+
 # Token generation for auth
 uuid = { version = "1", features = ["v4"] }
 

@@ -1143,11 +1143,11 @@ function buildRenderState() {
 
   // Fight start display
   const fightStartDisplay = S.fightStartTs
-    ? new Date(S.fightStartTs * 1000).toLocaleString('en-US', { timeZone: 'UTC' }) : '';
+    ? new Date(S.fightStartTs * 1000).toLocaleString('en-US') : '';
 
   // Last log time
   const lastLogTime = S.lastTs
-    ? new Date(S.lastTs*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'UTC'})
+    ? new Date(S.lastTs*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
     : '';
 
   // Active casts — only show spells cast within the last 10 log-seconds of the
@@ -1959,12 +1959,12 @@ const tlLiveBtn  = document.getElementById('tl-live-btn');
 function fmtTs(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
-  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', timeZone:'UTC' });
+  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 function fmtTsPos(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
-  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', timeZone:'UTC' });
+  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
 }
 
 function updateTimelineBar() {

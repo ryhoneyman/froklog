@@ -138,11 +138,11 @@ pub fn run(
                     dt.hour(),
                     dt.minute()
                 );
-                // Treat the naive log datetime as-is (no timezone conversion).
-                // The log records local streamer time with no offset, so we
-                // store it as a "fake UTC" unix timestamp and display it as
-                // UTC on the frontend, preserving the original clock value.
-                current_ts = dt.and_utc().timestamp() as u32;
+                // Convert the naive local log time to a TRUE unix epoch:
+                // per-date timezone rules (correct DST for historical
+                // imports) plus the measured server clock skew. Viewers
+                // render this in their own local timezone.
+                current_ts = crate::clock::naive_log_time_to_epoch(dt).max(0) as u32;
             }
             &raw_line[TS_LEN..]
         } else {

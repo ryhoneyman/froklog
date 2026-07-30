@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, watch, RwLock};
@@ -41,6 +41,10 @@ pub struct StreamEntry {
     /// True while a Windows client is actively connected on the ingest WS.
     /// Shared atomically so viewer WS handlers can observe disconnection.
     pub client_connected: Arc<AtomicBool>,
+    /// Streamer's UTC offset in seconds (local = UTC + offset), reported by
+    /// the client's hello message. Used to label sessions with the streamer's
+    /// calendar dates. 0 until a client reports it.
+    pub utc_offset_secs: Arc<AtomicI64>,
 }
 
 impl StreamEntry {
@@ -83,6 +87,7 @@ impl StreamEntry {
             session_index,
             broadcast_tx,
             client_connected: Arc::new(AtomicBool::new(false)),
+            utc_offset_secs: Arc::new(AtomicI64::new(0)),
         })
     }
 

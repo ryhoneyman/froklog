@@ -93,6 +93,55 @@ disk work without holding anything global.
 (Until the true-epoch time change lands, log timestamps can be offset from
 server time by the streamer's timezone — irrelevant at day granularity.)
 
+## 7. Event timestamps are now true epoch, with an NTP-style server clock probe
+
+**Bug resolved / design choice.** EverQuest stamps log lines with the machine's
+local wall-clock and no timezone marker. froklog used to store that reading
+as-is, pretending it was UTC ("fake UTC") — which preserved the streamer's
+clock on screen but meant stored timestamps were hours off from real time,
+differed between streamers in different timezones, and repeated a full hour
+every DST fall-back. Timestamps are now converted to **true unix epoch** on the
+client, in two layers:
+
+1. **Timezone conversion** (the big correction — hours): the client looks up
+   the machine's IANA timezone and applies the offset *for the date being
+   converted*, so history imports from last winter get last winter's DST rule.
+   The IANA database is compiled into the binary specifically so Windows and
+   Linux convert identically — Windows' own timezone APIs apply current-year
+   rules to historical dates, which would have made the two platforms disagree
+   by an hour on old imports.
+2. **Server clock probe** (the small correction — seconds, usually zero): on
+   connect the client sends a hello over the existing ingest WebSocket carrying
+   its UTC offset and a timestamp; the server echoes it with its own clock, and
+   the client computes its skew NTP-style (one round trip, half-RTT accuracy).
+   This corrects machines whose clock is simply set wrong, without running an
+   actual NTP server — no new port, no new protocol, ~40 lines total.
+   Sub-second skew is deliberately ignored: log lines have 1-second resolution.
+
+**Display contract change:** the viewer page used to force UTC rendering (to
+show the fake-UTC value = streamer's clock). It now renders in the *viewer's*
+local timezone — the streamer still sees their own local times, and remote
+viewers see "when that happened in my time." Session labels keep the
+*streamer's* calendar dates: the client-reported UTC offset shifts the label
+date, so an evening raid doesn't get labeled with the next day's UTC date.
+
+**Compatibility:** an old client against this server just never sends a hello —
+everything works, labels fall back to UTC dates. This client against an old
+server gets one harmless "invalid EventBatch" log line for the hello and no
+skew correction — timezone conversion (the important part) still applies.
+
+**Also fixed here:** the pusher previously dropped the WebSocket's read half
+entirely, so server pings were never answered and dropped connections went
+unnoticed until the next send — during a quiet stretch that lost the next
+event. The probe needed the read half anyway; the pusher now polls it, which
+answers pings (keeping proxies happy) and detects closes promptly.
+
+Verified end-to-end against a live server with a synthetic log: stored
+timestamps match the independently-computed true epoch exactly (old code was
+4 hours off on this machine), skew probe reports 0 ms on a synced clock,
+prune-by-cutoff deletes and reclaims, and a pruned journal reloads with correct
+retroactive session boundaries after a restart.
+
 ---
 
 *(subsequent changes appended as they land)*

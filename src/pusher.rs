@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -74,12 +74,39 @@ pub async fn push_to_server(
             }
         };
 
-        let (mut sink, _stream) = futures_util::StreamExt::split(ws);
+        let (mut sink, mut stream) = futures_util::StreamExt::split(ws);
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         let mut pending: Vec<CombatEvent> = Vec::new();
 
+        // Hello + time probe: report our UTC offset (for streamer-local
+        // session labels) and ask the server for its clock. The reply sets
+        // the process-wide skew that the parser folds into event timestamps.
+        let hello = format!(
+            r#"{{"hello":{{"utc_offset_secs":{},"t0":{}}}}}"#,
+            crate::clock::local_utc_offset_secs(),
+            epoch_ms(),
+        );
+        if sink.send(Message::Text(hello)).await.is_err() {
+            warn!("Pusher: hello failed — reconnecting in 5s");
+            connected.store(false, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+
         let disconnected = 'connected: loop {
             tokio::select! {
+                // Poll the read half: this answers server pings (keeping the
+                // connection alive through proxies), detects closes promptly
+                // instead of at the next send, and receives time-probe replies.
+                msg = stream.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(txt))) => handle_server_msg(&txt),
+                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                            break 'connected true;
+                        }
+                        _ => {}
+                    }
+                }
                 _ = tick.tick() => {
                     if pending.is_empty() { continue; }
                     let mut failed = false;
@@ -133,6 +160,44 @@ pub async fn push_to_server(
             return;
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Handle a text message from the server. Currently only the time-probe
+/// reply: `{"time":{"t0":<echoed client ms>,"t1":<server ms>}}`.
+/// Standard NTP-style offset estimate over one round trip:
+/// skew = t1 − (t0 + t2)/2, where t2 is our receive time.
+fn handle_server_msg(txt: &str) {
+    #[derive(serde::Deserialize)]
+    struct TimeReply {
+        time: TimeBody,
+    }
+    #[derive(serde::Deserialize)]
+    struct TimeBody {
+        t0: u64,
+        t1: u64,
+    }
+    if let Ok(reply) = serde_json::from_str::<TimeReply>(txt) {
+        let t2 = epoch_ms();
+        let midpoint = (reply.time.t0 / 2) + (t2 / 2);
+        let skew_ms = reply.time.t1 as i64 - midpoint as i64;
+        let skew_secs = skew_ms / 1000; // sub-second skew rounds to 0 against 1 s log lines
+        crate::clock::SERVER_SKEW_SECS.store(skew_secs, std::sync::atomic::Ordering::Relaxed);
+        if skew_secs != 0 {
+            warn!(
+                "Pusher: local clock is {}s off the server — event timestamps corrected",
+                -skew_secs
+            );
+        } else {
+            info!("Pusher: clock skew vs server: {skew_ms}ms (no correction needed)");
+        }
     }
 }
 

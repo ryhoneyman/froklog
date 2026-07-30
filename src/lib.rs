@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod chat;
+pub mod clock;
 pub mod config;
 pub mod event;
 pub mod parser;

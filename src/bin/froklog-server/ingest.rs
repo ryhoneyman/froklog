@@ -106,10 +106,11 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                 Arc::clone(&e.journal),
                 Arc::clone(&e.session_index),
                 e.broadcast_tx.clone(),
+                Arc::clone(&e.utc_offset_secs),
             )
         })
     };
-    let Some((connected_flag, journal, session_index, broadcast_tx)) = handles else {
+    let Some((connected_flag, journal, session_index, broadcast_tx, utc_offset)) = handles else {
         warn!("Ingest [{stream_id}]: stream no longer exists");
         return;
     };
@@ -136,7 +137,8 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                 .unwrap_or(0);
             if gap >= RECONNECT_GAP_SECS && skew < RECONNECT_GAP_SECS {
                 let wall_ts = now_secs();
-                cut_session(&session_index, next_id, wall_ts, wall_ts, &stream_id).await;
+                let off = utc_offset.load(std::sync::atomic::Ordering::Relaxed);
+                cut_session(&session_index, next_id, wall_ts, wall_ts, off, &stream_id).await;
             }
         }
     }
@@ -144,6 +146,25 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
     while let Some(result) = socket.recv().await {
         match result {
             Ok(Message::Text(json)) => {
+                // Client hello: records the streamer's UTC offset and answers
+                // the time probe with our clock so the client can measure skew.
+                if let Ok(hello) = serde_json::from_str::<HelloMsg>(&json) {
+                    utc_offset.store(
+                        hello.hello.utc_offset_secs,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    let reply = format!(
+                        r#"{{"time":{{"t0":{},"t1":{}}}}}"#,
+                        hello.hello.t0,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                    );
+                    let _ = socket.send(Message::Text(reply.into())).await;
+                    continue;
+                }
+
                 // Validate that this is a well-formed EventBatch before storing.
                 let batch = match serde_json::from_str::<froklog::event::EventBatch>(&json) {
                     Ok(b) => b,
@@ -178,7 +199,9 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                     // Deduplicate: skip if the reconnect trigger already cut at
                     // this exact batch position.
                     if last_session_id != Some(start_id) {
-                        cut_session(&session_index, start_id, log_ts, wall_ts, &stream_id).await;
+                        let off = utc_offset.load(std::sync::atomic::Ordering::Relaxed);
+                        cut_session(&session_index, start_id, log_ts, wall_ts, off, &stream_id)
+                            .await;
                     }
                 }
 
@@ -210,22 +233,38 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
     connected_flag.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Append a new entry to the stream's session index.
+/// A client's connection greeting: its UTC offset plus a time-probe request.
+#[derive(serde::Deserialize)]
+struct HelloMsg {
+    hello: HelloBody,
+}
+
+#[derive(serde::Deserialize)]
+struct HelloBody {
+    utc_offset_secs: i64,
+    t0: u64,
+}
+
+/// Append a new entry to the stream's session index. The label shows the
+/// streamer's calendar date: log timestamps are true epoch, so we shift by
+/// the client-reported UTC offset before formatting.
 async fn cut_session(
     session_index: &SharedSessionIndex,
     start_batch_id: i64,
     start_log_ts: u64,
     start_wall_ts: u64,
+    utc_offset_secs: i64,
     stream_id: &str,
 ) {
     let mut si = session_index.write().await;
     let num = si.len() as u32 + 1;
+    let label_ts = start_log_ts.saturating_add_signed(utc_offset_secs);
     let session = SessionEntry {
         num,
         start_batch_id,
         start_log_ts,
         start_wall_ts,
-        label: crate::session_index::format_label(start_log_ts),
+        label: crate::session_index::format_label(label_ts),
     };
     if let Err(e) = si.append(session) {
         warn!("SessionIndex [{stream_id}]: failed to write session {num}: {e}");
