@@ -417,6 +417,20 @@ encounters starred correctly across a real session.
   the session view (and hides the bar again when live). Any non-live state
   keeps the bar visible so transport controls are never stranded mid-replay.
 
+## 21. Live header, running fight clock, and scope-consistent cards
+
+- While live, the fight header always shows the current pull — or, between
+  fights, the most recent one — instead of going empty.
+- An active pull's Duration and DPS tick in real time (a 1-second live ticker
+  advances them between combat lines, in the header and the pull list); the
+  clock freezes at the recorded span once everything is dead.
+- The combat cards (third panel) now respect the selected pull: per-player
+  type/spell breakdowns are merged across the pull's members and rates are
+  computed over the pull's own duration. Previously the cards showed
+  session-wide totals under a pull-scoped header — 42K/284 DPS next to a
+  header saying 2K/13 — which read as broken formatting when it was really a
+  scope mismatch. Verified: card rows now sum to the header's totals.
+
 ---
 
 *(subsequent changes appended as they land)*
