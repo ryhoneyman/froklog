@@ -228,6 +228,20 @@ cleanly on top of these endpoints without storage changes — this was the
 "we can always do this after the data is indexed in SQL" part, and the index
 made it a ~150-line feature.
 
+## 11. Graceful WebSocket close — imports no longer lose their final seconds
+
+**Bug resolved (found during deployment testing, not in the original review).**
+When the pusher finished (end of an import), it sent the last batches and
+immediately dropped the socket; the process then exited. Over localhost that
+worked; through a TLS reverse proxy the final frames were still sitting in
+buffers when the process died — a production replay stored 282 of 287 batches,
+silently missing the last ~37 seconds of game time. The pusher now performs a
+real WebSocket close handshake and waits (up to 5 s) for the server's close
+acknowledgment — which, by TCP ordering, proves the server processed every
+frame sent before it. Re-tested through the proxy: exact batch parity with the
+local run. Send failures during the final flush are also logged with the event
+count instead of being ignored.
+
 ---
 
 *(subsequent changes appended as they land)*

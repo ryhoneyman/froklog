@@ -139,20 +139,24 @@ pub async fn push_to_server(
                         Some(event) => pending.push(event),
                         None => {
                             // Event channel closed (parser thread done).
-                            // Flush any pending events before exiting.
+                            // Flush any pending events, then leave the loop to
+                            // perform a graceful close handshake below.
                             for batch_events in split_by_game_second(std::mem::take(&mut pending)) {
                                 let n = batch_events.len() as u64;
                                 let batch = EventBatch { seq, events: batch_events };
                                 seq = seq.wrapping_add(1);
                                 if let Ok(json) = serde_json::to_string(&batch) {
-                                    if sink.send(Message::Text(json)).await.is_ok() {
-                                        events_sent.fetch_add(n, Ordering::Relaxed);
+                                    match sink.send(Message::Text(json)).await {
+                                        Ok(()) => {
+                                            events_sent.fetch_add(n, Ordering::Relaxed);
+                                        }
+                                        Err(e) => {
+                                            warn!("Pusher: final flush send failed ({e}) — {n} events lost");
+                                        }
                                     }
                                 }
                             }
-                            info!("Pusher: event channel closed, exiting");
-                            connected.store(false, Ordering::Relaxed);
-                            return;
+                            break 'connected false;
                         }
                     }
                 }
@@ -160,9 +164,29 @@ pub async fn push_to_server(
         };
 
         connected.store(false, Ordering::Relaxed);
-        if disconnected {
-            warn!("Pusher: send failed — reconnecting in 5s");
+
+        if !disconnected {
+            // Finished (event channel closed): perform a real WebSocket close
+            // handshake instead of dropping the socket. Waiting for the
+            // server's close/EOF proves — by TCP ordering — that it processed
+            // every frame we sent before it. Without this, a fast process
+            // exit (froklog-replay --dump) could strand the final batches in
+            // TLS buffers; observed losing the last seconds of an import
+            // when pushing through a reverse proxy.
+            let _ = sink.send(Message::Close(None)).await;
+            let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(msg) = stream.next().await {
+                    if matches!(msg, Ok(Message::Close(_)) | Err(_)) {
+                        break;
+                    }
+                }
+            })
+            .await;
+            info!("Pusher: event channel closed, exiting");
+            return;
         }
+
+        warn!("Pusher: send failed — reconnecting in 5s");
         if restart.load(Ordering::Relaxed) || quit.load(Ordering::Relaxed) {
             return;
         }
