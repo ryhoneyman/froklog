@@ -17,7 +17,7 @@ use crate::event::{
 use crate::patterns::{
     norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_warder_owner,
     parse_who_classes, RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED,
-    RE_DOT, RE_DS, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
+    RE_DOT, RE_DS, RE_DS_BURN_YOU, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
     RE_ITEM_MERGE, RE_LOOT_ENHANCE, RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST,
     RE_RIPOSTE, RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
@@ -753,6 +753,40 @@ pub fn run(
             touch_fight_start(&mut state);
             matched = true;
 
+        // ── Inbound DS proc: mob's damage shield burning the player ───────────
+        } else if let Some(caps) = RE_DS_BURN_YOU.captures(line) {
+            let src = norm(caps["src"].trim(), &player_name);
+            let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
+
+            state.confirmed_mobs.insert(src.clone());
+            let mob_id = update_mob_list(&mut state, &src, current_ts);
+            if let Some(mob_id) = mob_id {
+                let tank = state
+                    .mob_tanking
+                    .entry(mob_id)
+                    .or_default()
+                    .entry(player_name.clone())
+                    .or_default();
+                tank.total_damage += dmg;
+                *tank.damage_by_type.entry("ds".to_owned()).or_default() += dmg;
+            }
+            emit(
+                &event_tx,
+                CombatEvent::Melee {
+                    ts: current_ts,
+                    mob: mob_id.unwrap_or(0) as u32,
+                    src,
+                    tgt: player_name.clone(),
+                    dmg: dmg as u32,
+                    typ: "ds".to_owned(),
+                    tank: true,
+                    mods: 0,
+                },
+            );
+
+            touch_fight_start(&mut state);
+            matched = true;
+
         // ── Spell cast — record caster for attribution ─────────────────────────
         } else if let Some(caps) = RE_CAST.captures(line) {
             let src = norm(&caps["src"], &player_name);
@@ -1207,64 +1241,76 @@ pub fn run(
                 "himself" | "herself" | "itself" | "yourself" => src.clone(),
                 other => norm(other, &player_name),
             };
-            let amt: u64 = caps["amt"].parse().unwrap_or(0);
-            let spell = caps
-                .name("spell")
-                .map(|m| {
-                    m.as_str()
-                        .trim_end_matches('.')
-                        .trim_end_matches(" over time")
-                        .to_owned()
-                })
-                .unwrap_or_else(|| "Unknown".to_owned());
 
-            // Global aggregate healing
-            let stats = entity_stats(&mut state, &src);
-            stats.total_heals += amt;
-            *stats.heals_by_spell.entry(spell.clone()).or_default() += amt;
-            let tgt_stats = entity_stats(&mut state, &tgt);
-            tgt_stats.total_healed_received += amt;
-            *tgt_stats
-                .healed_received_by_spell
-                .entry(spell.clone())
-                .or_default() += amt;
+            // Mob self-heals ("an orc thaumaturgist healed itself…"): update
+            // the mob's sighting so its encounter window stays open while it
+            // heal-turtles, but don't emit a Heal event — the viewer's healer
+            // lists are for the player group.
+            let src_is_mob = !state.known_players.contains(&src)
+                && (state.confirmed_mobs.contains(&src)
+                    || (src.contains(' ') && tgt == src));
+            if src_is_mob {
+                update_mob_list(&mut state, &src, current_ts);
+            } else {
+                let amt: u64 = caps["amt"].parse().unwrap_or(0);
+                let spell = caps
+                    .name("spell")
+                    .map(|m| {
+                        m.as_str()
+                            .trim_end_matches('.')
+                            .trim_end_matches(" over time")
+                            .to_owned()
+                    })
+                    .unwrap_or_else(|| "Unknown".to_owned());
 
-            // Per-mob-instance healing attribution
-            let active_mob = state.active_mob_id;
-            if let Some(mob_id) = active_mob {
-                let heal_stats = state
-                    .mob_healing
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(src.clone())
-                    .or_default();
-                heal_stats.total_heals += amt;
-                *heal_stats.heals_by_spell.entry(spell.clone()).or_default() += amt;
-
-                let healed_stats = state
-                    .mob_healed
-                    .entry(mob_id)
-                    .or_default()
-                    .entry(tgt.clone())
-                    .or_default();
-                healed_stats.total_healed_received += amt;
-                *healed_stats
+                // Global aggregate healing
+                let stats = entity_stats(&mut state, &src);
+                stats.total_heals += amt;
+                *stats.heals_by_spell.entry(spell.clone()).or_default() += amt;
+                let tgt_stats = entity_stats(&mut state, &tgt);
+                tgt_stats.total_healed_received += amt;
+                *tgt_stats
                     .healed_received_by_spell
                     .entry(spell.clone())
                     .or_default() += amt;
+
+                // Per-mob-instance healing attribution
+                let active_mob = state.active_mob_id;
+                if let Some(mob_id) = active_mob {
+                    let heal_stats = state
+                        .mob_healing
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(src.clone())
+                        .or_default();
+                    heal_stats.total_heals += amt;
+                    *heal_stats.heals_by_spell.entry(spell.clone()).or_default() += amt;
+
+                    let healed_stats = state
+                        .mob_healed
+                        .entry(mob_id)
+                        .or_default()
+                        .entry(tgt.clone())
+                        .or_default();
+                    healed_stats.total_healed_received += amt;
+                    *healed_stats
+                        .healed_received_by_spell
+                        .entry(spell.clone())
+                        .or_default() += amt;
+                }
+                emit(
+                    &event_tx,
+                    CombatEvent::Heal {
+                        ts: current_ts,
+                        mob: active_mob.map(|id| id as u32),
+                        src,
+                        tgt,
+                        amt: amt as u32,
+                        sp: spell,
+                        mods,
+                    },
+                );
             }
-            emit(
-                &event_tx,
-                CombatEvent::Heal {
-                    ts: current_ts,
-                    mob: active_mob.map(|id| id as u32),
-                    src,
-                    tgt,
-                    amt: amt as u32,
-                    sp: spell,
-                    mods,
-                },
-            );
         }
 
         // Update mob name and confirmed set from candidate tracking.
@@ -1298,20 +1344,22 @@ fn handle_slay(
     killer: String,
     ts: u32,
 ) {
-    state.dead_mobs.insert(tgt.clone());
+    // dead_mobs is keyed lowercase: slay lines capitalize the name at
+    // sentence start, combat lines usually don't.
+    state.dead_mobs.insert(tgt.to_ascii_lowercase());
     let all_dead = !state.mob_list.is_empty()
         && state
             .mob_list
             .iter()
             .filter(|m| state.confirmed_mobs.contains(&m.name))
-            .all(|m| state.dead_mobs.contains(&m.name));
+            .all(|m| state.dead_mobs.contains(&m.name.to_ascii_lowercase()));
     if all_dead && state.fight_end.is_none() {
         state.fight_end = Some(Instant::now());
     }
     let mob_id = state
         .mob_list
         .iter()
-        .find(|m| m.name == tgt)
+        .find(|m| m.name.eq_ignore_ascii_case(&tgt))
         .map(|m| m.id as u32)
         .unwrap_or(0);
     state.pending_loot_mob = Some(mob_id);
@@ -1350,18 +1398,39 @@ fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> Option<u6
     // the new instance even if it spawns within the 15-second gap window. This
     // prevents sequential same-named mobs from chaining into a single enormous
     // "encounter".  Clear the dead flag so the new sighting renders as alive.
-    let was_dead = state.dead_mobs.remove(tgt);
+    let was_dead = state.dead_mobs.remove(&tgt.to_ascii_lowercase());
+
+    // Same-instance window: prefer LOG-time deltas so the same log always
+    // produces the same encounters (deterministic across live play, imports,
+    // and replays — wall-clock gaps depended on how fast the file was read).
+    // Falls back to wall-clock only when a line carried no parseable timestamp.
+    let within_gap = |m: &MobSighting| {
+        if log_ts != 0 && m.last_log_ts != 0 {
+            log_ts.saturating_sub(m.last_log_ts) < GAP.as_secs() as u32
+        } else {
+            now.duration_since(m.last_seen) < GAP
+        }
+    };
 
     let id = 'find: {
         if !was_dead {
+            // Case-insensitive: EQ capitalizes a mob's name when it opens the
+            // sentence ("Orc legionnaire hits YOU") but not mid-sentence
+            // ("You slash orc legionnaire"). Exact matching split every fight
+            // into two instances — one holding the player's damage, one the
+            // tanking — which the viewer showed as two mobs.
             if let Some(s) = state
                 .mob_list
                 .iter_mut()
-                .find(|m| m.name == tgt && now.duration_since(m.last_seen) < GAP)
+                .find(|m| m.name.eq_ignore_ascii_case(tgt) && within_gap(m))
             {
                 s.last_seen = now;
                 if log_ts != 0 {
                     s.last_log_ts = log_ts;
+                }
+                // Prefer the mid-sentence (lowercase) form as the display name.
+                if s.name != tgt && tgt.chars().next().is_some_and(|c| c.is_lowercase()) {
+                    s.name = tgt.to_owned();
                 }
                 break 'find s.id;
             }
@@ -1399,7 +1468,7 @@ fn resolve_loot_mob(state: &mut CombatState, mob_name: &str, current_ts: u32) ->
         .mob_list
         .iter()
         .rev()
-        .find(|m| m.name == mob_name)
+        .find(|m| m.name.eq_ignore_ascii_case(mob_name))
         .map(|m| m.id as u32)
         .or(state.pending_loot_mob)
         .unwrap_or(0)
@@ -1830,6 +1899,127 @@ mod tests {
             "Rysk",
         );
         assert!(state.dead_mobs.contains("a goblin"));
+    }
+
+    #[test]
+    fn integration_sentence_start_case_single_mob_instance() {
+        // Article-less mobs (EQ Legends: "orc legionnaire") capitalize the
+        // NAME itself at sentence start. Incoming ("Orc legionnaire hits
+        // YOU") and outgoing ("You slash orc legionnaire") lines must map to
+        // ONE mob instance, not two — this was the "I fight one mob but the
+        // viewer shows 2" bug, which also split damage vs tanking across the
+        // two phantom instances.
+        let state = run_lines(
+            &[
+                &format!("{TS}Orc legionnaire hits YOU for 34 points of damage."),
+                &format!("{TS}You slash Orc legionnaire for 450 points of damage."),
+                &format!("{TS}You slash orc legionnaire for 450 points of damage."),
+            ],
+            "Rysk",
+        );
+        assert_eq!(
+            state.mob_list.len(),
+            1,
+            "case variants must share one instance"
+        );
+        // Mid-sentence lowercase form wins as the display name.
+        assert_eq!(state.mob_list[0].name, "orc legionnaire");
+    }
+
+    #[test]
+    fn integration_log_time_gap_new_instance() {
+        // Encounter windows are LOG-time based: 20 log-seconds between hits on
+        // a same-named mob is a new instance even when the lines are parsed
+        // back-to-back (imports/replays), so the same log always yields the
+        // same encounters.
+        let ts1 = "[Fri Feb 27 22:00:07 2026] ";
+        let ts2 = "[Fri Feb 27 22:00:27 2026] ";
+        let state = run_lines(
+            &[
+                &format!("{ts1}Rysk slashes a goblin for 150 points of damage."),
+                &format!("{ts2}Rysk slashes a goblin for 150 points of damage."),
+            ],
+            "Rysk",
+        );
+        assert_eq!(state.mob_list.len(), 2);
+    }
+
+    #[test]
+    fn integration_log_time_within_gap_same_instance() {
+        let ts1 = "[Fri Feb 27 22:00:07 2026] ";
+        let ts2 = "[Fri Feb 27 22:00:12 2026] "; // 5 log-seconds later
+        let state = run_lines(
+            &[
+                &format!("{ts1}Rysk slashes a goblin for 150 points of damage."),
+                &format!("{ts2}Rysk slashes a goblin for 150 points of damage."),
+            ],
+            "Rysk",
+        );
+        assert_eq!(state.mob_list.len(), 1);
+    }
+
+    #[test]
+    fn integration_player_miss_parses() {
+        // "You try to slash X, but miss!" — the player-side miss form.
+        let state = run_lines(
+            &[
+                &format!("{TS}You try to slash royal guard, but miss!"),
+                &format!("{TS}You try to kick an orc thaumaturgist, but miss!"),
+            ],
+            "Rysk",
+        );
+        let rysk = state.entities.get("royal guard");
+        assert!(rysk.is_some(), "miss must create defender avoidance entry");
+    }
+
+    #[test]
+    fn integration_inbound_ds_burn_counts_as_tanking() {
+        let state = run_lines(
+            &[
+                &format!("{TS}You slash orc centurion for 100 points of damage."),
+                &format!("{TS}YOU are burned by orc centurion's flames for 6 points of non-melee damage!"),
+            ],
+            "Rysk",
+        );
+        assert_eq!(state.mob_list.len(), 1, "burn attributes to the same instance");
+        let tank = state
+            .mob_tanking
+            .get(&state.mob_list[0].id)
+            .and_then(|m| m.get("Rysk"));
+        assert_eq!(tank.map(|t| t.total_damage), Some(6));
+    }
+
+    #[test]
+    fn integration_mob_self_heal_tracked_not_emitted() {
+        // Mob self-heal keeps the encounter window open but must not appear
+        // as a player healer.
+        let state = run_lines(
+            &[
+                &format!("{TS}Rysk slashes an orc thaumaturgist for 150 points of damage."),
+                &format!("{TS}an orc thaumaturgist healed itself for 11 hit points by Lifespike."),
+            ],
+            "Rysk",
+        );
+        assert_eq!(state.mob_list.len(), 1);
+        let healer = state.entities.get("an orc thaumaturgist");
+        assert!(
+            healer.map_or(true, |e| e.total_heals == 0),
+            "mob self-heal must not credit healer stats"
+        );
+    }
+
+    #[test]
+    fn integration_sentence_start_case_slay_matches() {
+        // A slay line with sentence-start capitalization must mark the
+        // lowercase-tracked mob dead (dead_mobs keys are lowercased).
+        let state = run_lines(
+            &[
+                &format!("{TS}You slash orc legionnaire for 450 points of damage."),
+                &format!("{TS}Orc legionnaire was slain by Rysk!"),
+            ],
+            "Rysk",
+        );
+        assert!(state.dead_mobs.contains("orc legionnaire"));
     }
 
     #[test]

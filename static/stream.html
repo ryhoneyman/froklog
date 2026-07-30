@@ -1297,6 +1297,12 @@ function buildFightLabel(d) {
     const dmgBlock = totalMobDmg > 0
       ? `<div class="fl-stat-block fl-stat-dmg"><span class="fl-stat-label">Damage</span><span class="fl-totdmg">${fmtK(totalMobDmg)}</span></div>`
       : '';
+    // Fight DPS: total damage to this mob over its own fight window — the
+    // "current DPS" for a live fight (auto-selected mob) and the per-fight
+    // DPS when reviewing a past encounter.
+    const dpsBlock = (totalMobDmg > 0 && hasRealElapsed && enc > 0)
+      ? `<div class="fl-stat-block fl-stat-dps"><span class="fl-stat-label">DPS</span><span class="fl-totdmg">${fmtK(Math.round(totalMobDmg / enc))}</span></div>`
+      : '';
     const secsBlock = hasRealElapsed
       ? `<div class="fl-stat-block fl-stat-dur"><span class="fl-stat-label">Duration</span><span class="fl-secs">${fmtTime(enc)}</span></div>`
       : '';
@@ -1311,7 +1317,7 @@ function buildFightLabel(d) {
     const restartBtn = mobEntry.first_ts
       ? `<span class="fl-restart" onclick="event.stopPropagation();restartMobFight(${selectedMob})" title="Restart fight from beginning">&#8634;</span>`
       : '';
-    statsHtml = `<div class="fl-stats">${dmgBlock}${secsBlock}${seenBlock}${restartBtn}</div>`;
+    statsHtml = `<div class="fl-stats">${dmgBlock}${dpsBlock}${secsBlock}${seenBlock}${restartBtn}</div>`;
   }
 
   const nameColor = accentColor === '#3cdc3c' ? '#3cdc3c' : '#f0a030';

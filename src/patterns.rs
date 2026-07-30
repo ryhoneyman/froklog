@@ -71,6 +71,17 @@ pub static RE_DS_PROC: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+// "YOU are burned by orc centurion's flames for 6 points of non-melee damage!"
+// Inbound DS proc: a MOB's damage shield burning the player who struck it.
+// Distinct from RE_DS_PROC: "YOU are" (not "is"), multi-word possessive mob
+// name, and a trailing "!".
+pub static RE_DS_BURN_YOU: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^YOU are \w+ by (?P<src>[A-Za-z][A-Za-z `']*?)'s \w+ for (?P<dmg>\d+) points? of non-melee damage[.!]",
+    )
+    .unwrap()
+});
+
 // "Player begins casting SpellName."
 pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
@@ -81,7 +92,9 @@ pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
 
 // "X healed Y for Z (optional_overheal) hit points by SpellName."
 pub static RE_HEAL: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<src>[A-Za-z][A-Za-z`']*) (?:has )?healed (?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<amt>\d+)(?: \(\d+\))? hit points?(?: by (?P<spell>[A-Za-z][A-Za-z `'-]+))?\.?$").unwrap()
+    // src allows spaces: mob healers ("an orc thaumaturgist healed itself…")
+    // are multi-word and previously never matched at all.
+    Regex::new(r"^(?P<src>[A-Za-z][A-Za-z `']*?) (?:has )?healed (?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<amt>\d+)(?: \(\d+\))? hit points?(?: by (?P<spell>[A-Za-z][A-Za-z `'-]+))?\.?$").unwrap()
 });
 
 // "X has/have taken N damage from [Player's / your] Spell[ by Player]."
@@ -129,7 +142,10 @@ pub static RE_DIED: Lazy<Regex> =
 // Both src and tgt may be multi-word.  Miss type is the first keyword after "but".
 pub static RE_MISS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"^(?P<src>[A-Za-z][A-Za-z`', ]*?) tries? to \w+ (?P<tgt>[A-Za-z][A-Za-z `',]*?),",
+        // "tr(?:y|ies)": first-person lines use "You try to slash X, but miss!"
+        // — a previous "tries?" only matched "trie(s)", silently dropping
+        // every player-side miss.
+        r"^(?P<src>[A-Za-z][A-Za-z`', ]*?) tr(?:y|ies) to \w+ (?P<tgt>[A-Za-z][A-Za-z `',]*?),",
         r" but .*?(?P<miss>dodge[sd]?|parr(?:ied|ies|y)|miss(?:ed|es)?|block(?:ed|s)?|",
         r"ripost(?:ed|es)?|INVULNERABLE|absorbs?)"
     ))

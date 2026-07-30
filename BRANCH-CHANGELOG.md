@@ -242,6 +242,46 @@ frame sent before it. Re-tested through the proxy: exact batch parity with the
 local run. Send failures during the final flush are also logged with the event
 count instead of being ignored.
 
+## 12. Parser accuracy — found by tracing live gameplay against the viewer
+
+All of these were diagnosed by correlating a live fight's raw log lines with
+the events the client shipped and what the viewer rendered.
+
+- **One mob no longer shows as two.** EQ capitalizes a mob's name when it
+  opens the sentence ("Orc taskmaster hits YOU") but not mid-sentence ("You
+  slash orc taskmaster"). Mob-instance matching was case-sensitive, so every
+  fight split into two phantom instances — one holding the player's damage,
+  the other the tanking — which also broke the viewer's current-fight
+  auto-selection (it flapped between two half-empty mobs). Identity matching
+  is now case-insensitive (slay/loot/dead-tracking included), with the
+  mid-sentence lowercase form preferred as the display name.
+- **Player-side misses were never parsed.** The miss regex's `tries?` matches
+  "trie(s)" but not "try" — so every "You try to slash X, but miss!" line
+  (~500 in one day's log) was dropped, and accuracy/avoidance stats only
+  counted the mob's whiffs, never yours. Fixed to `tr(?:y|ies)`.
+- **Mob self-heals were invisible.** "an orc thaumaturgist healed itself for
+  11 hit points by Lifespike." never matched (the healer name pattern allowed
+  no spaces). It now parses; the mob's encounter window stays open while it
+  heal-turtles, but it is deliberately not emitted as a Heal event so the
+  viewer's healer lists remain player-only.
+- **Incoming damage-shield burns now count as damage taken.** "YOU are burned
+  by orc centurion's flames for 6 points of non-melee damage!" (75 hits in one
+  day) matched nothing — fighting a fire-shielded mob undercounted your
+  incoming damage. Now attributed to the mob's instance as tanking damage.
+- **Encounters are deterministic.** The 15-second same-mob window used
+  wall-clock time, so a fast import grouped encounters differently than live
+  play of the same log. It now uses log-time deltas: the same log always
+  produces the same encounter boundaries, live or replayed.
+
+## 13. Viewer: current-fight DPS in the fight header
+
+The fight header showed total Damage and Duration but never the division.
+It now shows **DPS over the fight window** — for a live fight the viewer
+already auto-selects the active mob, so this is the "current DPS" readout;
+for a reviewed past fight it is that encounter's DPS. (The session-wide table
+still shows session DPS — that number decaying over idle time is what made
+"current DPS" look missing.)
+
 ---
 
 *(subsequent changes appended as they land)*

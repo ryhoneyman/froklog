@@ -272,7 +272,7 @@ impl CombatState {
             .map(|m| {
                 let secs_since_last = m.last_seen.elapsed().as_secs_f64();
                 let timed_out = secs_since_last >= 15.0;
-                let is_dead = self.dead_mobs.contains(&m.name) || timed_out;
+                let is_dead = self.dead_mobs.contains(&m.name.to_ascii_lowercase()) || timed_out;
                 let is_active = !is_dead && secs_since_last < 5.0;
                 // Encounter duration: from first hit to last hit (fixed, doesn't grow after death).
                 let encounter_secs = m.last_seen.duration_since(m.first_seen).as_secs_f64();
