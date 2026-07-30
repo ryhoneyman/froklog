@@ -171,8 +171,11 @@
   .mob-star { font-size: 10px; margin-left: 4px; flex-shrink: 0; cursor: pointer;
               color: #555; visibility: hidden; }
   .mob-row:hover .mob-star { visibility: visible; }
+  .mob-star.star-named, .mob-star.star-ovr { visibility: visible; }
   .mob-star.star-named { color: #e8c76a; }
-  .mob-star.star-ovr { visibility: visible; }
+  .fl-star { cursor: pointer; margin-left: 6px; font-size: 13px; color: #555;
+             flex-shrink: 0; }
+  .fl-star.star-named { color: #e8c76a; }
   #named-menu {
     position: fixed; z-index: 90; background: #1c1c22; border: 1px solid #3a3a44;
     border-radius: 6px; padding: 4px 0; font-size: 12px; min-width: 170px;
@@ -1749,7 +1752,17 @@ function buildFightLabel(d) {
   }
 
   const nameColor = accentColor === '#3cdc3c' ? '#3cdc3c' : '#f0a030';
-  el.innerHTML = `<div class="fl-name-wrap"><span class="fl-name" style="color:${nameColor}">${mob}</span></div>${statsHtml}`;
+  // Named-status toggle beside the drilled-into mob's name — same menu as
+  // the list rows. Attached as a listener, not inline onclick: EQ names
+  // carry backticks and apostrophes (Innoruuk`s Chosen).
+  const starHtml = (canCurate() && mob !== '—')
+    ? `<span id="fl-star" class="fl-star${isNamedMob(mob) ? ' star-named' : ''}" `
+      + `title="Named status${mobOverrides.has(mob.toLowerCase()) ? ' (pinned by you)' : ''}">`
+      + `${isNamedMob(mob) ? '★' : '☆'}</span>`
+    : '';
+  el.innerHTML = `<div class="fl-name-wrap"><span class="fl-name" style="color:${nameColor}">${mob}</span>${starHtml}</div>${statsHtml}`;
+  const flStar = document.getElementById('fl-star');
+  if (flStar) flStar.addEventListener('click', e => showNamedMenu(e, mob));
 }
 
 function lootKillBlock(mob, entry, mobName) {
