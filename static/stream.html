@@ -431,6 +431,13 @@ const SESSION_END_LOG_TS = __SESSION_END_LOG_TS__;
 // the full history over the WebSocket.
 // Each entry: { logTs: number, batch: EventBatch }
 const cachedBatches = [];
+// Client-run epoch for mob-id namespacing: the parser's mob-instance ids
+// restart at 1 whenever the pushing client restarts, and the pusher's batch
+// seq restarts at 0 with it. Without namespacing, a new run's "mob 5" merges
+// into an older run's mob 5 — compounding damage into a stale entry far down
+// the list instead of showing a fresh fight at the top.
+let mobEpoch = 0;
+let lastBatchSeq = null;
 let cacheComplete = false;  // true once the initial catch-up is done
 
 // ── Persistent mob registry ───────────────────────────────────────────────────
@@ -1877,6 +1884,18 @@ function connectWS() {
     }
     if (msg.t === 'batch') {
       try {
+        // Detect a new client run (seq restarted at 0) and namespace this
+        // batch's mob ids by run. Done once at ingestion so cache replays,
+        // live applies, and loot all see the remapped ids. mob 0 = "unknown"
+        // stays 0. Dump-mode sub-batch splitting never re-emits seq 0, so
+        // this only fires on genuine client restarts.
+        if (msg.batch.seq === 0 && lastBatchSeq !== null) mobEpoch++;
+        lastBatchSeq = msg.batch.seq;
+        if (mobEpoch > 0 && msg.batch.events) {
+          for (const ev of msg.batch.events) {
+            if (ev.mob) ev.mob += mobEpoch * 1000000;
+          }
+        }
         const batchLogTs = msg.batch.events && msg.batch.events.length
           ? Math.max(...msg.batch.events.map(e => e.ts))
           : (S.lastTs || 0);

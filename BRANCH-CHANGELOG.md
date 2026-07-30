@@ -282,6 +282,26 @@ for a reviewed past fight it is that encounter's DPS. (The session-wide table
 still shows session DPS — that number decaying over idle time is what made
 "current DPS" look missing.)
 
+## 14. Viewer: new fights no longer merge into stale list entries
+
+**Bug resolved (user-reported: "I pulled 6 NPCs and they compounded damage
+into old entries down the list instead of appearing as a new fight on top").**
+The client parser numbers mob instances 1, 2, 3… per process run, and those
+ids restart whenever the client restarts. The viewer keyed all state by raw
+id, so after a restart the next fight's "mob 5" silently merged into whatever
+"mob 5" meant an hour earlier — inheriting its position far down the mob list
+and compounding its damage totals. (A related pre-existing symptom: with the
+old case-split bug, capitalized phantom instances could never be marked dead
+— slay lines are lowercase — so one entry could absorb 30+ minutes of chain
+fighting.)
+
+Fix: the viewer namespaces mob ids by client run. The pusher's batch sequence
+restarts at 0 exactly when the parser's ids do, so "seq 0 after anything
+else" deterministically marks a new run; ids are remapped once at ingestion
+(epoch × 1,000,000 + id), which keeps every downstream path — cache replays,
+seeks, loot, links — untouched. New runs now append their fights at the top
+of the list with fresh totals, including in historical data.
+
 ---
 
 *(subsequent changes appended as they land)*
