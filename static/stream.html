@@ -146,7 +146,10 @@
   .enc-row.selected { background: #252535; color: #cdd6f4; }
   .enc-row.enc-active { color: #7ce87c; background: rgba(60,220,60,0.06); }
   .enc-row .enc-count { margin-left: auto; color: #666; font-size: 10px; text-transform: none; }
+  .enc-row.enc-named { color: #e8c76a; background: rgba(232,199,106,0.06); }
+  .enc-row.enc-named.enc-active { color: #7ce87c; }
   .mob-row.enc-member { padding-left: 18px; }
+  .mob-row .mob-name.named { color: #e8c76a !important; }
   .mob-dot { font-size: 9px; margin-right: 3px; flex-shrink: 0; line-height: 1; }
   .mob-name { flex: 1; font-size: 11px; overflow: hidden; white-space: nowrap; }
   .mob-time { font-size: 10px; color: #666; margin-left: 4px; flex-shrink: 0; }
@@ -457,6 +460,16 @@ let cacheComplete = false;  // true once the initial catch-up is done
 // New mobs are appended in first-appearance order; the list is rendered
 // newest-first so live mobs pop in at the top.
 const allMobsEver  = {};   // mob_id -> { name }
+// Names ever seen in lowercase (mid-sentence) form. EQ lowercases TRASH mob
+// names mid-sentence but never lowercases NAMED/boss mobs ("You slash orc
+// centurion" vs "You slash Marrowbane") — so a name that stays capitalized
+// after enough lines is a named. Session-level knowledge, survives seeks.
+const lowercaseNames = new Set();
+function isNamedMob(name) {
+  const c = name[0];
+  return c === c.toUpperCase() && c !== c.toLowerCase()
+    && !lowercaseNames.has(name.toLowerCase());
+}
 const allMobOrderEver = []; // mob_ids in first-appearance order (oldest first)
 // Loot cache that spans seeks: populated from ALL cached batches, not just up
 // to the current seek target.  Lets the loot tab show post-death loot when a
@@ -718,6 +731,7 @@ function trackMob(mob, name, ts) {
   // case flip is the SAME mob — treating it as an id reuse reset the fight
   // window on nearly every event, shattering one continuous pull into
   // 1-second fragments. Only a genuinely different name means id reuse.
+  if (name[0] === name[0].toLowerCase()) lowercaseNames.add(name.toLowerCase());
   const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
   // Prefer the mid-sentence (lowercase) form for display, matching the client.
   const preferName = (oldN, newN) =>
@@ -1236,6 +1250,10 @@ function buildRenderState() {
     curEnc.end_ts = Math.max(curEnc.end_ts, m.last_ts || m.first_ts);
     curEnc.all_dead = curEnc.all_dead && m.is_dead;
     curEnc.any_active = curEnc.any_active || m.is_active;
+    // NAMED detection: a capitalized proper-noun member (never seen
+    // lowercase) marks this as a named encounter, vs trash; adds
+    // ("Marrowbane pet") don't override the named itself.
+    if (!curEnc.named && isNamedMob(m.name) && !m.name.endsWith(' pet')) curEnc.named = m.name;
     const nk = m.name.toLowerCase();
     curEnc.names[nk] = (curEnc.names[nk] || 0) + 1;
   }
@@ -1405,10 +1423,11 @@ function buildFightLabel(d) {
   if (selectedEnc !== null) {
     const enc = (d.encounters || []).find(e => e.key === selectedEnc);
     if (enc) {
-      const title = Object.entries(enc.names)
+      let title = Object.entries(enc.names)
         .sort((a, b) => b[1] - a[1])
         .map(([n, c]) => c > 1 ? `${n} ×${c}` : n)
         .join(', ');
+      if (enc.named) title = `★ ${title}`;
       const accent = enc.any_active && tlIsLive ? '#3cdc3c' : enc.all_dead ? '#464646' : '#c8aa1e';
       el.style.borderLeftColor = accent;
       const totalDmg = enc.members.reduce((s, id) =>
@@ -1598,8 +1617,11 @@ function renderMobList(d) {
       seen.add(idStr);
       const startClock = new Date(enc.start_ts * 1000)
         .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      const label = `Pull #${enc.num} · ${startClock}`;
+      const label = enc.named
+        ? `★ ${enc.named} · ${startClock}`
+        : `Pull #${enc.num} · ${startClock}`;
       const cls = 'enc-row'
+        + (enc.named ? ' enc-named' : '')
         + (enc.any_active && tlIsLive ? ' enc-active' : '')
         + (selectedEnc === enc.key ? ' selected' : '');
       let row = existing[idStr];
@@ -1651,7 +1673,9 @@ function renderMobList(d) {
 
     if (row.className          !== newCls)   row.className          = newCls;
     if (row._dot.style.color   !== dotColor) row._dot.style.color   = dotColor;
-    if (row._name.style.color  !== nameColor) row._name.style.color = nameColor;
+    // Named (capitalized proper-noun) mobs render gold unless dead/outside.
+    const finalNameColor = (!outside && !m.is_dead && isNamedMob(m.name)) ? '#e8c76a' : nameColor;
+    if (row._name.style.color  !== finalNameColor) row._name.style.color = finalNameColor;
     const nameText = truncate(m.name, 18);
     if (row._name.textContent  !== nameText)  row._name.textContent = nameText;
     if (row._time.textContent  !== timeStr)   row._time.textContent = timeStr;
