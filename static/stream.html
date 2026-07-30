@@ -1310,7 +1310,8 @@ function buildRenderState() {
 
   return {
     entities, healers, healees,
-    mob_list, encounters, mob_damage, mob_tanking, mob_healing, mob_healed, tanked,
+    mob_list, encounters, now_secs: nowSecs,
+    mob_damage, mob_tanking, mob_healing, mob_healed, tanked,
     avoidance, mob_avoid,
     fight_start_display: fightStartDisplay,
     fight_elapsed_secs,
@@ -1455,7 +1456,9 @@ function scheduleRender() {
       // Combined damage/DPS over the encounter's whole life — fighting five
       // mobs as a unit reports as a unit. Clicking a mob still narrows to it.
       const encs = lastData.encounters || [];
-      const liveEnc = [...encs].reverse().find(e => !e.all_dead);
+      // Current pull, or — between fights — the most recent one, so the
+      // header always shows an encounter while live.
+      const liveEnc = [...encs].reverse().find(e => !e.all_dead) || encs[encs.length - 1];
       const targetKey = liveEnc ? liveEnc.key : null;
       if (targetKey !== selectedEnc) {
         selectedEnc = targetKey;
@@ -1487,7 +1490,12 @@ function buildFightLabel(d) {
       el.style.borderLeftColor = accent;
       const totalDmg = enc.members.reduce((s, id) =>
         s + ((d.mob_damage || {})[String(id)] || []).reduce((t, e) => t + (e.total_damage || 0), 0), 0);
-      const encSecs = Math.max(enc.end_ts - enc.start_ts, 1);
+      // An active pull's clock runs: duration (and therefore DPS) ticks with
+      // "now" until everything is dead, then freezes at the recorded span.
+      const encRunning = tlIsLive && !enc.all_dead && d.now_secs;
+      const encSecs = encRunning
+        ? Math.max(d.now_secs - enc.start_ts, 1)
+        : Math.max(enc.end_ts - enc.start_ts, 1);
       const blocks = [
         `<div class="fl-stat-block"><span class="fl-stat-label">Mobs</span><span class="fl-totdmg">${enc.members.length}</span></div>`,
         totalDmg > 0 ? `<div class="fl-stat-block fl-stat-dmg"><span class="fl-stat-label">Damage</span><span class="fl-totdmg">${fmtK(totalDmg)}</span></div>` : '',
@@ -1694,7 +1702,10 @@ function renderMobList(d) {
       }
       if (row.className !== cls) row.className = cls;
       const labelText = truncate(label, 24);
-      const countText = `${enc.members.length}× · ${fmtTime(Math.max(enc.end_ts - enc.start_ts, 1))}`;
+      const encDur = (tlIsLive && !enc.all_dead && d.now_secs)
+        ? Math.max(d.now_secs - enc.start_ts, 1)
+        : Math.max(enc.end_ts - enc.start_ts, 1);
+      const countText = `${enc.members.length}× · ${fmtTime(encDur)}`;
       if (row._label.textContent !== labelText) row._label.textContent = labelText;
       if (row._count.textContent !== countText) row._count.textContent = countText;
       if (container.children[domIdx] !== row) container.insertBefore(row, container.children[domIdx] || null);
@@ -2689,6 +2700,16 @@ if (SESSIONS_PATH) {
 })();
 
 connectWS();
+
+// Live ticker: keeps the active pull's running timer, DPS, and mob ages
+// moving between combat lines (swings can be seconds apart). Skipped when
+// the tab is hidden - browsers throttle it there anyway.
+setInterval(() => {
+  if (tlIsLive && lastData && !document.hidden) {
+    lastData = buildRenderState();
+    rerender();
+  }
+}, 1000);
 
 // ── Resizable columns ─────────────────────────────────────────────────────────
 // Drag the divider right of the Mobs or Summary panel to resize it; widths
