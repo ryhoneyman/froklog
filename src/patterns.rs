@@ -14,7 +14,8 @@ pub static RE_MELEE: Lazy<Regex> = Lazy::new(|| {
         r"frenzies|frenzy|strikes|strike|slays|slay|mauls|maul|",
         r"bites|bite|claws|claw|stings|sting|rends|rend|",
         r"scratches|scratch|gores|gore|cleaves|cleave|smashes|smash|",
-        r"shoots|shoot|slams|slam|slices|slice|stabs|stab|sweeps|sweep) ",
+        r"shoots|shoot|slams|slam|slices|slice|stabs|stab|sweeps|sweep|",
+        r"smites|smite) ",
         r"(?:on )?",
         r"(?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<dmg>\d+) point"
     ))
@@ -333,6 +334,7 @@ pub fn normalize_verb(verb: &str) -> &'static str {
         "scratch" | "scratches" => "scratch",
         "gore" | "gores" => "gore",
         "cleave" | "cleaves" => "cleave",
+        "smite" | "smites" => "smite",
         "smash" | "smashes" => "smash",
         "shoot" | "shoots" => "shoot",
         "slam" | "slams" => "slam",
