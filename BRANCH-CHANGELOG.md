@@ -477,6 +477,32 @@ next to the badge only when the client is connected and the viewer isn't
 watching live (it also lives in the timeline bar). Status is status; buttons
 are buttons.
 
+## 26. Named classification without a third-party lexicon
+
+**Design question (from the dev): how do you know nameds with no common term
+— and (from the user) how do you maintain that lexicon without leaning on a
+non-authoritative wiki?** Answer: derive it from the game's own testimony,
+in two layers, both computed from data the viewer already holds:
+
+1. **Grammar (perfect recall):** EQ's text engine never lowercases a
+   proper-named NPC mid-sentence; trash it lowercases. Validated across a
+   192 MB raid log: every recognizable raid boss classified named —
+   including "Innoruuk, the Prince of Hate", backticked names (Coercer
+   T`vala), hyphens (Cazic-Thule) — with a one-line rule and no term list.
+2. **Corpse concurrency (precision):** a named is by definition a unique
+   spawn, so two same-name corpses within 90 seconds prove population > 1
+   and demote the name for the session. This is what separates capitalized
+   farm-elites (Innoruuk`s Chosen: 57 kills, twice in one minute; Cleric of
+   Innoruuk: 86 kills) from true nameds — all 17 verified nameds, including
+   The Tenderizer farmed 72 times across weeks, never died twice in a
+   window. Kill *frequency* was deliberately rejected as a signal: farmed
+   nameds are frequent; only simultaneity is disqualifying.
+
+The wiki-lexicon idea was considered and set aside as non-authoritative and
+operationally fragile; the log itself is the primary source. If a stubborn
+edge case ever survives both layers, the clean escape hatch is a small
+owner-curated override list server-side — not built until needed.
+
 ---
 
 *(subsequent changes appended as they land)*
