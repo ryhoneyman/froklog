@@ -9,7 +9,10 @@ use crate::journal::{Journal, SharedJournal};
 use crate::markers::{Markers, SharedMarkers};
 use crate::session_index::{SessionIndex, SharedSessionIndex};
 
-const BROADCAST_CAPACITY: usize = 64;
+// Sized so a viewer parked in replay/pause for a few minutes can still drain
+// the live backlog on returning to Live instead of hitting Lagged and
+// silently missing batches (~1 batch/sec live).
+const BROADCAST_CAPACITY: usize = 256;
 
 /// State for a single player's log stream hosted on the server.
 pub struct StreamEntry {

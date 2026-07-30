@@ -2644,7 +2644,14 @@ function goLive() {
   updatePlayPauseBtn();
   setScrubberToEnd();
   resetState();
+  // Rebuild the full accumulated state from the batch cache before following
+  // live — otherwise Go Live wiped history and the current pull showed only
+  // events arriving after the click (auto-select had nothing to select).
+  applyBatchesUpTo(Infinity);
+  S.casts = {};
   sendWS({ t: 'live' });
+  updateTimelineBar();
+  scheduleRender();
 }
 
 // ── Transport controls ─────────────────────────────────────────────────────
