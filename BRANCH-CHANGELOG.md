@@ -444,6 +444,27 @@ encounters starred correctly across a real session.
   render for a selected encounter (previously the graph code only understood
   a selected mob and showed an empty strip under pull selection).
 
+## 24. Encounter replay, completed
+
+**User requirements: select a pull and replay it; drill into one mob of the
+pull and keep the same replay.** Three fixes deliver both:
+
+- **Play replays the pull.** With a pull selected while live, the Play button
+  now starts the pull's replay from its first event (same as the ↺ control).
+  Previously it just paused the live feed — the replay engine worked, but the
+  natural button didn't drive it.
+- **Re-streamed batches no longer corrupt state.** Replays/seeks make the
+  server resend journal batches the viewer already caches; those resends were
+  appended to the cache as duplicates (double-counting damage on any later
+  cache rebuild, e.g. Go Live) and could double-bump the client-run epoch,
+  spawning ghost mob entries. Resends are now recognized (seq + log-ts) and
+  the cached, already-remapped copy is applied instead. Verified: a 5-second
+  replay streams with zero new cache entries.
+- **Mob drill-down inside a pull.** Clicking a member of the selected pull
+  shows that mob's damage/tank/heal panels while keeping the pull's replay
+  context — scoped bar, ↺, Play — so you can watch one mob's numbers through
+  the pull's playback. Clicking a non-member mob leaves the pull as before.
+
 ---
 
 *(subsequent changes appended as they land)*
