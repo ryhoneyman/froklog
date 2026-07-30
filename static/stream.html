@@ -47,6 +47,11 @@
   #status.poll  { color: #fa0; }
   #status.error { color: #f44; }
   #status.done  { color: #7ab8f5; }
+  #status.golive {
+    color: #f9e2af; cursor: pointer; border: 1px solid #6c5c2c;
+    border-radius: 4px; padding: 2px 8px; background: #262210;
+  }
+  #status.golive:hover { background: #363213; color: #ffe9b8; }
   #player-name  { color: #a4f; }
 
   #time-display {
@@ -408,7 +413,7 @@
     <span class="td-now" id="wall-clock"></span>
     <span class="td-log"  id="log-clock"></span>
   </div>
-  <div id="status" class="error">● disconnected</div>
+  <div id="status" class="error" onclick="statusClick()" title="Click to return to live">● disconnected</div>
 </div>
 
 <div id="timeline-bar">
@@ -2539,6 +2544,7 @@ function setScrubberToEnd() {
 }
 
 function updateLiveBtn() {
+  syncStatusIndicator();
   if (!tlCanGoLive) {
     tlLiveBtn.style.display = 'none';
     return;
@@ -2787,6 +2793,18 @@ function fastForward() {
 function setStatus(cls, txt) {
   const el = document.getElementById('status');
   el.className = cls; el.textContent = txt;
+}
+
+/// The top-right badge doubles as the always-visible way back to live:
+/// "● live" while live; a clickable "⏵ Go Live" pill during replay/pause.
+function statusClick() {
+  if (tlCanGoLive && !tlIsLive && ws) goLive();
+}
+
+function syncStatusIndicator() {
+  if (!ws || !tlCanGoLive) return; // disconnected / recorded badges stay as-is
+  if (tlIsLive) setStatus('live', '● live');
+  else setStatus('golive', '⏵ Go Live');
 }
 
 // ── Clocks ────────────────────────────────────────────────────────────────────
