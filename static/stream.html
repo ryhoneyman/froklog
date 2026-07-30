@@ -1893,6 +1893,35 @@ function sumRow(name, classes, val, rate, rateLabel, pct) {
   </div>`;
 }
 
+/// Merge per-mob card entries across an encounter's members: totals summed per
+/// player, breakdown lists (by type / by spell) summed by key. Rates are NOT
+/// carried over — cards recompute them from the pull's own elapsed time.
+function mergeEncounterEntries(map, members, totalField, lists) {
+  const acc = {};
+  for (const id of members) {
+    for (const e of (map || {})[String(id)] || []) {
+      const a = acc[e.name] || (acc[e.name] = {
+        name: e.name, class: e.class, classes: e.classes, level: e.level,
+        [totalField]: 0, _lists: {},
+      });
+      a[totalField] += e[totalField] || 0;
+      for (const [listName, [k, v]] of Object.entries(lists)) {
+        const m = a._lists[listName] || (a._lists[listName] = {});
+        for (const r of e[listName] || []) m[r[k]] = (m[r[k]] || 0) + (r[v] || 0);
+      }
+    }
+  }
+  return Object.values(acc).map(a => {
+    for (const [listName, [k, v]] of Object.entries(lists)) {
+      a[listName] = Object.entries(a._lists[listName] || {})
+        .sort((x, y) => y[1] - x[1])
+        .map(([kk, vv]) => ({ [k]: kk, [v]: vv }));
+    }
+    delete a._lists;
+    return a;
+  }).sort((x, y) => (y[totalField] || 0) - (x[totalField] || 0));
+}
+
 function renderCards(d) {
   const cardsEl = document.getElementById('cards');
   if (detailMode === 'loot') { cardsEl.innerHTML = ''; return; }
@@ -1902,6 +1931,36 @@ function renderCards(d) {
   const mobEntry = selectedMob !== null ? (d.mob_list || []).find(m => m.id === selectedMob) : null;
   const hasRealElapsed = !mobEntry || (mobEntry.first_ts && mobEntry.last_ts && mobEntry.last_ts > mobEntry.first_ts);
   const elapsed = hasRealElapsed ? Math.max(d.fight_elapsed_secs, 1) : null;
+
+  // Pull selected: cards cover the encounter — same scope as the header and
+  // summary, so every number on screen agrees.
+  const encEntry = selectedEnc !== null ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
+  if (encEntry) {
+    const ids = encEntry.members;
+    if (detailMode === 'damage' || detailMode === 'tanked') {
+      const p = mergeEncounterEntries(
+        detailMode === 'damage' ? d.mob_damage : d.mob_tanking, ids,
+        'total_damage', { damage_by_type: ['type', 'damage'], spells: ['spell', 'damage'] });
+      cardsEl.innerHTML = p.length ? p.map(e => damageCard(e, elapsed)).join('')
+        : '<div class="empty-state">No data recorded for this pull</div>';
+    } else if (detailMode === 'healing') {
+      const h = mergeEncounterEntries(d.mob_healing, ids,
+        'total_heals', { heals_by_spell: ['spell', 'healed'] });
+      cardsEl.innerHTML = h.length ? h.map(e => healerCard(e, elapsed)).join('')
+        : '<div class="empty-state">No healing recorded for this pull</div>';
+    } else if (detailMode === 'healed') {
+      const h = mergeEncounterEntries(d.mob_healed, ids,
+        'total_healed_received', { healed_received_by_spell: ['spell', 'healed'] });
+      cardsEl.innerHTML = h.length ? h.map(e => healeeCard(e, elapsed)).join('')
+        : '<div class="empty-state">No heals received recorded for this pull</div>';
+    } else {
+      const a = mergeEncounterEntries(d.mob_avoid, ids,
+        'total', { by_type: ['type', 'count'] });
+      cardsEl.innerHTML = a.length ? a.map(e => avoidCard(e)).join('')
+        : '<div class="empty-state">No avoidance recorded for this pull</div>';
+    }
+    return;
+  }
 
   if (selectedMob !== null) {
     const key = String(selectedMob);
