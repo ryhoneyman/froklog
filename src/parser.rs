@@ -17,7 +17,7 @@ use crate::event::{
 use crate::patterns::{
     norm, normalize_article_case, normalize_miss, normalize_verb, parse_copper, parse_warder_owner,
     parse_who_classes, RE_ABSORB_RUNE, RE_ABSORB_SKIN, RE_CAST, RE_CURRENCY_CORPSE, RE_DIED,
-    RE_DOT, RE_DS, RE_DS_BURN_YOU, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
+    RE_CC_PARK, RE_CC_WAKE, RE_DOT, RE_DS, RE_DS_BURN_YOU, RE_DS_PROC, RE_EXTRA_DMG, RE_HAS_TAKEN, RE_HEAL, RE_HIT_BY_SPELL,
     RE_ITEM_MERGE, RE_LOOT_ENHANCE, RE_LOOT_HOARD, RE_LOOT_KEPT, RE_LOOT_SOLD, RE_MELEE, RE_MISS, RE_RESIST,
     RE_RIPOSTE, RE_SLAIN_BY, RE_SLAY_HAS, RE_SLAY_YOU, RE_SPELL_ATTR, RE_SPELL_HIT, RE_WHO, TS_LEN,
 };
@@ -787,6 +787,46 @@ pub fn run(
             touch_fight_start(&mut state);
             matched = true;
 
+        // ── Crowd control: mob parked (mesmerized/enthralled) ─────────────────
+        } else if let Some(caps) = RE_CC_PARK.captures(line) {
+            let tgt = norm(caps["tgt"].trim(), &player_name);
+            // Registers an unengaged add as a pull member the moment CC lands,
+            // and suspends its idle/gap timers until it wakes.
+            let mob_id = update_mob_list(&mut state, &tgt, current_ts);
+            if let Some(id) = mob_id {
+                if let Some(s) = state.mob_list.iter_mut().find(|m| m.id == id) {
+                    s.parked = true;
+                }
+                emit(
+                    &event_tx,
+                    CombatEvent::Cc {
+                        ts: current_ts,
+                        mob: id as u32,
+                        tgt,
+                        off: false,
+                    },
+                );
+            }
+            matched = true;
+
+        // ── Crowd control broken ("X has been awakened by Y") ─────────────────
+        } else if let Some(caps) = RE_CC_WAKE.captures(line) {
+            let tgt = norm(caps["tgt"].trim(), &player_name);
+            // update_mob_list clears `parked` on match.
+            let mob_id = update_mob_list(&mut state, &tgt, current_ts);
+            if let Some(id) = mob_id {
+                emit(
+                    &event_tx,
+                    CombatEvent::Cc {
+                        ts: current_ts,
+                        mob: id as u32,
+                        tgt,
+                        off: true,
+                    },
+                );
+            }
+            matched = true;
+
         // ── Spell cast — record caster for attribution ─────────────────────────
         } else if let Some(caps) = RE_CAST.captures(line) {
             let src = norm(&caps["src"], &player_name);
@@ -1405,6 +1445,11 @@ fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> Option<u6
     // and replays — wall-clock gaps depended on how fast the file was read).
     // Falls back to wall-clock only when a line carried no parseable timestamp.
     let within_gap = |m: &MobSighting| {
+        // A crowd-controlled mob is deliberately idle: no gap applies while
+        // it is parked, however long the group leaves it mezzed.
+        if m.parked {
+            return true;
+        }
         if log_ts != 0 && m.last_log_ts != 0 {
             log_ts.saturating_sub(m.last_log_ts) < GAP.as_secs() as u32
         } else {
@@ -1428,6 +1473,8 @@ fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> Option<u6
                 if log_ts != 0 {
                     s.last_log_ts = log_ts;
                 }
+                // Any fresh line involving the mob means it is acting again.
+                s.parked = false;
                 // Prefer the mid-sentence (lowercase) form as the display name.
                 if s.name != tgt && tgt.chars().next().is_some_and(|c| c.is_lowercase()) {
                     s.name = tgt.to_owned();
@@ -1445,6 +1492,7 @@ fn update_mob_list(state: &mut CombatState, tgt: &str, log_ts: u32) -> Option<u6
             last_seen: now,
             first_log_ts: log_ts,
             last_log_ts: log_ts,
+            parked: false,
         });
         id
     };
@@ -1987,6 +2035,36 @@ mod tests {
             .get(&state.mob_list[0].id)
             .and_then(|m| m.get("Rysk"));
         assert_eq!(tank.map(|t| t.total_damage), Some(6));
+    }
+
+    #[test]
+    fn integration_mez_parks_and_suspends_gap() {
+        // Mez lands, then the mob sits idle for 20+ log-seconds while the
+        // group kills something else — the parked instance must NOT split
+        // into a new one when it finally acts (mez suspends the gap), and a
+        // mez on a never-engaged add must create its pull membership.
+        let ts1 = "[Fri Feb 27 22:00:07 2026] ";
+        let ts2 = "[Fri Feb 27 22:00:37 2026] "; // 30s later — beyond the gap
+        let state = run_lines(
+            &[
+                &format!("{ts1}orc centurion has been mesmerized."),
+                &format!("{ts2}Orc centurion has been awakened by Rysk!"),
+                &format!("{ts2}You slash orc centurion for 100 points of damage."),
+            ],
+            "Rysk",
+        );
+        assert_eq!(state.mob_list.len(), 1, "mez + wake + hit = one instance");
+        assert!(!state.mob_list[0].parked, "awakened mob is no longer parked");
+    }
+
+    #[test]
+    fn integration_mez_stays_parked_until_woken() {
+        let state = run_lines(
+            &[&format!("{TS}a Tesch Mas Gnoll has been enthralled.")],
+            "Rysk",
+        );
+        assert_eq!(state.mob_list.len(), 1);
+        assert!(state.mob_list[0].parked);
     }
 
     #[test]

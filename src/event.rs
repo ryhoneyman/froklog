@@ -176,6 +176,18 @@ pub enum CombatEvent {
     /// Two held items merged at the merchant//merge UI rather than on a corpse.
     /// There is no mob involved, so `mob` is 0.
     ItemMerge { ts: u32, mob: u32, result: String },
+    /// Crowd-control state change: `tgt` was parked (mesmerized/enthralled)
+    /// or, with `off`, released ("has been awakened by X"). A parked mob is
+    /// deliberately idle — viewers keep its encounter open instead of timing
+    /// it out, and a mez on an unengaged add registers it as a pull member
+    /// before it ever swings.
+    Cc {
+        ts: u32,
+        mob: u32,
+        tgt: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        off: bool,
+    },
 }
 
 impl CombatEvent {
@@ -200,7 +212,8 @@ impl CombatEvent {
             | Self::ItemSell { ts, .. }
             | Self::ItemHoard { ts, .. }
             | Self::ItemEnhance { ts, .. }
-            | Self::ItemMerge { ts, .. } => *ts,
+            | Self::ItemMerge { ts, .. }
+            | Self::Cc { ts, .. } => *ts,
         }
     }
 }

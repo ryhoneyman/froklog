@@ -626,6 +626,7 @@ function formatCopperShort(c) {
 // full journal on connect (catch-up) followed by live batches.
 const S = {
   players:  {},  // name -> PlayerStats
+  lootTimes: [], // log-ts of every loot action — pull-boundary signal
   mobs:     {},  // mob_id (number) -> { name, lastTs, dead }
   mobDmg:   {},  // mob_id -> { player_name -> { dmg, dmgByType, dmgBySpell } }
   mobTank:  {},  // mob_id -> { player_name -> { dmg, dmgByType } }
@@ -711,18 +712,28 @@ function trackMob(mob, name, ts) {
   if (name.endsWith("'s corpse")) name = name.slice(0, -("'s corpse".length));
   // A known player should never be treated as a mob.
   if (S.players[name]) return;
+  // Case-INSENSITIVE name comparison: events carry each log line's original
+  // casing ("Orc slaver" when it attacks, "orc slaver" when attacked), and a
+  // case flip is the SAME mob — treating it as an id reuse reset the fight
+  // window on nearly every event, shattering one continuous pull into
+  // 1-second fragments. Only a genuinely different name means id reuse.
+  const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+  // Prefer the mid-sentence (lowercase) form for display, matching the client.
+  const preferName = (oldN, newN) =>
+    (oldN !== newN && newN[0] === newN[0].toLowerCase()) ? newN : oldN;
   if (!S.mobs[mob]) {
     S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
-  } else if (S.mobs[mob].name !== name) {
+  } else if (!sameName(S.mobs[mob].name, name)) {
     // Mob ID reused after a combat reset — start a fresh entry.
     S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
   } else {
+    S.mobs[mob].name = preferName(S.mobs[mob].name, name);
     S.mobs[mob].lastTs = ts;
   }
   if (!allMobsEver[mob]) {
     allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
     allMobOrderEver.push(mob);
-  } else if (allMobsEver[mob].name !== name) {
+  } else if (!sameName(allMobsEver[mob].name, name)) {
     // Mob ID reused after a combat reset — update the registry with fresh
     // timestamps and the new name, but keep the existing position in
     // allMobOrderEver.  Reordering allMobOrderEver on each seek causes the
@@ -730,7 +741,7 @@ function trackMob(mob, name, ts) {
     // was recorded during a later seek, triggering false name-change moves.
     allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
   } else {
-    allMobsEver[mob].name = name;
+    allMobsEver[mob].name = preferName(allMobsEver[mob].name, name);
     if (ts > allMobsEver[mob].lastTs) allMobsEver[mob].lastTs = ts;
     if (ts < allMobsEver[mob].firstTs) allMobsEver[mob].firstTs = ts;
   }
@@ -772,6 +783,7 @@ function resetState() {
   S.sessionSold = 0;
   S.lootOrder = [];
   S.lootOrderSet = new Set();
+  S.lootTimes = [];
   for (const k of Object.keys(allMobLootEver)) delete allMobLootEver[k];
   selectedMob = null;
   lastData    = null;
@@ -783,6 +795,12 @@ function resetState() {
 }
 
 function applyEvent(ev) {
+  // Loot actions mark pull boundaries: you tab to the next mob of the same
+  // pull without looting; you loot corpses between pulls.
+  if (ev.ts && (ev.k === 'currency_loot' || ev.k === 'item_loot' || ev.k === 'item_sell'
+      || ev.k === 'item_hoard' || ev.k === 'item_enhance')) {
+    S.lootTimes.push(ev.ts);
+  }
   switch (ev.k) {
     case 'melee': {
       bumpTs(ev.ts);
@@ -878,6 +896,14 @@ function applyEvent(ev) {
         tlEntry(S.mobHealTL,   ev.mob, ev.src).push({ts: ev.ts, v: ev.amt});
         tlEntry(S.mobHealedTL, ev.mob, ev.tgt).push({ts: ev.ts, v: ev.amt});
       }
+      break;
+    }
+    case 'cc': {
+      // Crowd control: parked mobs are deliberately idle — suspend their
+      // idle-timeout and hold their encounter open until they wake.
+      bumpTs(ev.ts);
+      trackMob(ev.mob, ev.tgt, ev.ts);
+      if (S.mobs[ev.mob]) S.mobs[ev.mob].parked = !ev.off;
       break;
     }
     case 'slay': {
@@ -1070,12 +1096,16 @@ function buildRenderState() {
     const name = current ? current.name : allMobsEver[id].name;
     if (current) {
       const lastSeenAgo = Math.max(0, nowSecs - current.lastTs);
-      const isDead  = current.dead || lastSeenAgo >= 15;
-      const isActive = !isDead && lastSeenAgo < 5;
+      // A parked (mezzed) mob is deliberately idle: no 15 s timeout while
+      // parked, with a 5-minute ceiling for silent wear-off (max mez duration
+      // is well under that; past it the group clearly walked away).
+      const parked = !!current.parked && !current.dead && lastSeenAgo < 300;
+      const isDead  = current.dead || (!parked && lastSeenAgo >= 15);
+      const isActive = !isDead && !parked && lastSeenAgo < 5;
       const ever = allMobsEver[id];
       const fightSecs = (ever && ever.firstTs && ever.lastTs && ever.lastTs > ever.firstTs)
         ? ever.lastTs - ever.firstTs : getMobElapsed(current);
-      return { id:+id, name, last_seen_secs: fightSecs, is_dead:isDead, is_active:isActive, first_ts: current.firstTs, last_ts: current.lastTs };
+      return { id:+id, name, last_seen_secs: fightSecs, is_dead:isDead, is_active:isActive, is_parked: parked, first_ts: current.firstTs, last_ts: current.lastTs };
     } else {
       const ever = allMobsEver[id];
       const fightSecs = (ever.firstTs && ever.lastTs && ever.lastTs > ever.firstTs)
@@ -1160,6 +1190,13 @@ function buildRenderState() {
   // exact even when same-named concurrent mobs pool their per-individual
   // attribution (the log carries no individual identity).
   const ENC_GAP = 15;
+  // Corpse-boundary rule: a fully-dead pull ends when LOOTING starts — you
+  // tab to the next mob of the same pull without looting, and loot corpses
+  // between pulls. Killing part of a pull while unengaged adds are silent
+  // (EQ only logs YOUR combat — an add beating on the tank writes nothing to
+  // your log) must NOT split the pull, so without a loot signal the ordinary
+  // idle gap is the only cut.
+  const lootBetween = (a, b) => S.lootTimes.some(t => t > a && t <= b);
   const chrono = mob_list
     .filter(m => m.first_ts)
     .sort((a, b) => a.first_ts - b.first_ts || a.id - b.id);
@@ -1168,10 +1205,11 @@ function buildRenderState() {
   for (const m of chrono) {
     const joins = curEnc
       && m.first_ts <= curEnc.end_ts + ENC_GAP
-      && !(curEnc.all_dead && m.first_ts > curEnc.end_ts);
+      && !(curEnc.all_dead && lootBetween(curEnc.end_ts, m.first_ts));
     if (!joins) {
       curEnc = {
-        key: m.first_ts, start_ts: m.first_ts, end_ts: m.last_ts || m.first_ts,
+        key: m.first_ts, num: encounters.length + 1,
+        start_ts: m.first_ts, end_ts: m.last_ts || m.first_ts,
         members: [], names: {}, all_dead: true, any_active: false,
       };
       encounters.push(curEnc);
@@ -1540,10 +1578,9 @@ function renderMobList(d) {
       const enc = item.enc;
       const idStr = 'e' + enc.key;
       seen.add(idStr);
-      const label = Object.entries(enc.names)
-        .sort((a, b) => b[1] - a[1])
-        .map(([n, c]) => c > 1 ? `${n} ×${c}` : n)
-        .join(', ');
+      const startClock = new Date(enc.start_ts * 1000)
+        .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const label = `Pull #${enc.num} · ${startClock}`;
       const cls = 'enc-row'
         + (enc.any_active && tlIsLive ? ' enc-active' : '')
         + (selectedEnc === enc.key ? ' selected' : '');
@@ -1574,11 +1611,12 @@ function renderMobList(d) {
 
     const outside    = !m.first_ts && m.last_seen_secs === 0 && !m.is_dead && !m.is_active;
     const liveActive = tlIsLive && m.is_active;
-    const dotColor   = outside ? '#333333' : m.is_dead ? '#464646' : liveActive ? '#3cdc3c' : '#c8aa1e';
-    const nameColor  = outside ? '#444444' : m.is_dead ? '#5a5a5a' : liveActive ? '#ffffff' : '#a0a0a0';
+    const parked     = m.is_parked && !m.is_dead;
+    const dotColor   = outside ? '#333333' : m.is_dead ? '#464646' : parked ? '#6aa9ff' : liveActive ? '#3cdc3c' : '#c8aa1e';
+    const nameColor  = outside ? '#444444' : m.is_dead ? '#5a5a5a' : parked ? '#9fc4ff' : liveActive ? '#ffffff' : '#a0a0a0';
     const statusCls  = outside || m.is_dead ? '' : liveActive ? ' mob-active' : ' mob-alive';
     const sel        = selectedMob === m.id ? ' selected' : '';
-    const timeStr    = m.last_seen_secs > 0 ? fmtTime(m.last_seen_secs) : '';
+    const timeStr    = parked ? 'mez' : (m.last_seen_secs > 0 ? fmtTime(m.last_seen_secs) : '');
     const memberCls  = item.member ? ' enc-member' : '';
     const newCls     = `mob-row${statusCls}${sel}${memberCls}`;
 

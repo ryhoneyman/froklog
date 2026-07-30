@@ -82,6 +82,23 @@ pub static RE_DS_BURN_YOU: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+// "orc centurion has been mesmerized." / "a Tesch Mas Gnoll has been enthralled."
+// Crowd-control landing on a mob: the target is deliberately parked.
+pub static RE_CC_PARK: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) has been (?:mesmerized|enthralled|entranced)[.!]$",
+    )
+    .unwrap()
+});
+
+// "Orc centurion has been awakened by Zary." — crowd control broken.
+pub static RE_CC_WAKE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) has been awakened(?: by (?P<src>[A-Za-z`']+))?[.!]$",
+    )
+    .unwrap()
+});
+
 // "Player begins casting SpellName."
 pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
