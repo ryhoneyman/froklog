@@ -431,6 +431,19 @@ encounters starred correctly across a real session.
   header saying 2K/13 — which read as broken formatting when it was really a
   scope mismatch. Verified: card rows now sum to the header's totals.
 
+## 22. Pull index dropdown and encounter graphs
+
+- The static "Mobs" label above the mob list is now a **pull index dropdown**
+  — every encounter listed newest-first ("★ Marrowbane · 11:37 AM" /
+  "Pull #37 · 11:36 AM"). Choosing one selects it, scopes stats and the
+  replay bar to it, and scrolls the list to its block; it stays in sync with
+  clicks and live auto-follow, and only rebuilds when the pull set changes so
+  an open dropdown never snaps shut.
+- The **graph strip works for pulls**: member-mob timelines are merged per
+  player over the pull's window, so cumulative damage and DPS-rate charts
+  render for a selected encounter (previously the graph code only understood
+  a selected mob and showed an empty strip under pull selection).
+
 ---
 
 *(subsequent changes appended as they land)*
