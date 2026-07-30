@@ -5,7 +5,7 @@
 //! globally "active" package (`Config.sound_package`) re-themes every
 //! trigger's sounds at once without editing any of them.
 
-#[cfg(feature = "tray")]
+#[cfg(feature = "triggers")]
 #[allow(clippy::module_inception)]
 pub mod sound_packages {
     use std::fs;

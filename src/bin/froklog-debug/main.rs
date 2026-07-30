@@ -1250,6 +1250,28 @@ fn main() {
             matched = true;
 
         // ── RE_RESIST ─────────────────────────────────────────────────────────
+        } else if let Some(caps) = froklog::patterns::RE_DS_BURN_YOU.captures(line) {
+            let src = norm(caps["src"].trim(), &args.player);
+            let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
+            t!(
+                "MATCH",
+                format!("RE_DS_BURN_YOU — mob {src:?} DS burns player for {dmg} (tanking)")
+            );
+            matched = true;
+        } else if let Some(caps) = froklog::patterns::RE_CC_PARK.captures(line) {
+            let tgt = norm(caps["tgt"].trim(), &args.player);
+            t!("MATCH", format!("RE_CC_PARK — {tgt:?} mesmerized (parked)"));
+            matched = true;
+        } else if let Some(caps) = froklog::patterns::RE_CC_WAKE.captures(line) {
+            let tgt = norm(caps["tgt"].trim(), &args.player);
+            t!("MATCH", format!("RE_CC_WAKE — {tgt:?} awakened"));
+            matched = true;
+        } else if froklog::patterns::RE_HEARTBEAT.is_match(line) {
+            t!(
+                "MATCH",
+                "RE_HEARTBEAT — combat heartbeat (stun/OOM/interrupt)".to_string()
+            );
+            matched = true;
         } else if let Some(caps) = RE_RESIST.captures(line) {
             let tgt = normalize_article_case(&caps["tgt"]);
             let spell = caps["spell"].trim().to_owned();

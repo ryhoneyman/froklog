@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 
 #[derive(Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -14,6 +13,16 @@ pub struct ServerConfig {
     pub rate_max: u32,
     pub rate_window_secs: u64,
     pub ban_secs: u64,
+    /// Automatically delete stream data older than this many days.
+    /// 0 (the default) disables automatic pruning entirely.
+    #[serde(default)]
+    pub retention_days: u64,
+    /// IP address of the reverse proxy in front of this server. When set,
+    /// X-Forwarded-For / X-Real-IP are honored only for connections from this
+    /// address; direct connections cannot spoof their identity to the rate
+    /// limiter. Empty = trust forwarded headers from anyone (legacy behavior).
+    #[serde(default)]
+    pub trusted_proxy: String,
 }
 
 impl Default for ServerConfig {
@@ -27,6 +36,8 @@ impl Default for ServerConfig {
             rate_max: 100,
             rate_window_secs: 10,
             ban_secs: 300,
+            retention_days: 0,
+            trusted_proxy: String::new(),
         }
     }
 }
@@ -77,26 +88,31 @@ pub fn resolve_data_dir(data_dir: &str, config_path: &Path) -> PathBuf {
 }
 
 /// Load config from `path`, creating it with defaults if it does not exist.
-pub fn load_or_create(path: &Path) -> ServerConfig {
+///
+/// Returns the config plus any warnings produced while loading. Warnings are
+/// RETURNED rather than logged because this runs before tracing is
+/// initialized (the log filter itself comes from the config) — previously a
+/// TOML typo silently regenerated the admin token with zero diagnostics.
+pub fn load_or_create(path: &Path) -> (ServerConfig, Vec<String>) {
+    let mut warnings = Vec::new();
     if path.exists() {
         match std::fs::read_to_string(path) {
             Ok(raw) => match toml::from_str::<ServerConfig>(&raw) {
                 Ok(cfg) => {
-                    info!("Loaded config from {}", path.display());
-                    return cfg;
+                    return (cfg, warnings);
                 }
                 Err(e) => {
-                    warn!(
-                        "Config parse error in {} — using defaults. Error: {e}",
+                    warnings.push(format!(
+                        "Config parse error in {} — using defaults (INCLUDING A NEW RANDOM ADMIN TOKEN). Error: {e}",
                         path.display()
-                    );
+                    ));
                 }
             },
             Err(e) => {
-                warn!(
+                warnings.push(format!(
                     "Could not read {} — using defaults. Error: {e}",
                     path.display()
-                );
+                ));
             }
         }
     }
@@ -109,11 +125,15 @@ pub fn load_or_create(path: &Path) -> ServerConfig {
             .into_owned(),
         ..Default::default()
     };
-    write_defaults(path, &cfg);
-    cfg
+    // Never overwrite an existing (possibly just-mistyped) config file with
+    // defaults — only write when no file is present at all.
+    if !path.exists() {
+        write_defaults(path, &cfg, &mut warnings);
+    }
+    (cfg, warnings)
 }
 
-fn write_defaults(path: &Path, cfg: &ServerConfig) {
+fn write_defaults(path: &Path, cfg: &ServerConfig, warnings: &mut Vec<String>) {
     let contents = format!(
         r#"# froklog-server configuration
 # Generated on first run — edit to suit your deployment.
@@ -144,6 +164,17 @@ rate_window_secs = {rate_window_secs}
 
 # How long (in seconds) a banned IP stays blocked.
 ban_secs = {ban_secs}
+
+# Automatically delete stream data older than this many days (daily sweep).
+# 0 disables automatic pruning. Owners can always prune their own stream
+# manually via POST /stream/<id>/prune.
+retention_days = {retention_days}
+
+# IP of the reverse proxy in front of this server (e.g. "172.18.0.2").
+# When set, X-Forwarded-For is only honored from that address, so direct
+# connections cannot spoof their identity to the rate limiter.
+# Empty = trust forwarded headers from any connection.
+trusted_proxy = "{trusted_proxy}"
 "#,
         bind = cfg.bind,
         data_dir = cfg.data_dir,
@@ -153,11 +184,16 @@ ban_secs = {ban_secs}
         rate_max = cfg.rate_max,
         rate_window_secs = cfg.rate_window_secs,
         ban_secs = cfg.ban_secs,
+        retention_days = cfg.retention_days,
+        trusted_proxy = cfg.trusted_proxy,
     );
 
     match std::fs::write(path, contents) {
-        Ok(()) => info!("Created default config at {}", path.display()),
-        Err(e) => warn!("Could not write default config to {}: {e}", path.display()),
+        Ok(()) => {}
+        Err(e) => warnings.push(format!(
+            "Could not write default config to {}: {e}",
+            path.display()
+        )),
     }
 }
 
@@ -193,5 +229,13 @@ pub fn apply_env_overrides(cfg: &mut ServerConfig) {
         if let Ok(n) = v.parse() {
             cfg.ban_secs = n;
         }
+    }
+    if let Ok(v) = std::env::var("FROKLOG_RETENTION_DAYS") {
+        if let Ok(n) = v.parse() {
+            cfg.retention_days = n;
+        }
+    }
+    if let Ok(v) = std::env::var("FROKLOG_TRUSTED_PROXY") {
+        cfg.trusted_proxy = v;
     }
 }

@@ -48,7 +48,17 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 
-    let mut file = File::open(&path).await.expect("open log file");
+    // Retry instead of panicking: the file existing a moment ago doesn't
+    // guarantee it opens (permissions, still being created).
+    let mut file = loop {
+        match File::open(&path).await {
+            Ok(f) => break f,
+            Err(e) => {
+                warn!("Cannot open {path}: {e} — retrying in 2s");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
 
     let mut skipping = false;
     match &config.from {
@@ -75,22 +85,59 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
     // (log_timestamp_of_first_sent_line, wall_instant_it_was_sent)
     let mut pace_anchor: Option<(NaiveDateTime, tokio::time::Instant)> = None;
 
+    // Byte offset we have consumed so far — compared against the file's
+    // current length to detect truncation (the classic EQ habit of deleting
+    // the log; the client recreates it and this tailer must follow).
+    let mut pos = file.stream_position().await.unwrap_or(0);
+
     let mut reader = BufReader::new(file);
-    let mut line = String::new();
+    // Raw bytes, decoded lossily per line: EQ logs are Windows-1252 and a
+    // single accented character used to kill this task via read_line's
+    // strict-UTF-8 error path.
+    let mut buf: Vec<u8> = Vec::new();
 
     loop {
-        let n = reader.read_line(&mut line).await.expect("read_line");
+        let n = match reader.read_until(b'\n', &mut buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                warn!("Tail read error on {path}: {e}");
+                0
+            }
+        };
+        pos += n as u64;
 
-        if n == 0 {
-            if stop_at_eof {
+        // A line is complete only when the newline arrived; at EOF the game
+        // may still be flushing the line, so keep accumulating rather than
+        // emitting a fragment.
+        let at_eof_final = n == 0 && stop_at_eof;
+        if !buf.ends_with(b"\n") && (!at_eof_final || buf.is_empty()) {
+            if at_eof_final {
                 info!("Replay complete (EOF reached before --to cutoff)");
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            if n == 0 {
+                // Live tail idle: watch for truncation/recreation. Portable
+                // size-regression check — no inodes, works on Windows too.
+                if let Ok(md) = tokio::fs::metadata(&path).await {
+                    if md.len() < pos {
+                        warn!("{path} truncated or recreated — reopening from start");
+                        match File::open(&path).await {
+                            Ok(f) => {
+                                reader = BufReader::new(f);
+                                pos = 0;
+                                buf.clear();
+                            }
+                            Err(e) => warn!("Reopen failed: {e} — will retry"),
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
             continue;
         }
 
-        let trimmed = line.trim_end_matches(['\n', '\r']);
+        let decoded = String::from_utf8_lossy(&buf);
+        let trimmed = decoded.trim_end_matches(['\n', '\r']);
 
         if !trimmed.is_empty() {
             // Skip lines until timestamp >= --from date (binary search may overshoot).
@@ -134,7 +181,11 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
             }
         }
 
-        line.clear();
+        if at_eof_final {
+            info!("Replay complete (EOF reached before --to cutoff)");
+            return;
+        }
+        buf.clear();
     }
 }
 

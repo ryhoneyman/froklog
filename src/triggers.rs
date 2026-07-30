@@ -19,7 +19,7 @@
 /// Action types:
 ///   - overlay   : emit a message to the overlay window (icon, color, delay)
 ///   - store_var : write a variable (value may reference capture groups)
-#[cfg(feature = "tray")]
+#[cfg(feature = "triggers")]
 pub mod engine {
     use std::collections::HashMap;
     use std::path::PathBuf;

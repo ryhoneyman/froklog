@@ -274,20 +274,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load() -> Self {
-        let path = config_path();
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self {
-                logging_enabled: true,
-                remote_logging_enabled: true,
-                overlay_history_enabled: true,
-                sound_enabled: true,
-                sound_volume: 100,
-                sound_package: default_sound_package(),
-                ..Default::default()
-            };
-        };
-        toml::from_str(&text).unwrap_or_else(|_| Self {
+    /// The defaults used when no config exists yet. Single source of truth —
+    /// `#[derive(Default)]` alone disagrees with the serde defaults (e.g.
+    /// `logging_enabled` would come out false), so always construct fresh
+    /// configs through here.
+    fn fresh() -> Self {
+        Self {
             logging_enabled: true,
             remote_logging_enabled: true,
             overlay_history_enabled: true,
@@ -295,7 +287,30 @@ impl Config {
             sound_volume: 100,
             sound_package: default_sound_package(),
             ..Default::default()
-        })
+        }
+    }
+
+    pub fn load() -> Self {
+        let path = config_path();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Self::fresh();
+        };
+        match toml::from_str(&text) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // A corrupt config used to be silently replaced with defaults
+                // — server URL, tokens and layout gone, then saved over.
+                // Preserve the broken file and tell the user.
+                let backup = path.with_extension("toml.broken");
+                let _ = std::fs::copy(&path, &backup);
+                eprintln!(
+                    "froklog: config parse error in {}: {e}\nfroklog: the unmodified file was backed up to {} — fix it to recover your settings/tokens",
+                    path.display(),
+                    backup.display()
+                );
+                Self::fresh()
+            }
+        }
     }
 
     pub fn save(&self) {

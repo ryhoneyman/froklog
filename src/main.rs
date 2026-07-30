@@ -54,16 +54,24 @@ fn main() {
         }
         let quit = Arc::new(AtomicBool::new(false));
         let restart = Arc::new(AtomicBool::new(false));
-        run_engine_once(
-            &config,
-            Arc::clone(&restart),
-            Arc::clone(&quit),
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(std::sync::RwLock::new(None)),
-        );
+        // Mirror the tray build's monitor loop: run_engine_once returns when
+        // the engine stops (e.g. the tailer exits or a restart is requested).
+        // The old code ran it once and slept forever — a dead tailer left a
+        // zombie process that never recovered.
         loop {
-            thread::sleep(Duration::from_secs(3600));
+            restart.store(false, Ordering::Relaxed);
+            run_engine_once(
+                &config,
+                Arc::clone(&restart),
+                Arc::clone(&quit),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(std::sync::RwLock::new(None)),
+            );
+            if quit.load(Ordering::Relaxed) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(500));
         }
     }
 }

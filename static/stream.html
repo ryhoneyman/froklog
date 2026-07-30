@@ -47,6 +47,12 @@
   #status.poll  { color: #fa0; }
   #status.error { color: #f44; }
   #status.done  { color: #7ab8f5; }
+  #golive-pill {
+    color: #f9e2af; cursor: pointer; border: 1px solid #6c5c2c;
+    border-radius: 4px; padding: 2px 8px; background: #262210;
+    font: inherit; font-size: 11px; margin-right: 8px;
+  }
+  #golive-pill:hover { background: #363213; color: #ffe9b8; }
   #player-name  { color: #a4f; }
 
   #time-display {
@@ -89,12 +95,6 @@
     font-size: 11px; color: #aaa; background: #252525; border: 1px solid #3a3a3a;
     border-radius: 3px; padding: 1px 4px; cursor: pointer; font-family: monospace;
   }
-  #tl-live-btn {
-    font-size: 11px; color: #888; background: #202020; border: 1px solid #3a3a3a;
-    border-radius: 3px; padding: 2px 7px; cursor: pointer; font-family: monospace;
-    white-space: nowrap;
-  }
-  #tl-live-btn.live { color: #4f4; border-color: #3c6c3c; background: #1a2a1a; }
   #tl-session {
     font-size: 11px; color: #aaa; background: #252525; border: 1px solid #3a3a3a;
     border-radius: 3px; padding: 1px 4px; cursor: pointer; font-family: monospace;
@@ -112,6 +112,12 @@
 
   /* ── Main layout ── */
   #layout { display: flex; height: calc(100vh - 45px - var(--tl-height, 0px)); overflow: hidden; }
+  .col-resizer {
+    flex: 0 0 5px; cursor: col-resize; background: transparent;
+    margin-left: -1px; /* overlaps the panel border so the grab zone is easy to hit */
+    transition: background .12s;
+  }
+  .col-resizer:hover, .col-resizer.dragging { background: #3a4a6a; }
 
   /* ── Mob panel ── */
   #mobs {
@@ -123,6 +129,11 @@
     padding: 0 6px; font-size: 11px; font-weight: bold; color: #999;
     border-bottom: 1px solid #2a2a2a; flex-shrink: 0;
   }
+  #enc-select {
+    width: 100%; background: #161616; color: #999; border: none;
+    font: bold 11px inherit; padding: 2px 0; cursor: pointer; outline: none;
+  }
+  #enc-select option { background: #161616; color: #bbb; font-weight: normal; }
   #mob-scroll { overflow-y: auto; flex: 1; min-height: 0; }
   .mob-row {
     display: flex; align-items: center; padding: 0 4px;
@@ -136,6 +147,22 @@
   .mob-row.mob-alive:hover  { background: rgba(200,170,30,0.10); }
   .mob-row.mob-active.selected { background: #1c2d1c; box-shadow: inset 2px 0 0 rgba(60,220,60,0.7); }
   .mob-row.mob-alive.selected  { background: #2c2816; box-shadow: inset 2px 0 0 rgba(200,170,30,0.6); }
+  .enc-row {
+    display: flex; align-items: center; gap: 6px; padding: 4px 8px 3px;
+    margin-top: 6px; cursor: pointer; user-select: none;
+    font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+    color: #8a8a8a; background: #161616; border-top: 1px solid #262626;
+  }
+  .enc-row:hover { background: #1e1e1e; }
+  .enc-row.selected { background: #252535; color: #cdd6f4; }
+  .enc-row.enc-active { color: #7ce87c; background: rgba(60,220,60,0.06); }
+  .enc-row .enc-count { margin-left: auto; color: #666; font-size: 10px; text-transform: none; }
+  .fl-enc-comp { color: #777; font-size: 10px; margin-left: 10px; white-space: nowrap;
+                 overflow: hidden; text-overflow: ellipsis; }
+  .enc-row.enc-named { color: #e8c76a; background: rgba(232,199,106,0.06); }
+  .enc-row.enc-named.enc-active { color: #7ce87c; }
+  .mob-row.enc-member { padding-left: 18px; }
+  .mob-row .mob-name.named { color: #e8c76a !important; }
   .mob-dot { font-size: 9px; margin-right: 3px; flex-shrink: 0; line-height: 1; }
   .mob-name { flex: 1; font-size: 11px; overflow: hidden; white-space: nowrap; }
   .mob-time { font-size: 10px; color: #666; margin-left: 4px; flex-shrink: 0; }
@@ -182,16 +209,31 @@
     border-bottom: 1px solid #2a2a2a;
   }
   .sum-hdr .sh-name { flex: 1; }
-  .sum-row {
-    display: flex; align-items: center; padding: 0 6px;
-    height: 18px; font-size: 11px;
+  /* Shared grid tracks: every row (and the header) uses the same column
+     template, so values line up in true columns instead of drifting with
+     each row's name/class width. */
+  .sum-row, .sum-hdr {
+    display: grid;
+    /* All tracks fixed except the 1fr name column — separate grid containers
+       don't share max-content sizing, so only fixed tracks align across rows. */
+    grid-template-columns: minmax(80px, 1fr) 62px 48px 42px 42px;
+    gap: 4px; align-items: center; padding: 0 6px;
   }
+  .sum-row { height: 18px; font-size: 11px; }
   .sum-row:hover { background: #222; }
-  .sum-name { flex: 1; color: #eee; overflow: hidden; white-space: nowrap; }
-  .sum-class { font-size: 10px; margin-left: 4px; flex-shrink: 0; }
-  .sum-val  { min-width: 44px; text-align: right; color: #ccc; flex-shrink: 0; }
-  .sum-rate { min-width: 52px; text-align: right; color: #888; font-size: 10px; flex-shrink: 0; }
-  .sum-pct  { min-width: 36px; text-align: right; color: #666; font-size: 10px; flex-shrink: 0; }
+  .sum-hdr {
+    height: 17px; font-size: 9px; text-transform: uppercase; letter-spacing: .06em;
+    color: #667; border-bottom: 1px solid #2a2a2a; position: sticky; top: 0;
+    background: #191919; z-index: 1;
+  }
+  .sum-hdr span { text-align: right; }
+  .sum-hdr .h-name { text-align: left; }
+  .sum-hdr span:nth-child(2) { text-align: left; }
+  .sum-name { color: #eee; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .sum-class { font-size: 10px; }
+  .sum-val  { text-align: right; color: #ccc; }
+  .sum-rate { text-align: right; color: #888; font-size: 10px; }
+  .sum-pct  { text-align: right; color: #666; font-size: 10px; }
 
   /* ── Card grid ── */
   #cards { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
@@ -366,7 +408,8 @@
     <span class="td-now" id="wall-clock"></span>
     <span class="td-log"  id="log-clock"></span>
   </div>
-  <div id="status" class="error">● disconnected</div>
+  <button id="golive-pill" onclick="goLive()" style="display:none" title="Return to the live view">&#9205; Go Live</button>
+  <div id="status" class="error" title="Streamer's client connection">● disconnected</div>
 </div>
 
 <div id="timeline-bar">
@@ -387,20 +430,27 @@
     <option value="16">16×</option>
     <option value="32">32×</option>
   </select>
-  <button id="tl-live-btn" onclick="goLive()">Go Live</button>
   <select id="tl-session" title="Session" onchange="onSessionChange(this.value)"></select>
 </div>
 
 <div id="layout" onclick="deselectMob()">
   <div id="mobs">
-    <div class="panel-hdr">Mobs</div>
+    <div class="panel-hdr">
+      <select id="enc-select" title="Jump to a pull for playback"
+              onclick="event.stopPropagation()"
+              onchange="encSelectChanged(this.value)">
+        <option value="">Mobs — all pulls</option>
+      </select>
+    </div>
     <div id="mob-scroll"><div id="mob-rows"></div></div>
   </div>
+  <div class="col-resizer" data-target="mobs" title="Drag to resize — double-click to reset"></div>
 
   <div id="summary">
     <div id="sum-header-area"></div>
     <div id="sum-scroll"><div id="sum-rows"></div></div>
   </div>
+  <div class="col-resizer" data-target="summary" title="Drag to resize — double-click to reset"></div>
 
   <div id="cards-wrap">
     <div id="graph-header">
@@ -431,6 +481,15 @@ const SESSION_END_LOG_TS = __SESSION_END_LOG_TS__;
 // the full history over the WebSocket.
 // Each entry: { logTs: number, batch: EventBatch }
 const cachedBatches = [];
+// Dedup index for re-streamed batches: "seq:logTs" -> cached entry.
+const cacheIndex = new Map();
+// Client-run epoch for mob-id namespacing: the parser's mob-instance ids
+// restart at 1 whenever the pushing client restarts, and the pusher's batch
+// seq restarts at 0 with it. Without namespacing, a new run's "mob 5" merges
+// into an older run's mob 5 — compounding damage into a stale entry far down
+// the list instead of showing a fresh fight at the top.
+let mobEpoch = 0;
+let lastBatchSeq = null;
 let cacheComplete = false;  // true once the initial catch-up is done
 
 // ── Persistent mob registry ───────────────────────────────────────────────────
@@ -439,6 +498,33 @@ let cacheComplete = false;  // true once the initial catch-up is done
 // New mobs are appended in first-appearance order; the list is rendered
 // newest-first so live mobs pop in at the top.
 const allMobsEver  = {};   // mob_id -> { name }
+// Names ever seen in lowercase (mid-sentence) form. EQ lowercases TRASH mob
+// names mid-sentence but never lowercases NAMED/boss mobs ("You slash orc
+// centurion" vs "You slash Marrowbane") — so a name that stays capitalized
+// after enough lines is a named. Session-level knowledge, survives seeks.
+const lowercaseNames = new Set();
+// Behavioral demotion: a NAMED is by definition a unique spawn. Two corpses
+// of the same name within one window (Innoruuk`s Chosen, Cleric of Innoruuk:
+// capitalized farm-elites in Hate) prove population > 1 — demoted for the
+// session. Validated on real raid logs: every true named (17/17, incl. one
+// farmed 72 times) never died twice in a window; every capitalized elite did.
+const demotedNames = new Set();
+const lastKillTs = new Map();  // name(lower) -> last slay log-ts
+const DEMOTE_WINDOW = 90;
+function noteKillForDemotion(name, ts) {
+  const key = name.toLowerCase();
+  const prev = lastKillTs.get(key);
+  if (prev !== undefined && ts - prev <= DEMOTE_WINDOW && ts !== prev) {
+    demotedNames.add(key);
+  }
+  lastKillTs.set(key, ts);
+}
+function isNamedMob(name) {
+  const c = name[0];
+  return c === c.toUpperCase() && c !== c.toLowerCase()
+    && !lowercaseNames.has(name.toLowerCase())
+    && !demotedNames.has(name.toLowerCase());
+}
 const allMobOrderEver = []; // mob_ids in first-appearance order (oldest first)
 // Loot cache that spans seeks: populated from ALL cached batches, not just up
 // to the current seek target.  Lets the loot tab show post-death loot when a
@@ -608,6 +694,8 @@ function formatCopperShort(c) {
 // full journal on connect (catch-up) followed by live batches.
 const S = {
   players:  {},  // name -> PlayerStats
+  lootTimes: [], // log-ts of every loot action — pull-boundary signal
+  heartbeats: [], // log-ts of combat heartbeats (stunned/OOM/interrupted)
   mobs:     {},  // mob_id (number) -> { name, lastTs, dead }
   mobDmg:   {},  // mob_id -> { player_name -> { dmg, dmgByType, dmgBySpell } }
   mobTank:  {},  // mob_id -> { player_name -> { dmg, dmgByType } }
@@ -691,20 +779,41 @@ function trackMob(mob, name, ts) {
   // DoT ticks on a dead mob arrive as "X's corpse" — strip the suffix so the
   // mob keeps its original name in the list.
   if (name.endsWith("'s corpse")) name = name.slice(0, -("'s corpse".length));
-  // A known player should never be treated as a mob.
-  if (S.players[name]) return;
+  // A known player should never be treated as a mob — but a "player" known
+  // ONLY from casting heals (no damage dealt, none received, no /who class)
+  // that now appears in a mob position is a mob self-heal misclassified by
+  // older client data (e.g. "The Prophet healed himself…" journaled before
+  // the parser learned to skip mob self-heals). Mob-position evidence wins:
+  // reclassify it so the mob isn't banned from its own encounter.
+  if (S.players[name]) {
+    const pl = S.players[name];
+    const healOnlyGhost = !pl.dmg && !pl.healed && !(pl.classes && pl.classes.length);
+    if (!healOnlyGhost) return;
+    delete S.players[name];
+  }
+  // Case-INSENSITIVE name comparison: events carry each log line's original
+  // casing ("Orc slaver" when it attacks, "orc slaver" when attacked), and a
+  // case flip is the SAME mob — treating it as an id reuse reset the fight
+  // window on nearly every event, shattering one continuous pull into
+  // 1-second fragments. Only a genuinely different name means id reuse.
+  if (name[0] === name[0].toLowerCase()) lowercaseNames.add(name.toLowerCase());
+  const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+  // Prefer the mid-sentence (lowercase) form for display, matching the client.
+  const preferName = (oldN, newN) =>
+    (oldN !== newN && newN[0] === newN[0].toLowerCase()) ? newN : oldN;
   if (!S.mobs[mob]) {
     S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
-  } else if (S.mobs[mob].name !== name) {
+  } else if (!sameName(S.mobs[mob].name, name)) {
     // Mob ID reused after a combat reset — start a fresh entry.
     S.mobs[mob] = { name, firstTs: ts, lastTs: ts, dead: false };
   } else {
+    S.mobs[mob].name = preferName(S.mobs[mob].name, name);
     S.mobs[mob].lastTs = ts;
   }
   if (!allMobsEver[mob]) {
     allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
     allMobOrderEver.push(mob);
-  } else if (allMobsEver[mob].name !== name) {
+  } else if (!sameName(allMobsEver[mob].name, name)) {
     // Mob ID reused after a combat reset — update the registry with fresh
     // timestamps and the new name, but keep the existing position in
     // allMobOrderEver.  Reordering allMobOrderEver on each seek causes the
@@ -712,7 +821,7 @@ function trackMob(mob, name, ts) {
     // was recorded during a later seek, triggering false name-change moves.
     allMobsEver[mob] = { name, firstTs: ts, lastTs: ts };
   } else {
-    allMobsEver[mob].name = name;
+    allMobsEver[mob].name = preferName(allMobsEver[mob].name, name);
     if (ts > allMobsEver[mob].lastTs) allMobsEver[mob].lastTs = ts;
     if (ts < allMobsEver[mob].firstTs) allMobsEver[mob].firstTs = ts;
   }
@@ -754,6 +863,8 @@ function resetState() {
   S.sessionSold = 0;
   S.lootOrder = [];
   S.lootOrderSet = new Set();
+  S.lootTimes = [];
+  S.heartbeats = [];
   for (const k of Object.keys(allMobLootEver)) delete allMobLootEver[k];
   selectedMob = null;
   lastData    = null;
@@ -765,6 +876,12 @@ function resetState() {
 }
 
 function applyEvent(ev) {
+  // Loot actions mark pull boundaries: you tab to the next mob of the same
+  // pull without looting; you loot corpses between pulls.
+  if (ev.ts && (ev.k === 'currency_loot' || ev.k === 'item_loot' || ev.k === 'item_sell'
+      || ev.k === 'item_hoard' || ev.k === 'item_enhance')) {
+    S.lootTimes.push(ev.ts);
+  }
   switch (ev.k) {
     case 'melee': {
       bumpTs(ev.ts);
@@ -862,9 +979,25 @@ function applyEvent(ev) {
       }
       break;
     }
+    case 'hb': {
+      // Combat heartbeat: the player is stunned/OOM/interrupted — combat is
+      // ongoing even though no mob is named (they may all be on a merc or
+      // tank whose lines never reach this log). Bridges encounter gaps.
+      S.heartbeats.push(ev.ts);
+      break;
+    }
+    case 'cc': {
+      // Crowd control: parked mobs are deliberately idle — suspend their
+      // idle-timeout and hold their encounter open until they wake.
+      bumpTs(ev.ts);
+      trackMob(ev.mob, ev.tgt, ev.ts);
+      if (S.mobs[ev.mob]) S.mobs[ev.mob].parked = !ev.off;
+      break;
+    }
     case 'slay': {
       bumpTs(ev.ts);
       if (S.mobs[ev.mob]) S.mobs[ev.mob].dead = true;
+      if (ev.tgt) noteKillForDemotion(ev.tgt, ev.ts);
       break;
     }
     case 'miss': {
@@ -1052,12 +1185,16 @@ function buildRenderState() {
     const name = current ? current.name : allMobsEver[id].name;
     if (current) {
       const lastSeenAgo = Math.max(0, nowSecs - current.lastTs);
-      const isDead  = current.dead || lastSeenAgo >= 15;
-      const isActive = !isDead && lastSeenAgo < 5;
+      // A parked (mezzed) mob is deliberately idle: no 15 s timeout while
+      // parked, with a 5-minute ceiling for silent wear-off (max mez duration
+      // is well under that; past it the group clearly walked away).
+      const parked = !!current.parked && !current.dead && lastSeenAgo < 300;
+      const isDead  = current.dead || (!parked && lastSeenAgo >= 15);
+      const isActive = !isDead && !parked && lastSeenAgo < 5;
       const ever = allMobsEver[id];
       const fightSecs = (ever && ever.firstTs && ever.lastTs && ever.lastTs > ever.firstTs)
         ? ever.lastTs - ever.firstTs : getMobElapsed(current);
-      return { id:+id, name, last_seen_secs: fightSecs, is_dead:isDead, is_active:isActive, first_ts: current.firstTs, last_ts: current.lastTs };
+      return { id:+id, name, last_seen_secs: fightSecs, is_dead:isDead, is_active:isActive, is_parked: parked, first_ts: current.firstTs, last_ts: current.lastTs };
     } else {
       const ever = allMobsEver[id];
       const fightSecs = (ever.firstTs && ever.lastTs && ever.lastTs > ever.firstTs)
@@ -1135,19 +1272,74 @@ function buildRenderState() {
     }),
   ]));
 
-  // fight_elapsed_secs: use the selected mob's fight duration when a mob is
-  // selected so that the header label and card rates are mob-scoped.
-  const fight_elapsed_secs = (selectedMob !== null && S.mobs[selectedMob])
-    ? getMobElapsed(S.mobs[selectedMob])
-    : elapsed;
+  // Encounters (pulls): chain mob instances whose activity windows overlap or
+  // follow within ENC_GAP seconds of log time. A fully-dead pull followed by
+  // a fresh mob starts a NEW encounter even inside the gap, so chain pulls
+  // slice at the corpse boundary. Combined damage/duration per encounter is
+  // exact even when same-named concurrent mobs pool their per-individual
+  // attribution (the log carries no individual identity).
+  const ENC_GAP = 15;
+  // Corpse-boundary rule: a fully-dead pull ends when LOOTING starts — you
+  // tab to the next mob of the same pull without looting, and loot corpses
+  // between pulls. Killing part of a pull while unengaged adds are silent
+  // (EQ only logs YOUR combat — an add beating on the tank writes nothing to
+  // your log) must NOT split the pull, so without a loot signal the ordinary
+  // idle gap is the only cut.
+  const lootBetween = (a, b) => S.lootTimes.some(t => t > a && t <= b);
+  // Walk heartbeats forward from an encounter's end: each stun/OOM line
+  // within the gap proves combat continued, extending the effective window.
+  const hbExtend = (end) => {
+    let e = end;
+    for (const t of S.heartbeats) {
+      if (t > e && t <= e + ENC_GAP) e = t;
+    }
+    return e;
+  };
+  const chrono = mob_list
+    .filter(m => m.first_ts)
+    .sort((a, b) => a.first_ts - b.first_ts || a.id - b.id);
+  const encounters = [];
+  let curEnc = null;
+  for (const m of chrono) {
+    const joins = curEnc
+      && m.first_ts <= hbExtend(curEnc.end_ts) + ENC_GAP
+      && !(curEnc.all_dead && lootBetween(curEnc.end_ts, m.first_ts));
+    if (!joins) {
+      curEnc = {
+        key: m.first_ts, num: encounters.length + 1,
+        start_ts: m.first_ts, end_ts: m.last_ts || m.first_ts,
+        members: [], names: {}, all_dead: true, any_active: false,
+      };
+      encounters.push(curEnc);
+    }
+    curEnc.members.push(m.id);
+    curEnc.end_ts = Math.max(curEnc.end_ts, m.last_ts || m.first_ts);
+    curEnc.all_dead = curEnc.all_dead && m.is_dead;
+    curEnc.any_active = curEnc.any_active || m.is_active;
+    // NAMED detection: a capitalized proper-noun member (never seen
+    // lowercase) marks this as a named encounter, vs trash; adds
+    // ("Marrowbane pet") don't override the named itself.
+    if (!curEnc.named && isNamedMob(m.name) && !m.name.endsWith(' pet')) curEnc.named = m.name;
+    const nk = m.name.toLowerCase();
+    curEnc.names[nk] = (curEnc.names[nk] || 0) + 1;
+  }
+
+  // fight_elapsed_secs: scope to the selected encounter or mob so the header
+  // label and card rates cover the pull's / mob's own fight window.
+  const selEnc = (selectedEnc !== null && selectedMob === null) ? encounters.find(e => e.key === selectedEnc) : null;
+  const fight_elapsed_secs = selEnc
+    ? Math.max(selEnc.end_ts - selEnc.start_ts, 1)
+    : (selectedMob !== null && S.mobs[selectedMob])
+      ? getMobElapsed(S.mobs[selectedMob])
+      : elapsed;
 
   // Fight start display
   const fightStartDisplay = S.fightStartTs
-    ? new Date(S.fightStartTs * 1000).toLocaleString('en-US', { timeZone: 'UTC' }) : '';
+    ? new Date(S.fightStartTs * 1000).toLocaleString('en-US') : '';
 
   // Last log time
   const lastLogTime = S.lastTs
-    ? new Date(S.lastTs*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'UTC'})
+    ? new Date(S.lastTs*1000).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
     : '';
 
   // Active casts — only show spells cast within the last 10 log-seconds of the
@@ -1159,7 +1351,8 @@ function buildRenderState() {
 
   return {
     entities, healers, healees,
-    mob_list, mob_damage, mob_tanking, mob_healing, mob_healed, tanked,
+    mob_list, encounters, now_secs: nowSecs,
+    mob_damage, mob_tanking, mob_healing, mob_healed, tanked,
     avoidance, mob_avoid,
     fight_start_display: fightStartDisplay,
     fight_elapsed_secs,
@@ -1174,6 +1367,9 @@ let lastBatchWallTimeSecs = 0;
 
 // ── UI state ──────────────────────────────────────────────────────────────────
 let selectedMob      = null;
+let selectedEnc      = null;   // encounter key (start_ts) — pull-level scoping
+let encManuallySelected = false; // true only for a user click (not live auto-follow)
+let tlEncScope       = null;   // {start, end}: timeline bar scoped to a selected pull
 let pendingMobRestore = null;  // mob id to re-select after a seek reset, if still in window
 let liveAutoSelect   = true;   // auto-select most recent active mob in live mode; disabled by manual pick, re-enabled by Go Live
 let detailMode   = 'damage';
@@ -1182,9 +1378,61 @@ let graphVisible    = false;
 let chartInst       = null;
 let chartInstRate   = null;
 
+function selectEnc(key) {
+  if (tlIsLive) liveAutoSelect = false;
+  pendingMobRestore = null;
+  selectedEnc = key;
+  selectedMob = null;
+  encManuallySelected = key !== null;
+  // Scope the timeline bar to this pull's window (small pad past the end).
+  tlEncScope = null;
+  if (key !== null && lastData) {
+    const enc = (lastData.encounters || []).find(e => e.key === key);
+    if (enc && enc.end_ts > enc.start_ts) tlEncScope = { start: enc.start_ts, end: enc.end_ts + 5 };
+  }
+  if (key !== null) detailMode = 'damage';
+  history.replaceState(null, '', key !== null ? '#enc-' + key : location.pathname + location.search);
+  if (lastData) { lastData = buildRenderState(); rerender(); }
+  updateTimelineBar();
+}
+
+/// Pull index dropdown above the mob list: jump straight to an encounter.
+function encSelectChanged(value) {
+  if (value) {
+    selectEnc(+value);
+    const row = document.querySelector(`.enc-row[data-enc-key="${value}"]`);
+    if (row) row.scrollIntoView({ block: 'start' });
+  } else {
+    deselectMob();
+  }
+}
+
+/// ⟲ on a selected pull: replay it from its first event at the chosen speed.
+function replayEncounter(key) {
+  const enc = lastData ? (lastData.encounters || []).find(e => e.key === key) : null;
+  if (!enc) return;
+  if (tlIsLive) liveAutoSelect = false;
+  encManuallySelected = true;
+  tlEncScope = { start: enc.start_ts, end: enc.end_ts + 5 };
+  if (tlPaused) { tlPaused = false; updatePlayPauseBtn(); }
+  seekToLogTs(enc.start_ts);
+  updateTimelineBar();
+}
+
 function selectMob(id) {
   if (tlIsLive) liveAutoSelect = false;
   pendingMobRestore = null;
+  // Clicking a MEMBER of the selected pull keeps the pull's replay context
+  // (scoped bar, ⟲, Play-replays-pull) while the panels drill into that mob.
+  const encSel = selectedEnc !== null && lastData
+    ? (lastData.encounters || []).find(e => e.key === selectedEnc) : null;
+  const memberOfSel = !!(encSel && id !== null && encSel.members.includes(id));
+  if (!memberOfSel) {
+    selectedEnc = null;
+    encManuallySelected = false;
+    tlEncScope = null;
+  }
+  updateTimelineBar();
 
   selectedMob = id;
   history.replaceState(null, '', id !== null ? '#mob-' + id : location.pathname + location.search);
@@ -1226,10 +1474,14 @@ function restartMobFight(mobId) {
 function deselectMob() {
   if (tlIsLive) liveAutoSelect = false;
   pendingMobRestore = null;
-  if (selectedMob !== null) {
+  if (selectedMob !== null || selectedEnc !== null) {
     selectedMob = null;
+    selectedEnc = null;
+    encManuallySelected = false;
+    tlEncScope = null;
     history.replaceState(null, '', location.pathname + location.search);
-    if (lastData) rerender();
+    if (lastData) { lastData = buildRenderState(); rerender(); }
+    updateTimelineBar();
   }
 }
 function setMode(mode) { detailMode = mode; if (lastData) rerender(); }
@@ -1259,9 +1511,19 @@ function scheduleRender() {
       }
     }
     if (tlIsLive && liveAutoSelect) {
-      const liveMob = (lastData.mob_list || []).find(m => !m.is_dead);
-      const targetId = liveMob ? liveMob.id : null;
-      if (targetId !== selectedMob) selectedMob = targetId;
+      // Follow the current PULL: newest encounter with a living member.
+      // Combined damage/DPS over the encounter's whole life — fighting five
+      // mobs as a unit reports as a unit. Clicking a mob still narrows to it.
+      const encs = lastData.encounters || [];
+      // Current pull, or — between fights — the most recent one, so the
+      // header always shows an encounter while live.
+      const liveEnc = [...encs].reverse().find(e => !e.all_dead) || encs[encs.length - 1];
+      const targetKey = liveEnc ? liveEnc.key : null;
+      if (targetKey !== selectedEnc) {
+        selectedEnc = targetKey;
+        selectedMob = null;
+        lastData = buildRenderState(); // recompute fight_elapsed for the new scope
+      }
     }
     updateLogClock(lastData);
     rerender();
@@ -1271,6 +1533,44 @@ function scheduleRender() {
 // ── Render ────────────────────────────────────────────────────────────────────
 function buildFightLabel(d) {
   const el = document.getElementById('fight-label');
+
+  // Encounter (pull) selected: combined stats over the pull's whole life.
+  // A selected member mob takes precedence in the panels; the pull keeps the bar.
+  if (selectedEnc !== null && selectedMob === null) {
+    const enc = (d.encounters || []).find(e => e.key === selectedEnc);
+    if (enc) {
+      // Title matches the pull list — the named (true casing) or "Pull #N";
+      // the composition rides along as a small subtitle.
+      const title = enc.named ? `★ ${enc.named}` : `Pull #${enc.num}`;
+      const comp = Object.entries(enc.names)
+        .sort((a, b) => b[1] - a[1])
+        .map(([n, c]) => c > 1 ? `${n} ×${c}` : n)
+        .join(', ');
+      const accent = enc.any_active && tlIsLive ? '#3cdc3c' : enc.all_dead ? '#464646' : '#c8aa1e';
+      el.style.borderLeftColor = accent;
+      const totalDmg = enc.members.reduce((s, id) =>
+        s + ((d.mob_damage || {})[String(id)] || []).reduce((t, e) => t + (e.total_damage || 0), 0), 0);
+      // An active pull's clock runs: duration (and therefore DPS) ticks with
+      // "now" until everything is dead, then freezes at the recorded span.
+      const encRunning = tlIsLive && !enc.all_dead && d.now_secs;
+      const encSecs = encRunning
+        ? Math.max(d.now_secs - enc.start_ts, 1)
+        : Math.max(enc.end_ts - enc.start_ts, 1);
+      const blocks = [
+        `<div class="fl-stat-block"><span class="fl-stat-label">Mobs</span><span class="fl-totdmg">${enc.members.length}</span></div>`,
+        totalDmg > 0 ? `<div class="fl-stat-block fl-stat-dmg"><span class="fl-stat-label">Damage</span><span class="fl-totdmg">${fmtK(totalDmg)}</span></div>` : '',
+        totalDmg > 0 ? `<div class="fl-stat-block fl-stat-dps"><span class="fl-stat-label">DPS</span><span class="fl-totdmg">${fmtK(Math.round(totalDmg / encSecs))}</span></div>` : '',
+        `<div class="fl-stat-block fl-stat-dur"><span class="fl-stat-label">Duration</span><span class="fl-secs">${fmtTime(encSecs)}</span></div>`,
+        `<div class="fl-stat-block fl-stat-seen"><span class="fl-stat-label">Seen</span><span class="fl-seen">${fmtTsPos(enc.start_ts)}</span></div>`,
+      ].join('');
+      const replayBtn = `<span class="fl-restart" onclick="event.stopPropagation();replayEncounter(${enc.key})" title="Replay this pull from the beginning">&#8634;</span>`;
+      el.innerHTML = `<div class="fl-name-wrap"><span class="fl-name">${truncate(title, 26)}</span>`
+        + `<span class="fl-enc-comp">${truncate(comp, 48)}</span></div>`
+        + `<div class="fl-stats">${blocks}${replayBtn}</div>`;
+      return;
+    }
+  }
+
   if (selectedMob === null) {
     el.innerHTML = '<div class="fl-name-wrap"><span class="fl-name" style="font-size:13px;color:#555">No mob selected</span></div>';
     el.style.borderLeftColor = '#444';
@@ -1297,6 +1597,12 @@ function buildFightLabel(d) {
     const dmgBlock = totalMobDmg > 0
       ? `<div class="fl-stat-block fl-stat-dmg"><span class="fl-stat-label">Damage</span><span class="fl-totdmg">${fmtK(totalMobDmg)}</span></div>`
       : '';
+    // Fight DPS: total damage to this mob over its own fight window — the
+    // "current DPS" for a live fight (auto-selected mob) and the per-fight
+    // DPS when reviewing a past encounter.
+    const dpsBlock = (totalMobDmg > 0 && hasRealElapsed && enc > 0)
+      ? `<div class="fl-stat-block fl-stat-dps"><span class="fl-stat-label">DPS</span><span class="fl-totdmg">${fmtK(Math.round(totalMobDmg / enc))}</span></div>`
+      : '';
     const secsBlock = hasRealElapsed
       ? `<div class="fl-stat-block fl-stat-dur"><span class="fl-stat-label">Duration</span><span class="fl-secs">${fmtTime(enc)}</span></div>`
       : '';
@@ -1311,7 +1617,7 @@ function buildFightLabel(d) {
     const restartBtn = mobEntry.first_ts
       ? `<span class="fl-restart" onclick="event.stopPropagation();restartMobFight(${selectedMob})" title="Restart fight from beginning">&#8634;</span>`
       : '';
-    statsHtml = `<div class="fl-stats">${dmgBlock}${secsBlock}${seenBlock}${restartBtn}</div>`;
+    statsHtml = `<div class="fl-stats">${dmgBlock}${dpsBlock}${secsBlock}${seenBlock}${restartBtn}</div>`;
   }
 
   const nameColor = accentColor === '#3cdc3c' ? '#3cdc3c' : '#f0a030';
@@ -1340,6 +1646,19 @@ function lootKillBlock(mob, entry, mobName) {
 function renderLootRows() {
   const playerName = document.getElementById('player-name').textContent;
   const hdr = `<div class="loot-player-hdr">${playerName || '—'}</div>`;
+
+  if (selectedEnc !== null && selectedMob === null && lastData) {
+    const enc = (lastData.encounters || []).find(e => e.key === selectedEnc);
+    if (enc) {
+      const blocks = enc.members.map(id => {
+        const entry = allMobLootEver[id] || S.mobLoot[id];
+        if (!entry || (!entry.copper && !entry.items.length)) return '';
+        const mobName = (S.mobs[id]?.name) || (allMobsEver[id]?.name) || 'unknown';
+        return lootKillBlock(id, entry, mobName) || '';
+      }).filter(Boolean).join('');
+      return hdr + (blocks || '<div class="loot-empty">No loot for this pull</div>');
+    }
+  }
 
   if (selectedMob !== null) {
     const entry   = allMobLootEver[selectedMob] || S.mobLoot[selectedMob] || { copper: 0, items: [] };
@@ -1388,6 +1707,28 @@ function renderMobList(d) {
   const saved      = scroller.scrollTop;
   const mobs       = d.mob_list || [];
 
+  // Pull index dropdown: rebuild only when the encounter set changes (a
+  // rebuild while the dropdown is open would snap it shut), keep its value
+  // in sync with the current selection.
+  const encSel = document.getElementById('enc-select');
+  if (encSel) {
+    const encsAll = d.encounters || [];
+    const sig = encsAll.length + ':' + encsAll.filter(e => e.named).length
+      + ':' + (encsAll.length ? encsAll[encsAll.length - 1].key : 0);
+    if (encSel.dataset.sig !== sig) {
+      encSel.dataset.sig = sig;
+      encSel.innerHTML = '<option value="">Mobs — all pulls</option>'
+        + [...encsAll].reverse().map(e => {
+            const t = new Date(e.start_ts * 1000)
+              .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            const label = e.named ? `★ ${e.named} · ${t}` : `Pull #${e.num} · ${t}`;
+            return `<option value="${e.key}">${label}</option>`;
+          }).join('');
+    }
+    const want = selectedEnc !== null ? String(selectedEnc) : '';
+    if (encSel.value !== want) encSel.value = want;
+  }
+
   // Build a map of existing DOM rows keyed by mob id string so we can reuse
   // them across renders.  Reusing nodes avoids tearing down elements that may
   // be mid-click, which previously caused clicks to land on the wrong mob.
@@ -1396,20 +1737,79 @@ function renderMobList(d) {
     existing[row.dataset.mobId] = row;
   }
 
+  // Display sequence: encounter (pull) blocks newest-first, each header
+  // followed by its member mobs newest-first; instances outside any
+  // encounter (registry stubs with no timestamps) trail at the bottom.
+  const byId = new Map(mobs.map(m => [m.id, m]));
+  const inEnc = new Set();
+  const items = [];
+  const encs = (d.encounters || []);
+  for (let e = encs.length - 1; e >= 0; e--) {
+    const enc = encs[e];
+    items.push({ type: 'enc', enc });
+    for (let j = enc.members.length - 1; j >= 0; j--) {
+      const m = byId.get(enc.members[j]);
+      if (m) { items.push({ type: 'mob', m, member: true }); inEnc.add(m.id); }
+    }
+  }
+  for (const m of mobs) {
+    if (!inEnc.has(m.id)) items.push({ type: 'mob', m, member: false });
+  }
+
   const seen = new Set();
-  for (let i = 0; i < mobs.length; i++) {
-    const m       = mobs[i];
+  let domIdx = 0;
+  for (const item of items) {
+    if (item.type === 'enc') {
+      const enc = item.enc;
+      const idStr = 'e' + enc.key;
+      seen.add(idStr);
+      const startClock = new Date(enc.start_ts * 1000)
+        .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const label = enc.named
+        ? `★ ${enc.named} · ${startClock}`
+        : `Pull #${enc.num} · ${startClock}`;
+      const cls = 'enc-row'
+        + (enc.named ? ' enc-named' : '')
+        + (enc.any_active && tlIsLive ? ' enc-active' : '')
+        + (selectedEnc === enc.key ? ' selected' : '');
+      let row = existing[idStr];
+      if (!row) {
+        row = document.createElement('div');
+        row.dataset.mobId = idStr;
+        row.dataset.encKey = String(enc.key);
+        row.addEventListener('click', function(e) { e.stopPropagation(); selectEnc(+this.dataset.encKey); });
+        row.innerHTML = '<span class="enc-label"></span><span class="enc-count"></span>';
+        row._label = row.children[0];
+        row._count = row.children[1];
+      }
+      if (row.className !== cls) row.className = cls;
+      const labelText = truncate(label, 24);
+      const encDur = (tlIsLive && !enc.all_dead && d.now_secs)
+        ? Math.max(d.now_secs - enc.start_ts, 1)
+        : Math.max(enc.end_ts - enc.start_ts, 1);
+      const countText = `${enc.members.length}× · ${fmtTime(encDur)}`;
+      if (row._label.textContent !== labelText) row._label.textContent = labelText;
+      if (row._count.textContent !== countText) row._count.textContent = countText;
+      if (container.children[domIdx] !== row) container.insertBefore(row, container.children[domIdx] || null);
+      domIdx++;
+      continue;
+    }
+
+    const m       = item.m;
+    const i       = domIdx;
     const idStr   = String(m.id);
     seen.add(idStr);
 
     const outside    = !m.first_ts && m.last_seen_secs === 0 && !m.is_dead && !m.is_active;
     const liveActive = tlIsLive && m.is_active;
-    const dotColor   = outside ? '#333333' : m.is_dead ? '#464646' : liveActive ? '#3cdc3c' : '#c8aa1e';
-    const nameColor  = outside ? '#444444' : m.is_dead ? '#5a5a5a' : liveActive ? '#ffffff' : '#a0a0a0';
+    const parked     = m.is_parked && !m.is_dead;
+    const dotColor   = outside ? '#333333' : m.is_dead ? '#464646' : parked ? '#6aa9ff' : liveActive ? '#3cdc3c' : '#c8aa1e';
+    const nameColor  = outside ? '#444444' : m.is_dead ? '#5a5a5a' : parked ? '#9fc4ff' : liveActive ? '#ffffff' : '#a0a0a0';
     const statusCls  = outside || m.is_dead ? '' : liveActive ? ' mob-active' : ' mob-alive';
     const sel        = selectedMob === m.id ? ' selected' : '';
-    const timeStr    = m.last_seen_secs > 0 ? fmtTime(m.last_seen_secs) : '';
-    const newCls     = `mob-row${statusCls}${sel}`;
+    const timeStr    = parked ? 'mez' : (m.last_seen_secs > 0 ? fmtTime(m.last_seen_secs) : '');
+    const memberCls  = item.member ? ' enc-member' : '';
+    const newCls     = `mob-row${statusCls}${sel}${memberCls}`;
 
     let row = existing[idStr];
     if (!row) {
@@ -1424,13 +1824,16 @@ function renderMobList(d) {
 
     if (row.className          !== newCls)   row.className          = newCls;
     if (row._dot.style.color   !== dotColor) row._dot.style.color   = dotColor;
-    if (row._name.style.color  !== nameColor) row._name.style.color = nameColor;
+    // Named (capitalized proper-noun) mobs render gold unless dead/outside.
+    const finalNameColor = (!outside && !m.is_dead && isNamedMob(m.name)) ? '#e8c76a' : nameColor;
+    if (row._name.style.color  !== finalNameColor) row._name.style.color = finalNameColor;
     const nameText = truncate(m.name, 18);
     if (row._name.textContent  !== nameText)  row._name.textContent = nameText;
     if (row._time.textContent  !== timeStr)   row._time.textContent = timeStr;
 
     // Move row to correct position only when needed to avoid layout thrash.
     if (container.children[i] !== row) container.insertBefore(row, container.children[i] || null);
+    domIdx++;
   }
 
   // Remove rows for mobs that are no longer in the list.
@@ -1464,6 +1867,37 @@ function renderSummary(d) {
   const hasRealElapsed = !mobEntry || (mobEntry.first_ts && mobEntry.last_ts && mobEntry.last_ts > mobEntry.first_ts);
 
   let rows = '';
+  const selEncEntry = (selectedEnc !== null && selectedMob === null) ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
+  if (selEncEntry) {
+    // Encounter scope: merge member-mob stats per player; rates over the
+    // pull's own duration.
+    const mergeMembers = (map, totalField, byFields) => {
+      const acc = {};
+      for (const id of selEncEntry.members) {
+        for (const e of (map || {})[String(id)] || []) {
+          const a = acc[e.name] || (acc[e.name] = { name: e.name, classes: e.classes, total: 0 });
+          a.total += e[totalField] || 0;
+        }
+      }
+      return Object.values(acc).sort((a, b) => b.total - a.total);
+    };
+    const encSecs = Math.max(selEncEntry.end_ts - selEncEntry.start_ts, 1);
+    if (detailMode === 'damage' || detailMode === 'tanked') {
+      const list = mergeMembers(detailMode === 'damage' ? d.mob_damage : d.mob_tanking, 'total_damage');
+      const tot = list.reduce((s, e) => s + e.total, 0);
+      rows = list.map(e => sumRow(e.name, e.classes, e.total, Math.round(e.total / encSecs), 'DPS', tot > 0 ? e.total / tot * 100 : null)).join('');
+    } else if (detailMode === 'healing' || detailMode === 'healed') {
+      const list = mergeMembers(detailMode === 'healing' ? d.mob_healing : d.mob_healed,
+        detailMode === 'healing' ? 'total_heals' : 'total_healed_received');
+      const tot = list.reduce((s, e) => s + e.total, 0);
+      rows = list.map(e => sumRow(e.name, e.classes, e.total, Math.round(e.total / encSecs), 'HPS', tot > 0 ? e.total / tot * 100 : null)).join('');
+    } else {
+      const list = mergeMembers(d.mob_avoid, 'total');
+      rows = list.map(e => sumRow(e.name, e.classes, e.total, '', '')).join('');
+    }
+    rowsEl.innerHTML = sumHdr(detailMode) + rows;
+    return;
+  }
   if (selectedMob !== null) {
     const key = String(selectedMob);
     if (detailMode === 'damage') {
@@ -1506,12 +1940,31 @@ function renderSummary(d) {
       rows = (d.avoidance || []).map(e => sumRow(e.name, e.classes, e.total, '', '')).join('');
     }
   }
-  rowsEl.innerHTML = rows;
+  rowsEl.innerHTML = sumHdr(detailMode) + rows;
+}
+
+/// Column headers matching sumRow's grid tracks, labeled per data tab.
+function sumHdr(mode) {
+  const labels = {
+    damage:  ['Damage', 'DPS'],
+    tanked:  ['Tanked', 'DPS'],
+    healing: ['Heals',  'HPS'],
+    healed:  ['Healed', 'HPS'],
+    avoid:   ['Count',  ''],
+  }[mode] || ['', ''];
+  return `<div class="sum-hdr">
+    <span class="h-name">Player</span>
+    <span>Class</span>
+    <span>${labels[0]}</span>
+    <span>%</span>
+    <span>${labels[1]}</span>
+  </div>`;
 }
 
 function sumRow(name, classes, val, rate, rateLabel, pct) {
   const clsArr = Array.isArray(classes) ? classes : (classes ? [classes] : []);
-  const rateStr = (rate === null || rate === undefined || rateLabel === '') ? (rateLabel === '' ? '' : '—') : `${rate} ${rateLabel}`;
+  // The unit lives in the column header now — cells carry just the number.
+  const rateStr = (rate === null || rate === undefined || rateLabel === '') ? (rateLabel === '' ? '' : '—') : `${fmtK(rate)}`;
   const pctStr  = (pct != null) ? pct.toFixed(1)+'%' : '';
   return `<div class="sum-row">
     <span class="sum-name">${name}</span>
@@ -1520,6 +1973,35 @@ function sumRow(name, classes, val, rate, rateLabel, pct) {
     <span class="sum-pct">${pctStr}</span>
     <span class="sum-rate">${rateStr}</span>
   </div>`;
+}
+
+/// Merge per-mob card entries across an encounter's members: totals summed per
+/// player, breakdown lists (by type / by spell) summed by key. Rates are NOT
+/// carried over — cards recompute them from the pull's own elapsed time.
+function mergeEncounterEntries(map, members, totalField, lists) {
+  const acc = {};
+  for (const id of members) {
+    for (const e of (map || {})[String(id)] || []) {
+      const a = acc[e.name] || (acc[e.name] = {
+        name: e.name, class: e.class, classes: e.classes, level: e.level,
+        [totalField]: 0, _lists: {},
+      });
+      a[totalField] += e[totalField] || 0;
+      for (const [listName, [k, v]] of Object.entries(lists)) {
+        const m = a._lists[listName] || (a._lists[listName] = {});
+        for (const r of e[listName] || []) m[r[k]] = (m[r[k]] || 0) + (r[v] || 0);
+      }
+    }
+  }
+  return Object.values(acc).map(a => {
+    for (const [listName, [k, v]] of Object.entries(lists)) {
+      a[listName] = Object.entries(a._lists[listName] || {})
+        .sort((x, y) => y[1] - x[1])
+        .map(([kk, vv]) => ({ [k]: kk, [v]: vv }));
+    }
+    delete a._lists;
+    return a;
+  }).sort((x, y) => (y[totalField] || 0) - (x[totalField] || 0));
 }
 
 function renderCards(d) {
@@ -1531,6 +2013,36 @@ function renderCards(d) {
   const mobEntry = selectedMob !== null ? (d.mob_list || []).find(m => m.id === selectedMob) : null;
   const hasRealElapsed = !mobEntry || (mobEntry.first_ts && mobEntry.last_ts && mobEntry.last_ts > mobEntry.first_ts);
   const elapsed = hasRealElapsed ? Math.max(d.fight_elapsed_secs, 1) : null;
+
+  // Pull selected: cards cover the encounter — same scope as the header and
+  // summary, so every number on screen agrees.
+  const encEntry = (selectedEnc !== null && selectedMob === null) ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
+  if (encEntry) {
+    const ids = encEntry.members;
+    if (detailMode === 'damage' || detailMode === 'tanked') {
+      const p = mergeEncounterEntries(
+        detailMode === 'damage' ? d.mob_damage : d.mob_tanking, ids,
+        'total_damage', { damage_by_type: ['type', 'damage'], spells: ['spell', 'damage'] });
+      cardsEl.innerHTML = p.length ? p.map(e => damageCard(e, elapsed)).join('')
+        : '<div class="empty-state">No data recorded for this pull</div>';
+    } else if (detailMode === 'healing') {
+      const h = mergeEncounterEntries(d.mob_healing, ids,
+        'total_heals', { heals_by_spell: ['spell', 'healed'] });
+      cardsEl.innerHTML = h.length ? h.map(e => healerCard(e, elapsed)).join('')
+        : '<div class="empty-state">No healing recorded for this pull</div>';
+    } else if (detailMode === 'healed') {
+      const h = mergeEncounterEntries(d.mob_healed, ids,
+        'total_healed_received', { healed_received_by_spell: ['spell', 'healed'] });
+      cardsEl.innerHTML = h.length ? h.map(e => healeeCard(e, elapsed)).join('')
+        : '<div class="empty-state">No heals received recorded for this pull</div>';
+    } else {
+      const a = mergeEncounterEntries(d.mob_avoid, ids,
+        'total', { by_type: ['type', 'count'] });
+      cardsEl.innerHTML = a.length ? a.map(e => avoidCard(e)).join('')
+        : '<div class="empty-state">No avoidance recorded for this pull</div>';
+    }
+    return;
+  }
 
   if (selectedMob !== null) {
     const key = String(selectedMob);
@@ -1646,24 +2158,47 @@ function renderGraph() {
   const canvasRate = document.getElementById('graph-canvas-rate');
   if (!canvas || !canvasRate) return;
 
-  if (selectedMob === null) { destroyChart(); return; }
+  if (selectedMob === null && selectedEnc === null) { destroyChart(); return; }
 
-  const mob     = selectedMob;
-  const mobInfo = S.mobs[mob];
-  if (!mobInfo) { destroyChart(); return; }
+  const tlMap = {
+    damage: S.mobDmgTL, tanked: S.mobTankTL, healing: S.mobHealTL,
+    healed: S.mobHealedTL, avoid: S.mobAvoidTL,
+  }[detailMode];
+  const yl = {
+    damage:  ['Total Damage',   'DPS'],
+    tanked:  ['Total Incoming', 'Incoming DPS'],
+    healing: ['Total Healing',  'HPS'],
+    healed:  ['Total Healed',   'HPS Received'],
+    avoid:   ['Total Avoids',   'Avoids / 5s'],
+  }[detailMode];
+  if (!tlMap || !yl) { destroyChart(); return; }
+  const [yLabelTotal, yLabelRate] = yl;
 
-  let tl, yLabelTotal, yLabelRate;
-  if      (detailMode === 'damage')  { tl = S.mobDmgTL[mob];    yLabelTotal = 'Total Damage';   yLabelRate = 'DPS'; }
-  else if (detailMode === 'tanked')  { tl = S.mobTankTL[mob];   yLabelTotal = 'Total Incoming'; yLabelRate = 'Incoming DPS'; }
-  else if (detailMode === 'healing') { tl = S.mobHealTL[mob];   yLabelTotal = 'Total Healing';  yLabelRate = 'HPS'; }
-  else if (detailMode === 'healed')  { tl = S.mobHealedTL[mob]; yLabelTotal = 'Total Healed';   yLabelRate = 'HPS Received'; }
-  else if (detailMode === 'avoid')   { tl = S.mobAvoidTL[mob];  yLabelTotal = 'Total Avoids';   yLabelRate = 'Avoids / 5s'; }
-  else                               { destroyChart(); return; }
+  let tl, fightStart, fightEnd;
+  const encG = (selectedEnc !== null && selectedMob === null && lastData)
+    ? (lastData.encounters || []).find(e => e.key === selectedEnc) : null;
+  if (encG) {
+    // Pull selected: merge member-mob timelines per player over the pull window.
+    tl = {};
+    for (const id of encG.members) {
+      const m = tlMap[id];
+      if (!m) continue;
+      for (const [name, evs] of Object.entries(m)) {
+        (tl[name] = tl[name] || []).push(...evs);
+      }
+    }
+    for (const evs of Object.values(tl)) evs.sort((a, b) => a.ts - b.ts);
+    fightStart = encG.start_ts;
+    fightEnd   = Math.max(encG.end_ts, encG.start_ts + 1);
+  } else {
+    const mobInfo = S.mobs[selectedMob];
+    if (!mobInfo) { destroyChart(); return; }
+    tl = tlMap[selectedMob];
+    fightStart = mobInfo.firstTs;
+    fightEnd   = mobInfo.lastTs;
+  }
 
   if (!tl || Object.keys(tl).length === 0) { destroyChart(); return; }
-
-  const fightStart = mobInfo.firstTs;
-  const fightEnd   = mobInfo.lastTs;
   const numBuckets = Math.max(1, Math.ceil((fightEnd - fightStart) / GRAPH_BUCKET));
 
   const players = Object.entries(tl)
@@ -1758,7 +2293,7 @@ function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url   = `${proto}://${location.host}${WS_PATH}`;
   ws = new WebSocket(url);
-  ws.onopen    = () => { setStatus('live', '● live'); tlIsLive = true; tlPaused = false; updateLiveBtn(); updatePlayPauseBtn(); };
+  ws.onopen    = () => { tlIsLive = true; tlPaused = false; updateLiveBtn(); updatePlayPauseBtn(); };
   ws.onmessage = e => {
     let msg;
     try { msg = JSON.parse(e.data); } catch(_) { return; }
@@ -1777,7 +2312,6 @@ function connectWS() {
       if (!msg.is_live) {
         tlIsLive = false;
         tlCanGoLive = false;
-        setStatus('poll', '◉ recorded');
         updateLiveBtn();
         updatePlayPauseBtn();
         updateWallClock();
@@ -1790,6 +2324,7 @@ function connectWS() {
         // For the latest session (SESSION_END_LOG_TS = 0) logLastTs keeps the
         // journal end from msg.log_last_ts, which is the correct session end.
         cachedBatches.length = 0;
+        cacheIndex.clear();
         cacheComplete = false;
         sessionPreloading = false;
         resetState();
@@ -1834,6 +2369,11 @@ function connectWS() {
     }
     if (msg.t === 'stream_done') {
       cacheComplete = true;
+      // The server sends stream_done only when no ingest client is connected:
+      // the stream is not live anymore. Green/Go-Live must reflect the
+      // STREAM's state, so retire them in favor of the ended badge.
+      tlCanGoLive = false;
+      updateLiveBtn();
       if (sessionPreloading) {
         // Preload complete (completed recording) — show full session state at end.
         tlPaused = true;
@@ -1871,9 +2411,37 @@ function connectWS() {
     }
     if (msg.t === 'batch') {
       try {
-        const batchLogTs = msg.batch.events && msg.batch.events.length
-          ? Math.max(...msg.batch.events.map(e => e.ts))
-          : (S.lastTs || 0);
+        // Empty batches carry nothing to apply or cache.
+        if (!msg.batch.events || !msg.batch.events.length) return;
+        const rawLogTs = Math.max(...msg.batch.events.map(e => e.ts));
+
+        // Re-streamed batch (replay/seek resends journal content we already
+        // hold): reuse the CACHED, already-remapped copy. Prevents duplicate
+        // cache entries (which double-counted damage on later cache rebuilds)
+        // and epoch double-bumps when a replay crosses a client-run boundary.
+        const dupKey = msg.batch.seq + ':' + rawLogTs;
+        const cachedDup = cacheIndex.get(dupKey);
+        if (cachedDup) {
+          if (!sessionPreloading) {
+            applyBatch(cachedDup.batch);
+            scheduleRender();
+          }
+          return;
+        }
+
+        // Detect a new client run (seq restarted at 0) and namespace this
+        // batch's mob ids by run. Done once at ingestion so cache replays,
+        // live applies, and loot all see the remapped ids. mob 0 = "unknown"
+        // stays 0. Dump-mode sub-batch splitting never re-emits seq 0, so
+        // this only fires on genuine client restarts.
+        if (msg.batch.seq === 0 && lastBatchSeq !== null) mobEpoch++;
+        lastBatchSeq = msg.batch.seq;
+        if (mobEpoch > 0) {
+          for (const ev of msg.batch.events) {
+            if (ev.mob) ev.mob += mobEpoch * 1000000;
+          }
+        }
+        const batchLogTs = rawLogTs;
         // In session mode: stop at the session end boundary.
         if (SESSION_END_LOG_TS > 0 && batchLogTs > SESSION_END_LOG_TS) {
           cacheComplete = true;
@@ -1894,7 +2462,9 @@ function connectWS() {
         // They are not applied to state and not cached — no cross-session leakage.
         if (SESSION_LOG_TS > 0 && batchLogTs < SESSION_LOG_TS) return;
         // Cache every in-session batch for client-side seeking.
-        cachedBatches.push({ logTs: batchLogTs, batch: msg.batch });
+        const cb = { logTs: batchLogTs, batch: msg.batch };
+        cachedBatches.push(cb);
+        cacheIndex.set(dupKey, cb);
         // During preloading, only accumulate the cache; state will be rebuilt
         // from the cache once preloading completes (snapSessionToStart).
         // This prevents pre-seek state from contaminating the session view.
@@ -1954,28 +2524,39 @@ const tlBar      = document.getElementById('timeline-bar');
 const tlStart    = document.getElementById('tl-label-start');
 const tlEnd      = document.getElementById('tl-label-end');
 const tlPosLabel = document.getElementById('tl-pos-label');
-const tlLiveBtn  = document.getElementById('tl-live-btn');
 
 function fmtTs(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
-  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', timeZone:'UTC' });
+  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 function fmtTsPos(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
-  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', timeZone:'UTC' });
+  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+}
+
+/// Display bounds for the scrubber: a manually-selected pull scopes the bar
+/// to its own window; otherwise the full session/log range.
+function tlDisplayBounds() {
+  if (tlEncScope) return [tlEncScope.start, tlEncScope.end];
+  return [logFirstTs || tlFirstTs, logLastTs || tlLastTs];
 }
 
 function updateTimelineBar() {
   // Require valid wall-clock bounds from the server for seek to work.
   if (!tlFirstTs || !tlLastTs) return;
-  // Use log-event timestamps for the display range check when available;
-  // they span the full EQ session even if the wall-clock window is narrow
-  // (e.g. a dump-mode replay that finished in under a second).
-  const dispFirst = logFirstTs || tlFirstTs;
-  const dispLast  = logLastTs  || tlLastTs;
-  if (dispLast <= dispFirst) return;
+  // The bar earns its space: hidden while watching live with nothing
+  // manually selected. Clicking a pull summons it (scoped to that pull);
+  // any non-live state keeps it visible so replay controls are never lost.
+  const shouldShow = encManuallySelected || !tlIsLive;
+  if (!shouldShow) {
+    tlBar.classList.remove('visible');
+    document.documentElement.style.setProperty('--tl-height', '0px');
+    return;
+  }
+  const [dispFirst, dispLast] = tlDisplayBounds();
+  if (!dispFirst || !dispLast || dispLast <= dispFirst) return;
   tlBar.classList.add('visible');
   document.documentElement.style.setProperty('--tl-height', '28px');
   tlStart.textContent = fmtTs(dispFirst);
@@ -1989,18 +2570,9 @@ function setScrubberToEnd() {
 }
 
 function updateLiveBtn() {
-  if (!tlCanGoLive) {
-    tlLiveBtn.style.display = 'none';
-    return;
-  }
-  tlLiveBtn.style.display = '';
-  if (tlIsLive) {
-    tlLiveBtn.textContent = '● Live';
-    tlLiveBtn.classList.add('live');
-  } else {
-    tlLiveBtn.textContent = 'Go Live';
-    tlLiveBtn.classList.remove('live');
-  }
+  // The single Go Live control is the pill next to the connection badge —
+  // the timeline bar no longer duplicates it.
+  syncStatusIndicator();
 }
 
 function updatePlayPauseBtn() {
@@ -2046,8 +2618,7 @@ scrubber.addEventListener('touchend',  () => { scrubberDragging = false; commitS
 scrubber.addEventListener('input', () => {
   updateScrubberTrack();
   const frac = scrubber.value / 1000;
-  const dispFirst = logFirstTs || tlFirstTs;
-  const dispLast  = logLastTs  || tlLastTs;
+  const [dispFirst, dispLast] = tlDisplayBounds();
   if (dispFirst && dispLast) {
     const ts = Math.round(dispFirst + frac * (dispLast - dispFirst));
     tlPosLabel.textContent = fmtTsPos(ts);
@@ -2062,6 +2633,11 @@ function commitSeek() {
   // At the far right of the bar: go live in normal mode; in session mode stay
   // within the session and seek to the session end instead of going live.
   if (frac >= 0.999) {
+    if (tlEncScope) {
+      // Pull-scoped bar: far right is the pull's end, not "go live".
+      seekToLogTs(tlEncScope.end);
+      return;
+    }
     if (SESSION_LOG_TS > 0) {
       const dispLast = logLastTs || tlLastTs;
       if (dispLast) seekToLogTs(dispLast);
@@ -2080,9 +2656,10 @@ function commitSeek() {
   updateLiveBtn();
   updatePlayPauseBtn();
 
-  // Prefer log-event timestamps for seeking.
-  if (logFirstTs && logLastTs && logLastTs > logFirstTs) {
-    const targetLogTs = Math.round(logFirstTs + frac * (logLastTs - logFirstTs));
+  // Prefer log-event timestamps for seeking (pull-scoped when a pull is selected).
+  const [seekFirst, seekLast] = tlDisplayBounds();
+  if (seekFirst && seekLast && seekLast > seekFirst) {
+    const targetLogTs = Math.round(seekFirst + frac * (seekLast - seekFirst));
     // Try cache-first seek; fall back to full re-stream if cache not ready.
     if (!seekWithCache(targetLogTs, seekPaused, speed)) {
       pendingMobRestore = selectedMob;
@@ -2110,12 +2687,22 @@ function goLive() {
   tlPaused = false;
   liveAutoSelect = true;
   pendingMobRestore = null;
+  // Back to live view: drop the pull-scoped bar (it hides until the next click).
+  encManuallySelected = false;
+  tlEncScope = null;
   document.getElementById('tl-speed').value = '1';
   updateLiveBtn();
   updatePlayPauseBtn();
   setScrubberToEnd();
   resetState();
+  // Rebuild the full accumulated state from the batch cache before following
+  // live — otherwise Go Live wiped history and the current pull showed only
+  // events arriving after the click (auto-select had nothing to select).
+  applyBatchesUpTo(Infinity);
+  S.casts = {};
   sendWS({ t: 'live' });
+  updateTimelineBar();
+  scheduleRender();
 }
 
 // ── Transport controls ─────────────────────────────────────────────────────
@@ -2124,6 +2711,12 @@ function togglePlayPause() {
   if (sessionPreloading) return;
   if (!tlFirstTs || !tlLastTs) return;
   if (tlIsLive) {
+    // A pull is selected and we're live: Play means "replay this pull" —
+    // the natural button next to the pull-scoped bar.
+    if (encManuallySelected && selectedEnc !== null) {
+      replayEncounter(selectedEnc);
+      return;
+    }
     // Pause from live: seek to the last known position and stay paused.
     tlPaused = true;
     tlIsLive = false;
@@ -2157,8 +2750,7 @@ function togglePlayPause() {
 
 // Seek to a log-event timestamp, keeping the current play/pause state.
 function seekToLogTs(targetLogTs) {
-  const dispFirst = logFirstTs || tlFirstTs;
-  const dispLast  = logLastTs  || tlLastTs;
+  const [dispFirst, dispLast] = tlDisplayBounds();
   if (!dispFirst || !dispLast || dispLast <= dispFirst || !tlFirstTs || !tlLastTs) return;
   const frac = Math.max(0, Math.min(1, (targetLogTs - dispFirst) / (dispLast - dispFirst)));
   const speed = parseFloat(document.getElementById('tl-speed').value) || 1.0;
@@ -2217,6 +2809,21 @@ function fastForward() {
 function setStatus(cls, txt) {
   const el = document.getElementById('status');
   el.className = cls; el.textContent = txt;
+}
+
+/// Top-right semantics: the badge reports the STREAMER'S CLIENT connection
+/// (green connected / gray disconnected); the separate "⏵ Go Live" pill is
+/// the navigation control, shown only when the client is connected but the
+/// viewer isn't watching live.
+function syncStatusIndicator() {
+  const pill = document.getElementById('golive-pill');
+  if (!ws) { if (pill) pill.style.display = 'none'; return; } // reconnecting badge stays
+  if (tlCanGoLive) {
+    setStatus('live', '● client connected');
+  } else {
+    setStatus('poll', '○ client disconnected');
+  }
+  if (pill) pill.style.display = (tlCanGoLive && !tlIsLive) ? '' : 'none';
 }
 
 // ── Clocks ────────────────────────────────────────────────────────────────────
@@ -2298,6 +2905,63 @@ if (SESSIONS_PATH) {
 })();
 
 connectWS();
+
+// Live ticker: keeps the active pull's running timer, DPS, and mob ages
+// moving between combat lines (swings can be seconds apart). Skipped when
+// the tab is hidden - browsers throttle it there anyway.
+setInterval(() => {
+  if (tlIsLive && lastData && !document.hidden) {
+    lastData = buildRenderState();
+    rerender();
+  }
+}, 1000);
+
+// ── Resizable columns ─────────────────────────────────────────────────────────
+// Drag the divider right of the Mobs or Summary panel to resize it; widths
+// persist per browser (localStorage). Double-click a divider to reset.
+(function initColResizers() {
+  for (const key of ['mobs', 'summary']) {
+    const saved = parseInt(localStorage.getItem('colw-' + key), 10);
+    if (saved >= 120 && saved <= 800) {
+      const el = document.getElementById(key);
+      el.style.width = saved + 'px';
+      el.style.minWidth = saved + 'px';
+    }
+  }
+  document.querySelectorAll('.col-resizer').forEach(rz => {
+    const target = document.getElementById(rz.dataset.target);
+    rz.addEventListener('click', e => e.stopPropagation()); // keep selection
+    rz.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      target.style.width = '';
+      target.style.minWidth = '';
+      localStorage.removeItem('colw-' + rz.dataset.target);
+    });
+    rz.addEventListener('mousedown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startW = target.getBoundingClientRect().width;
+      rz.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      const move = ev => {
+        const w = Math.max(120, Math.min(800, startW + ev.clientX - startX));
+        target.style.width = w + 'px';
+        target.style.minWidth = w + 'px';
+      };
+      const up = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        rz.classList.remove('dragging');
+        document.body.style.cursor = '';
+        localStorage.setItem('colw-' + rz.dataset.target,
+          Math.round(target.getBoundingClientRect().width));
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  });
+})();
 </script>
 </body>
 </html>

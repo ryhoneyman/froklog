@@ -34,7 +34,11 @@ path = "src/bin/froklog-loggen/main.rs"
 [features]
 default = []
 # Windows systray client (no visible window; requires Windows cross-compile)
-tray = ["dep:tray-icon", "dep:winit", "dep:image", "dep:zip"]
+tray = ["triggers", "dep:tray-icon", "dep:winit", "dep:image", "dep:zip"]
+# Data-driven trigger engine on its own. It is pure Rust — regex, glob and
+# serde, no platform APIs — so a non-Windows client can reuse the matching,
+# variables and templates and supply its own output for the actions.
+triggers = ["dep:zip"]
 # Neural chat backend — gates ort and serde_json (already a dep) usage in NeuralBackend
 neural = ["dep:tract-onnx", "dep:sentencepiece-rs"]
 [dependencies]
@@ -76,6 +80,11 @@ serde_json = "1"
 # Compression for on-disk journal records
 flate2 = "1"
 
+# Embedded per-stream storage (froklog-server journal/sessions/markers).
+# `bundled` compiles SQLite into the binary on both Windows and Linux —
+# no system dependency, no DLL to ship. Only binaries that use it link it.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 # Structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -85,6 +94,13 @@ crossbeam-channel = "0.5"
 
 # Timestamp formatting for fight start display
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# True-epoch conversion of naive EQ log timestamps: the embedded IANA tz
+# database applies the correct historical DST rule per date, identically on
+# Windows and Linux (Windows' own tz data applies current-year rules to old
+# dates, which would make imports convert differently per platform).
+chrono-tz = "0.10"
+iana-time-zone = "0.1"
 
 # Token generation for auth
 uuid = { version = "1", features = ["v4"] }

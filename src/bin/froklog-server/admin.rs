@@ -72,28 +72,32 @@ pub async fn admin_panel_handler(
     // (game_id, server, player_name, StreamDisplay)
     let mut flat: Vec<(String, String, String, StreamDisplay)> = Vec::with_capacity(raw.len());
     for info in raw {
+        let si = info.session_index.read().await;
+        let sessions_raw = si.list().to_vec();
+        drop(si);
         let journal = info.journal.read().await;
         let batches = journal.len();
         let first_ts = journal.log_first_ts();
         let last_ts = journal.log_last_ts();
+        // Sessions anchor to permanent batch ids; derive positional offsets
+        // for the per-session batch counts.
+        let session_pos: Vec<usize> = sessions_raw
+            .iter()
+            .map(|s| journal.pos_of_id(s.start_batch_id))
+            .collect();
         drop(journal);
         let file_bytes = std::fs::metadata(&info.journal_path)
             .map(|m| m.len())
             .unwrap_or(0);
         let duration_secs = first_ts.zip(last_ts).map(|(f, l)| l.saturating_sub(f));
-        let si = info.session_index.read().await;
-        let sessions_raw = si.list().to_vec();
-        drop(si);
         let sessions: Vec<SessionDisplay> = sessions_raw
             .iter()
             .enumerate()
             .map(|(i, s)| {
                 let batch_count = if i + 1 < sessions_raw.len() {
-                    sessions_raw[i + 1]
-                        .start_journal_idx
-                        .saturating_sub(s.start_journal_idx)
+                    session_pos[i + 1].saturating_sub(session_pos[i])
                 } else {
-                    batches.saturating_sub(s.start_journal_idx)
+                    batches.saturating_sub(session_pos[i])
                 };
                 let end_log_ts = if i + 1 < sessions_raw.len() {
                     Some(sessions_raw[i + 1].start_log_ts)
@@ -619,7 +623,7 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-fn html_escape(s: &str) -> String {
+pub(crate) fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

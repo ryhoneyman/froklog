@@ -1,16 +1,43 @@
-//! Paths to the icons/sounds directories next to the executable, plus the
-//! legacy stock-icon filename list.
+//! Paths to the icons/sounds directories, plus the legacy stock-icon
+//! filename list.
 
 use std::path::PathBuf;
 
 pub fn icons_dir() -> PathBuf {
-    exe_dir().join("icons")
+    data_dir().join("icons")
 }
 
 pub fn sounds_dir() -> PathBuf {
-    exe_dir().join("sounds")
+    data_dir().join("sounds")
 }
 
+/// Where icons and sound packages live.
+///
+/// On Windows that is beside the executable, which is what a portable app
+/// wants and what every existing install already has. Elsewhere the binary
+/// usually sits in a directory meant only for executables — ~/.local/bin —
+/// so writing sound packages there would be wrong; XDG says data belongs in
+/// ~/.local/share instead.
+fn data_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        exe_dir()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+                    .join(".local")
+                    .join("share")
+            })
+            .join("froklog")
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("."))

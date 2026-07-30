@@ -14,7 +14,8 @@ pub static RE_MELEE: Lazy<Regex> = Lazy::new(|| {
         r"frenzies|frenzy|strikes|strike|slays|slay|mauls|maul|",
         r"bites|bite|claws|claw|stings|sting|rends|rend|",
         r"scratches|scratch|gores|gore|cleaves|cleave|smashes|smash|",
-        r"shoots|shoot|slams|slam|slices|slice|stabs|stab|sweeps|sweep) ",
+        r"shoots|shoot|slams|slam|slices|slice|stabs|stab|sweeps|sweep|",
+        r"smites|smite) ",
         r"(?:on )?",
         r"(?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<dmg>\d+) point"
     ))
@@ -71,6 +72,51 @@ pub static RE_DS_PROC: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+// "YOU are burned by orc centurion's flames for 6 points of non-melee damage!"
+// Inbound DS proc: a MOB's damage shield burning the player who struck it.
+// Distinct from RE_DS_PROC: "YOU are" (not "is"), multi-word possessive mob
+// name, and a trailing "!".
+pub static RE_DS_BURN_YOU: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^YOU are \w+ by (?P<src>[A-Za-z][A-Za-z `']*?)'s \w+ for (?P<dmg>\d+) points? of non-melee damage[.!]",
+    )
+    .unwrap()
+});
+
+// "orc centurion has been mesmerized." / "a Tesch Mas Gnoll has been enthralled."
+// Crowd-control landing on a mob: the target is deliberately parked.
+pub static RE_CC_PARK: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) has been (?:mesmerized|enthralled|entranced)[.!]$",
+    )
+    .unwrap()
+});
+
+// "Orc centurion has been awakened by Zary." — crowd control broken.
+pub static RE_CC_WAKE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) has been awakened(?: by (?P<src>[A-Za-z`']+))?[.!]$",
+    )
+    .unwrap()
+});
+
+// Player-state lines that prove combat is ONGOING even though no mob is
+// named: stunned, out of mana, interrupted, life-drained. During these the
+// player looks idle in the log while the mobs may be on a merc/pet/tank whose
+// combat never appears in this log — without a heartbeat the encounter would
+// time out mid-fight.
+pub static RE_HEARTBEAT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"^(?:You are stunned!|You are no longer stunned\.",
+        r"|You can't cast spells while stunned!",
+        r"|You regain your concentration and continue your casting\.",
+        r"|You feel your life force drain away\.",
+        r"|Insufficient Mana to cast this spell!",
+        r"|Your [A-Za-z `']+ spell is interrupted\.)$"
+    ))
+    .unwrap()
+});
+
 // "Player begins casting SpellName."
 pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
@@ -81,7 +127,9 @@ pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
 
 // "X healed Y for Z (optional_overheal) hit points by SpellName."
 pub static RE_HEAL: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<src>[A-Za-z][A-Za-z`']*) (?:has )?healed (?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<amt>\d+)(?: \(\d+\))? hit points?(?: by (?P<spell>[A-Za-z][A-Za-z `'-]+))?\.?$").unwrap()
+    // src allows spaces: mob healers ("an orc thaumaturgist healed itself…")
+    // are multi-word and previously never matched at all.
+    Regex::new(r"^(?P<src>[A-Za-z][A-Za-z `']*?) (?:has )?healed (?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<amt>\d+)(?: \(\d+\))? hit points?(?: by (?P<spell>[A-Za-z][A-Za-z `'-]+))?\.?$").unwrap()
 });
 
 // "X has/have taken N damage from [Player's / your] Spell[ by Player]."
@@ -129,7 +177,10 @@ pub static RE_DIED: Lazy<Regex> =
 // Both src and tgt may be multi-word.  Miss type is the first keyword after "but".
 pub static RE_MISS: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"^(?P<src>[A-Za-z][A-Za-z`', ]*?) tries? to \w+ (?P<tgt>[A-Za-z][A-Za-z `',]*?),",
+        // "tr(?:y|ies)": first-person lines use "You try to slash X, but miss!"
+        // — a previous "tries?" only matched "trie(s)", silently dropping
+        // every player-side miss.
+        r"^(?P<src>[A-Za-z][A-Za-z`', ]*?) tr(?:y|ies) to \w+ (?P<tgt>[A-Za-z][A-Za-z `',]*?),",
         r" but .*?(?P<miss>dodge[sd]?|parr(?:ied|ies|y)|miss(?:ed|es)?|block(?:ed|s)?|",
         r"ripost(?:ed|es)?|INVULNERABLE|absorbs?)"
     ))
@@ -188,8 +239,21 @@ pub static RE_LOOT_HOARD: Lazy<Regex> = Lazy::new(|| {
 });
 
 // "You looted a Darkbrood Mask +1 from Innoruuk, the Prince of Hate's corpse to create a Darkbrood Mask +1"
+// `result` is the item you end up holding, which carries the new tier — the
+// consumed item's own tier says nothing about what you now own.
 pub static RE_LOOT_ENHANCE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^You looted (?P<item>.+?) from (?P<mob>.+?)'s corpse to create ").unwrap()
+    Regex::new(
+        r"^You looted (?P<item>.+?) from (?P<mob>.+?)'s corpse to create (?P<result>.+?)\.?$",
+    )
+    .unwrap()
+});
+
+// "You have successfully merged two items together to create a new item: Boots of the Long Road +2"
+pub static RE_ITEM_MERGE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^You have successfully merged two items together to create a new item: (?P<result>.+?)\.?$",
+    )
+    .unwrap()
 });
 
 static RE_CURRENCY_PARSE: Lazy<Regex> =
@@ -272,6 +336,7 @@ pub fn normalize_verb(verb: &str) -> &'static str {
         "scratch" | "scratches" => "scratch",
         "gore" | "gores" => "gore",
         "cleave" | "cleaves" => "cleave",
+        "smite" | "smites" => "smite",
         "smash" | "smashes" => "smash",
         "shoot" | "shoots" => "shoot",
         "slam" | "slams" => "slam",
@@ -358,6 +423,23 @@ mod helper_tests {
     use super::*;
 
     // ── norm ────────────────────────────────────────────────────────────────────
+    #[test]
+    fn heartbeat_matches_player_state_lines() {
+        for line in [
+            "You are stunned!",
+            "You are no longer stunned.",
+            "You can't cast spells while stunned!",
+            "You regain your concentration and continue your casting.",
+            "You feel your life force drain away.",
+            "Insufficient Mana to cast this spell!",
+            "Your Healing spell is interrupted.",
+        ] {
+            assert!(RE_HEARTBEAT.is_match(line), "should match: {line}");
+        }
+        assert!(!RE_HEARTBEAT.is_match("You are not currently assigned to an adventure."));
+        assert!(!RE_HEARTBEAT.is_match("Your wounds begin to heal."));
+    }
+
     #[test]
     fn norm_you_returns_player() {
         assert_eq!(norm("you", "Rysk"), "Rysk");

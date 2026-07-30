@@ -17,6 +17,10 @@ pub struct MobSighting {
     /// recent combat event involving this mob.  Zero if not yet populated.
     pub first_log_ts: u32,
     pub last_log_ts: u32,
+    /// True while crowd control (mez/enthrall) has this mob deliberately
+    /// parked: it produces no combat lines by design, so idle timeouts and
+    /// the same-instance gap are suspended until it wakes or acts again.
+    pub parked: bool,
 }
 
 /// Per-entity combat breakdown stored in the shared snapshot.
@@ -271,8 +275,8 @@ impl CombatState {
             .copied()
             .map(|m| {
                 let secs_since_last = m.last_seen.elapsed().as_secs_f64();
-                let timed_out = secs_since_last >= 15.0;
-                let is_dead = self.dead_mobs.contains(&m.name) || timed_out;
+                let timed_out = !m.parked && secs_since_last >= 15.0;
+                let is_dead = self.dead_mobs.contains(&m.name.to_ascii_lowercase()) || timed_out;
                 let is_active = !is_dead && secs_since_last < 5.0;
                 // Encounter duration: from first hit to last hit (fixed, doesn't grow after death).
                 let encounter_secs = m.last_seen.duration_since(m.first_seen).as_secs_f64();

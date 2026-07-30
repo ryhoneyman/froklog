@@ -2,6 +2,7 @@ mod admin;
 mod config;
 mod ingest;
 mod journal;
+mod markers;
 mod ratelimit;
 mod session_index;
 mod streams;
@@ -26,11 +27,23 @@ use streams::{new_registry, SharedRegistry, StreamEntry};
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
+/// When set (config `trusted_proxy`), forwarded headers are honored ONLY for
+/// connections arriving from this address. Without it, anyone who can reach
+/// the port directly can spoof X-Forwarded-For and bypass the per-IP rate
+/// limiter/ban with a fresh fake address per request.
+static TRUSTED_PROXY: std::sync::OnceLock<Option<std::net::IpAddr>> = std::sync::OnceLock::new();
+
 /// Returns the best available client IP: the leftmost address in
 /// `X-Forwarded-For` (set by Caddy / any trusted reverse proxy), then
 /// `X-Real-IP`, then the raw TCP peer address as a fallback for direct
 /// connections.
 pub(crate) fn client_ip(headers: &axum::http::HeaderMap, peer: SocketAddr) -> String {
+    // If a trusted proxy is configured, only believe forwarded headers from it.
+    if let Some(Some(trusted)) = TRUSTED_PROXY.get() {
+        if peer.ip() != *trusted {
+            return peer.ip().to_string();
+        }
+    }
     let forwarded = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -98,12 +111,39 @@ impl ServerState {
 #[tokio::main]
 async fn main() {
     let cfg_path = config::config_path();
-    let mut cfg = config::load_or_create(&cfg_path);
+    let (mut cfg, cfg_warnings) = config::load_or_create(&cfg_path);
     config::apply_env_overrides(&mut cfg);
 
     tracing_subscriber::fmt()
         .with_env_filter(cfg.rust_log.as_str())
         .init();
+
+    // Emit warnings collected before tracing existed (config parse errors
+    // used to vanish here — including the one that regenerates the admin token).
+    for w in &cfg_warnings {
+        warn!("{w}");
+    }
+    info!("Config: {}", cfg_path.display());
+
+    // Only honor X-Forwarded-For from the configured reverse proxy (if any).
+    let trusted_proxy = if cfg.trusted_proxy.is_empty() {
+        None
+    } else {
+        match cfg.trusted_proxy.parse::<std::net::IpAddr>() {
+            Ok(ip) => {
+                info!("Trusting forwarded headers only from proxy {ip}");
+                Some(ip)
+            }
+            Err(_) => {
+                warn!(
+                    "Invalid trusted_proxy '{}' — forwarded headers will be trusted from ANY connection",
+                    cfg.trusted_proxy
+                );
+                None
+            }
+        }
+    };
+    let _ = TRUSTED_PROXY.set(trusted_proxy);
 
     let stream_password = if cfg.stream_password.is_empty() {
         None
@@ -156,6 +196,49 @@ async fn main() {
         }
     });
 
+    // Optional retention sweep: prune data older than retention_days from every
+    // stream, once at startup and then daily. Disabled when retention_days = 0.
+    if cfg.retention_days > 0 {
+        info!(
+            "Retention: pruning stream data older than {} day(s), swept daily",
+            cfg.retention_days
+        );
+        tokio::spawn({
+            let registry = Arc::clone(&state.registry);
+            let days = cfg.retention_days;
+            async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+                loop {
+                    interval.tick().await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let cutoff = now.saturating_sub(days.saturating_mul(86_400));
+                    // Clone handles under a short lock, prune outside it.
+                    let streams: Vec<_> = {
+                        let reg = registry.read().await;
+                        reg.list_admin()
+                            .into_iter()
+                            .map(|i| (i.stream_id, i.journal, i.session_index, i.markers))
+                            .collect()
+                    };
+                    for (stream_id, journal, session_index, markers) in streams {
+                        match prune_stream_data(&journal, &session_index, &markers, cutoff).await {
+                            Ok((batches, sessions)) if batches > 0 || sessions > 0 => {
+                                info!(
+                                    "Retention [{stream_id}]: removed {batches} batches, {sessions} sessions"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => warn!("Retention [{stream_id}]: prune failed: {e}"),
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     let cors = CorsLayer::new().allow_origin(Any);
 
     let app = Router::new()
@@ -168,6 +251,11 @@ async fn main() {
         .route("/stream/{id}", patch(patch_stream_handler))
         .route("/stream/{id}", delete(reset_stream_handler))
         .route("/stream/{id}/purge", delete(delete_stream_handler))
+        .route("/stream/{id}/prune", post(prune_stream_handler))
+        // Time markers (raid/group slices)
+        .route("/stream/{id}/marker", post(add_marker_handler))
+        .route("/stream/{id}/marker/{mid}", delete(delete_marker_handler))
+        .route("/stream/{id}/markers", get(list_markers_handler))
         // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
@@ -385,6 +473,7 @@ async fn patch_stream_handler(
             entry.server.clone(),
             entry.player_name.clone(),
             entry.public_stream,
+            entry.is_replay,
         )
     }; // write lock released here
 
@@ -397,6 +486,7 @@ async fn patch_stream_handler(
         "server":       snapshot.4,
         "player":       snapshot.5,
         "public_stream": snapshot.6,
+        "is_replay":    snapshot.7,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         warn!("Patch [{stream_id}]: failed to rewrite meta: {e}");
@@ -497,6 +587,238 @@ async fn delete_stream_handler(
 
     info!("Delete [{stream_id}] [{ip}]: stream removed");
     StatusCode::OK.into_response()
+}
+
+// ── Stream prune (owner or admin) ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PruneStreamBody {
+    /// Delete everything older than this many days (measured against the
+    /// event log timestamps). Mutually exclusive with `before`.
+    days: Option<u64>,
+    /// Delete everything with a log timestamp older than this unix time.
+    before: Option<u64>,
+}
+
+/// `POST /stream/:id/prune` — delete batches older than a cutoff and reclaim
+/// disk space. Sessions that no longer own any batch are dropped.
+///
+/// Authenticated with the per-stream `stream_token` (the owner credential the
+/// pushing client holds) or the global admin token. The shareable view token
+/// deliberately cannot prune: anyone holding a view link can watch, and must
+/// not be able to destroy history.
+async fn prune_stream_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+    Json(body): Json<PruneStreamBody>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let token = match ingest::extract_bearer(&headers) {
+        Some(t) => t,
+        None => {
+            warn!("Prune [{stream_id}] [{ip}]: missing token");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+
+    let cutoff = match (body.days, body.before) {
+        (Some(days), None) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            now.saturating_sub(days.saturating_mul(86_400))
+        }
+        (None, Some(before)) => before,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "body must contain exactly one of: days, before",
+            )
+                .into_response();
+        }
+    };
+
+    // Owner (stream token) or admin may prune; clone handles under a short lock.
+    let handles = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(entry) => {
+                let authorized = froklog::auth::tokens_match(&entry.stream_token, &token)
+                    || state.is_admin_token(&token);
+                if !authorized {
+                    warn!("Prune [{stream_id}] [{ip}]: bad token");
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                (
+                    Arc::clone(&entry.journal),
+                    Arc::clone(&entry.session_index),
+                    Arc::clone(&entry.markers),
+                )
+            }
+        }
+    };
+
+    match prune_stream_data(&handles.0, &handles.1, &handles.2, cutoff).await {
+        Ok((deleted_batches, deleted_sessions)) => {
+            info!(
+                "Prune [{stream_id}] [{ip}]: {deleted_batches} batches, {deleted_sessions} sessions removed (cutoff {cutoff})"
+            );
+            Json(json!({
+                "deleted_batches": deleted_batches,
+                "deleted_sessions": deleted_sessions,
+                "cutoff": cutoff,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            warn!("Prune [{stream_id}] [{ip}]: failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Prune one stream's batches older than `cutoff` and clean up its sessions
+/// and markers. Shared by the prune endpoint and the retention sweep.
+async fn prune_stream_data(
+    journal: &journal::SharedJournal,
+    session_index: &session_index::SharedSessionIndex,
+    markers: &markers::SharedMarkers,
+    cutoff: u64,
+) -> std::io::Result<(usize, usize)> {
+    let (deleted_batches, min_remaining) = {
+        let mut j = journal.write().await;
+        j.prune(cutoff)?
+    };
+    let deleted_sessions = {
+        let mut si = session_index.write().await;
+        si.prune(min_remaining)?
+    };
+    markers.prune(cutoff)?;
+    Ok((deleted_batches, deleted_sessions))
+}
+
+// ── Time markers (raid/group slices) ─────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AddMarkerBody {
+    /// e.g. "raid_start", "raid_end", "group_start", "group_end".
+    kind: String,
+    #[serde(default)]
+    label: String,
+    /// True-epoch log-time seconds. Omitted = the server's current time,
+    /// which matches live event timestamps now that both are true epoch.
+    ts: Option<u64>,
+}
+
+/// `POST /stream/:id/marker` — set a time marker. Owner (stream token) or admin.
+async fn add_marker_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+    Json(body): Json<AddMarkerBody>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let Some(markers) = owner_markers(&state, &stream_id, &headers).await else {
+        warn!("Marker [{stream_id}] [{ip}]: bad or missing token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if body.kind.is_empty() || body.kind.len() > 64 || body.label.len() > 200 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let ts = body.ts.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    });
+    match markers.add(ts, &body.kind, &body.label) {
+        Ok(m) => {
+            info!("Marker [{stream_id}] [{ip}]: {} @ {ts}", m.kind);
+            Json(m).into_response()
+        }
+        Err(e) => {
+            warn!("Marker [{stream_id}] [{ip}]: write failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `DELETE /stream/:id/marker/:mid` — remove a marker. Owner or admin.
+async fn delete_marker_handler(
+    Path((stream_id, marker_id)): Path<(String, i64)>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let Some(markers) = owner_markers(&state, &stream_id, &headers).await else {
+        warn!("Marker delete [{stream_id}] [{ip}]: bad or missing token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match markers.delete(marker_id) {
+        Ok(true) => StatusCode::OK.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            warn!("Marker delete [{stream_id}] [{ip}]: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `GET /stream/:id/markers?vtok=` — list markers. View-token auth (read-only).
+async fn list_markers_handler(
+    Path(stream_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
+    State(state): State<ServerState>,
+) -> Response {
+    let markers = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(entry) => {
+                let valid = params
+                    .vtok
+                    .as_deref()
+                    .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
+                    .unwrap_or(false);
+                if !valid {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                Arc::clone(&entry.markers)
+            }
+        }
+    };
+    match markers.list() {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            warn!("Markers [{stream_id}]: list failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Resolve the stream's markers handle when the request carries the stream
+/// token or the admin token. `None` = unauthorized or unknown stream.
+async fn owner_markers(
+    state: &ServerState,
+    stream_id: &str,
+    headers: &HeaderMap,
+) -> Option<markers::SharedMarkers> {
+    let token = ingest::extract_bearer(headers)?;
+    let reg = state.registry.read().await;
+    let entry = reg.get(stream_id)?;
+    let authorized =
+        froklog::auth::tokens_match(&entry.stream_token, &token) || state.is_admin_token(&token);
+    if authorized {
+        Some(Arc::clone(&entry.markers))
+    } else {
+        None
+    }
 }
 
 // ── HTTP stats snapshot (poll fallback for viewers) ───────────────────────────

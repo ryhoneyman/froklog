@@ -1,15 +1,18 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, watch, RwLock};
-use tracing::warn;
 
 use crate::journal::{Journal, SharedJournal};
+use crate::markers::{Markers, SharedMarkers};
 use crate::session_index::{SessionIndex, SharedSessionIndex};
 
-const BROADCAST_CAPACITY: usize = 64;
+// Sized so a viewer parked in replay/pause for a few minutes can still drain
+// the live backlog on returning to Live instead of hitting Lagged and
+// silently missing batches (~1 batch/sec live).
+const BROADCAST_CAPACITY: usize = 256;
 
 /// State for a single player's log stream hosted on the server.
 pub struct StreamEntry {
@@ -36,12 +39,18 @@ pub struct StreamEntry {
     pub journal: SharedJournal,
     /// Session boundary index — one entry per play session within this journal.
     pub session_index: SharedSessionIndex,
+    /// User-defined time markers (raid/group start-end slices).
+    pub markers: SharedMarkers,
     /// Fan-out channel: every viewer WebSocket subscribes to this.
     /// Carries raw EventBatch JSON strings (the same content written to disk).
     pub broadcast_tx: broadcast::Sender<Arc<String>>,
     /// True while a Windows client is actively connected on the ingest WS.
     /// Shared atomically so viewer WS handlers can observe disconnection.
     pub client_connected: Arc<AtomicBool>,
+    /// Streamer's UTC offset in seconds (local = UTC + offset), reported by
+    /// the client's hello message. Used to label sessions with the streamer's
+    /// calendar dates. 0 until a client reports it.
+    pub utc_offset_secs: Arc<AtomicI64>,
 }
 
 impl StreamEntry {
@@ -67,6 +76,7 @@ impl StreamEntry {
         }
         let journal = Arc::new(tokio::sync::RwLock::new(journal_inner));
         let session_index = Arc::new(tokio::sync::RwLock::new(si_inner));
+        let markers = Arc::new(Markers::open(data_dir, &stream_id)?);
 
         let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (public_revoke_tx, _) = watch::channel(());
@@ -82,19 +92,11 @@ impl StreamEntry {
             public_revoke_tx,
             journal,
             session_index,
+            markers,
             broadcast_tx,
             client_connected: Arc::new(AtomicBool::new(false)),
+            utc_offset_secs: Arc::new(AtomicI64::new(0)),
         })
-    }
-
-    /// Append a raw EventBatch JSON string to the on-disk journal.
-    /// `wall_ts` is the server-side unix seconds when the batch was received.
-    /// `log_ts` is the max EQ log-event unix timestamp from the batch.
-    pub async fn append_journal(&self, wall_ts: u64, log_ts: Option<u64>, seq: u32, json: &str) {
-        let mut j = self.journal.write().await;
-        if let Err(e) = j.append(wall_ts, log_ts, seq, json) {
-            warn!("Journal [{}]: write error: {e}", self.stream_id);
-        }
     }
 }
 
@@ -206,8 +208,9 @@ impl StreamRegistry {
                 public_stream: e.public_stream,
                 is_replay: e.is_replay,
                 journal: e.journal.clone(),
-                journal_path: self.data_dir.join(&e.stream_id).join("journal.jsonl"),
+                journal_path: self.data_dir.join(&e.stream_id).join("froklog.db"),
                 session_index: e.session_index.clone(),
+                markers: e.markers.clone(),
             })
             .collect()
     }
@@ -229,6 +232,8 @@ pub struct AdminStreamInfo {
     pub journal_path: PathBuf,
     /// Handle to the session index for per-session breakdown.
     pub session_index: SharedSessionIndex,
+    /// Handle to the stream's time markers (retention sweep prunes these too).
+    pub markers: SharedMarkers,
 }
 
 /// Thread-safe handle to the registry shared across all Axum handlers.

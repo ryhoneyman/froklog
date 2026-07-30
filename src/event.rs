@@ -165,7 +165,35 @@ pub enum CombatEvent {
     /// Item stored in Dragon Hoard from a corpse.
     ItemHoard { ts: u32, mob: u32, item: String },
     /// Item consumed to create an upgraded item (enchant/enhance loot).
-    ItemEnhance { ts: u32, mob: u32, item: String },
+    /// `result` is what you are left holding, including its new tier suffix.
+    ItemEnhance {
+        ts: u32,
+        mob: u32,
+        item: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+    },
+    /// Two held items merged at the merchant//merge UI rather than on a corpse.
+    /// There is no mob involved, so `mob` is 0.
+    ItemMerge { ts: u32, mob: u32, result: String },
+    /// Crowd-control state change: `tgt` was parked (mesmerized/enthralled)
+    /// or, with `off`, released ("has been awakened by X"). A parked mob is
+    /// deliberately idle — viewers keep its encounter open instead of timing
+    /// it out, and a mez on an unengaged add registers it as a pull member
+    /// before it ever swings.
+    Cc {
+        ts: u32,
+        mob: u32,
+        tgt: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        off: bool,
+    },
+    /// Combat heartbeat: a player-state line (stunned, out of mana,
+    /// interrupted, life-drained) proving the fight is ongoing while the
+    /// player looks idle and no mob is named. Throttled to one per
+    /// log-second. Viewers use these to keep encounter windows open.
+    #[serde(rename = "hb")]
+    Heartbeat { ts: u32 },
 }
 
 impl CombatEvent {
@@ -189,7 +217,10 @@ impl CombatEvent {
             | Self::ItemLoot { ts, .. }
             | Self::ItemSell { ts, .. }
             | Self::ItemHoard { ts, .. }
-            | Self::ItemEnhance { ts, .. } => *ts,
+            | Self::ItemEnhance { ts, .. }
+            | Self::ItemMerge { ts, .. }
+            | Self::Cc { ts, .. }
+            | Self::Heartbeat { ts } => *ts,
         }
     }
 }
