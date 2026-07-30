@@ -112,6 +112,12 @@
 
   /* ── Main layout ── */
   #layout { display: flex; height: calc(100vh - 45px - var(--tl-height, 0px)); overflow: hidden; }
+  .col-resizer {
+    flex: 0 0 5px; cursor: col-resize; background: transparent;
+    margin-left: -1px; /* overlaps the panel border so the grab zone is easy to hit */
+    transition: background .12s;
+  }
+  .col-resizer:hover, .col-resizer.dragging { background: #3a4a6a; }
 
   /* ── Mob panel ── */
   #mobs {
@@ -410,11 +416,13 @@
     <div class="panel-hdr">Mobs</div>
     <div id="mob-scroll"><div id="mob-rows"></div></div>
   </div>
+  <div class="col-resizer" data-target="mobs" title="Drag to resize — double-click to reset"></div>
 
   <div id="summary">
     <div id="sum-header-area"></div>
     <div id="sum-scroll"><div id="sum-rows"></div></div>
   </div>
+  <div class="col-resizer" data-target="summary" title="Drag to resize — double-click to reset"></div>
 
   <div id="cards-wrap">
     <div id="graph-header">
@@ -2593,6 +2601,53 @@ if (SESSIONS_PATH) {
 })();
 
 connectWS();
+
+// ── Resizable columns ─────────────────────────────────────────────────────────
+// Drag the divider right of the Mobs or Summary panel to resize it; widths
+// persist per browser (localStorage). Double-click a divider to reset.
+(function initColResizers() {
+  for (const key of ['mobs', 'summary']) {
+    const saved = parseInt(localStorage.getItem('colw-' + key), 10);
+    if (saved >= 120 && saved <= 800) {
+      const el = document.getElementById(key);
+      el.style.width = saved + 'px';
+      el.style.minWidth = saved + 'px';
+    }
+  }
+  document.querySelectorAll('.col-resizer').forEach(rz => {
+    const target = document.getElementById(rz.dataset.target);
+    rz.addEventListener('click', e => e.stopPropagation()); // keep selection
+    rz.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      target.style.width = '';
+      target.style.minWidth = '';
+      localStorage.removeItem('colw-' + rz.dataset.target);
+    });
+    rz.addEventListener('mousedown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startW = target.getBoundingClientRect().width;
+      rz.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      const move = ev => {
+        const w = Math.max(120, Math.min(800, startW + ev.clientX - startX));
+        target.style.width = w + 'px';
+        target.style.minWidth = w + 'px';
+      };
+      const up = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        rz.classList.remove('dragging');
+        document.body.style.cursor = '';
+        localStorage.setItem('colw-' + rz.dataset.target,
+          Math.round(target.getBoundingClientRect().width));
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  });
+})();
 </script>
 </body>
 </html>
