@@ -29,7 +29,13 @@ fn split_by_log_time(batch: froklog::event::EventBatch) -> Vec<froklog::event::E
         return vec![batch];
     }
     let base_seq = batch.seq;
-    let num_windows = ((max_ts - min_ts) / BATCH_SPLIT_SECS + 1) as usize;
+    // Cap the bucket count: one corrupt timestamp next to a sane one would
+    // otherwise request one Vec per 60 s window across a decades-wide span
+    // (an allocation-bomb from a single bad line). 20k windows ≈ two weeks of
+    // log time per batch — far beyond any legitimate push; outliers land in
+    // the last bucket.
+    const MAX_WINDOWS: usize = 20_000;
+    let num_windows = (((max_ts - min_ts) / BATCH_SPLIT_SECS + 1) as usize).min(MAX_WINDOWS);
     let mut buckets: Vec<Vec<froklog::event::CombatEvent>> = vec![Vec::new(); num_windows];
     for event in batch.events {
         let slot = ((event.ts() as u64 - min_ts) / BATCH_SPLIT_SECS) as usize;

@@ -142,6 +142,37 @@ timestamps match the independently-computed true epoch exactly (old code was
 prune-by-cutoff deletes and reclaims, and a pruned journal reloads with correct
 retroactive session boundaries after a restart.
 
+## 8. Server hardening — five bugs resolved
+
+- **Stored XSS on viewer pages.** The player name (and other client-supplied
+  values) were pasted into the viewer HTML/JavaScript without escaping — and
+  stream creation can be unauthenticated, so anyone could register a "player"
+  whose name was a script and have it run in other people's browsers. All
+  template values are now escaped for the context they land in (HTML for the
+  badge, JS-string for the constants).
+- **Rate-limiter identity spoofing.** The server believed `X-Forwarded-For`
+  from any connection, so anyone reaching the port directly could present a
+  fresh fake IP per request and bypass rate limits and bans entirely. New
+  `trusted_proxy` config: when set, forwarded headers are honored only from
+  that address. (Left empty it behaves as before, for setups that rely on it —
+  set it in any internet-facing deployment.)
+- **Allocation bomb from one bad timestamp.** A batch containing one corrupt
+  timestamp next to a sane one made the batch-splitter allocate one bucket per
+  60-second window across the whole span — a single mangled line could request
+  tens of millions of allocations. Bucket count is now capped (~two weeks of
+  log time per batch); outliers fold into the last bucket.
+- **Panic race on stream deletion.** Deleting a stream at the exact moment a
+  viewer was connecting could crash that connection's handler on an
+  "impossible" lookup. It now returns 404.
+- **Silent admin lockout on config typo.** A malformed server config was
+  silently replaced with defaults — including a freshly generated random admin
+  token — with no message, because the warning was logged before logging was
+  initialized. Warnings are now carried past logger startup and printed, and
+  an existing (possibly just-mistyped) config file is never overwritten with
+  defaults.
+- Also: updating a stream's public flag no longer silently loses its
+  "recorded replay" status across a server restart.
+
 ---
 
 *(subsequent changes appended as they land)*

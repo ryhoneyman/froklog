@@ -26,11 +26,23 @@ use streams::{new_registry, SharedRegistry, StreamEntry};
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
+/// When set (config `trusted_proxy`), forwarded headers are honored ONLY for
+/// connections arriving from this address. Without it, anyone who can reach
+/// the port directly can spoof X-Forwarded-For and bypass the per-IP rate
+/// limiter/ban with a fresh fake address per request.
+static TRUSTED_PROXY: std::sync::OnceLock<Option<std::net::IpAddr>> = std::sync::OnceLock::new();
+
 /// Returns the best available client IP: the leftmost address in
 /// `X-Forwarded-For` (set by Caddy / any trusted reverse proxy), then
 /// `X-Real-IP`, then the raw TCP peer address as a fallback for direct
 /// connections.
 pub(crate) fn client_ip(headers: &axum::http::HeaderMap, peer: SocketAddr) -> String {
+    // If a trusted proxy is configured, only believe forwarded headers from it.
+    if let Some(Some(trusted)) = TRUSTED_PROXY.get() {
+        if peer.ip() != *trusted {
+            return peer.ip().to_string();
+        }
+    }
     let forwarded = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -98,12 +110,39 @@ impl ServerState {
 #[tokio::main]
 async fn main() {
     let cfg_path = config::config_path();
-    let mut cfg = config::load_or_create(&cfg_path);
+    let (mut cfg, cfg_warnings) = config::load_or_create(&cfg_path);
     config::apply_env_overrides(&mut cfg);
 
     tracing_subscriber::fmt()
         .with_env_filter(cfg.rust_log.as_str())
         .init();
+
+    // Emit warnings collected before tracing existed (config parse errors
+    // used to vanish here — including the one that regenerates the admin token).
+    for w in &cfg_warnings {
+        warn!("{w}");
+    }
+    info!("Config: {}", cfg_path.display());
+
+    // Only honor X-Forwarded-For from the configured reverse proxy (if any).
+    let trusted_proxy = if cfg.trusted_proxy.is_empty() {
+        None
+    } else {
+        match cfg.trusted_proxy.parse::<std::net::IpAddr>() {
+            Ok(ip) => {
+                info!("Trusting forwarded headers only from proxy {ip}");
+                Some(ip)
+            }
+            Err(_) => {
+                warn!(
+                    "Invalid trusted_proxy '{}' — forwarded headers will be trusted from ANY connection",
+                    cfg.trusted_proxy
+                );
+                None
+            }
+        }
+    };
+    let _ = TRUSTED_PROXY.set(trusted_proxy);
 
     let stream_password = if cfg.stream_password.is_empty() {
         None
@@ -429,6 +468,7 @@ async fn patch_stream_handler(
             entry.server.clone(),
             entry.player_name.clone(),
             entry.public_stream,
+            entry.is_replay,
         )
     }; // write lock released here
 
@@ -441,6 +481,7 @@ async fn patch_stream_handler(
         "server":       snapshot.4,
         "player":       snapshot.5,
         "public_stream": snapshot.6,
+        "is_replay":    snapshot.7,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         warn!("Patch [{stream_id}]: failed to rewrite meta: {e}");

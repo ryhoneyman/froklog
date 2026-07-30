@@ -66,12 +66,14 @@ pub async fn stream_page_handler(
             };
         let ws_path = format!("/stream/{stream_id}/ws?vtok={vtok}");
         let sessions_path = format!("/stream/{stream_id}/sessions?vtok={vtok}");
+        // player_name and vtok are client-supplied: HTML-escape for the badge
+        // and JS-escape for the string literals to prevent stored/reflected XSS.
         let html = include_str!("../../../static/stream.html")
-            .replace("__STREAM_ID__", &stream_id)
-            .replace("__VIEW_TOKEN__", &vtok)
-            .replace("__PLAYER_NAME__", &player_name)
-            .replace("__WS_PATH__", &ws_path)
-            .replace("__SESSIONS_PATH__", &sessions_path)
+            .replace("__STREAM_ID__", &js_str_escape(&stream_id))
+            .replace("__VIEW_TOKEN__", &js_str_escape(&vtok))
+            .replace("__PLAYER_NAME__", &crate::admin::html_escape(&player_name))
+            .replace("__WS_PATH__", &js_str_escape(&ws_path))
+            .replace("__SESSIONS_PATH__", &js_str_escape(&sessions_path))
             .replace("__SESSION_LOG_TS__", &session_log_ts.to_string())
             .replace("__SESSION_END_LOG_TS__", &session_end_log_ts.to_string());
         Html(html).into_response()
@@ -98,14 +100,20 @@ pub async fn stream_ws_handler(
     }
 
     // Capture handles before the upgrade so we never miss a live batch.
-    let (rx, journal, client_connected) = {
+    // The stream can be purged between token validation and this lookup —
+    // return 404 instead of panicking on that race.
+    let handles = {
         let reg = state.registry.read().await;
-        let entry = reg.get(&stream_id).expect("validated above");
-        (
-            entry.broadcast_tx.subscribe(),
-            Arc::clone(&entry.journal),
-            Arc::clone(&entry.client_connected),
-        )
+        reg.get(&stream_id).map(|entry| {
+            (
+                entry.broadcast_tx.subscribe(),
+                Arc::clone(&entry.journal),
+                Arc::clone(&entry.client_connected),
+            )
+        })
+    };
+    let Some((rx, journal, client_connected)) = handles else {
+        return StatusCode::NOT_FOUND.into_response();
     };
 
     info!(
@@ -187,6 +195,25 @@ enum ServerMsg {
 /// Wrap a raw EventBatch JSON string in our WS envelope without re-parsing.
 fn wrap_batch(json: &str) -> String {
     format!(r#"{{"t":"batch","batch":{}}}"#, json)
+}
+
+/// Escape a value for interpolation inside a single-quoted JS string literal
+/// in the viewer template. Prevents breaking out of the string (or the
+/// surrounding <script> block) via quotes, backslashes, or `</script>`.
+fn js_str_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '"' => out.push_str("\\\""),
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '\n' | '\r' => out.push_str(" "),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -697,12 +724,15 @@ pub async fn player_page_handler(
             };
             let ws_path = format!("/player/{game}/{server}/{name}/ws");
             let sessions_path = format!("/player/{game}/{server}/{name}/sessions");
+            // Path segments and player_name are client-supplied: HTML-escape
+            // the badge, JS-escape the string literals (stored XSS guard —
+            // stream creation may be unauthenticated).
             let html = include_str!("../../../static/stream.html")
-                .replace("__STREAM_ID__", &stream_id)
+                .replace("__STREAM_ID__", &js_str_escape(&stream_id))
                 .replace("__VIEW_TOKEN__", "")
-                .replace("__PLAYER_NAME__", &player_name)
-                .replace("__WS_PATH__", &ws_path)
-                .replace("__SESSIONS_PATH__", &sessions_path)
+                .replace("__PLAYER_NAME__", &crate::admin::html_escape(&player_name))
+                .replace("__WS_PATH__", &js_str_escape(&ws_path))
+                .replace("__SESSIONS_PATH__", &js_str_escape(&sessions_path))
                 .replace("__SESSION_LOG_TS__", &session_log_ts.to_string())
                 .replace("__SESSION_END_LOG_TS__", &session_end_log_ts.to_string());
             Html(html).into_response()
