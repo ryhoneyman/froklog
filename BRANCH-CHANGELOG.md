@@ -528,6 +528,40 @@ controls read as a glitch. The bar button (and its orphaned CSS/handle) are
 removed; the pill is the single Go Live control, visible exactly when going
 live is possible and you aren't already there.
 
+## 29. Heal traffic is not playerhood evidence
+
+Bug resolved: Emperor Crush vanished from the parse — classified as a
+*player*. His priest adds healed him, and the heal-ghost rule from entry 27
+treated received-heals as proof of playerhood, so the ghost survived and
+every mob event for him was discarded. Mobs heal each other constantly;
+heals in either direction prove nothing. The corrected rule: only damage
+dealt from a player position or /who class data makes a name a player.
+Verified live: the session rebuilt with 62 encounters including two
+★ Emperor Crush pulls that previously didn't exist.
+
+## 30. Owner-curated named NPCs
+
+The named/trash heuristic (capitalization + corpse-count demotion) is
+game-derived but not infallible, and the game offers no authoritative list —
+so the stream owner's judgment now layers on top. Click the ☆/★ on any mob
+row and choose: Always named, Never named, or Automatic. Overrides live in
+the stream's SQLite database (`mob_overrides` table, name-keyed), so they
+apply to every viewer of the stream and survive reloads.
+
+Design choices: writes accept the VIEW token (curation happens on the viewer
+page, which never holds the stream token) as well as stream/admin tokens;
+the public tokenless page reads overrides (labels must match everywhere) but
+gets no toggle. Deleting the row — not a third stored state — is
+"automatic", so the table only ever holds actual decisions.
+
+## 31. Pulls with more than one named
+
+A pull holding two nameds (Ambassador D`Vinn + Emperor Crush pulled
+together) was labeled with whichever engaged first, hiding the second.
+Encounters now collect every named member; headers, pull rows, and the
+playback dropdown show "★ A + B" (two spelled out, "+N" beyond). The
+first-engaged named still anchors anything keyed on a single name.
+
 ---
 
 *(subsequent changes appended as they land)*

@@ -166,6 +166,24 @@
   .mob-dot { font-size: 9px; margin-right: 3px; flex-shrink: 0; line-height: 1; }
   .mob-name { flex: 1; font-size: 11px; overflow: hidden; white-space: nowrap; }
   .mob-time { font-size: 10px; color: #666; margin-left: 4px; flex-shrink: 0; }
+  /* Named-status toggle: hidden until the row is hovered so the list stays
+     clean; always shown when an override pins the automatic heuristic. */
+  .mob-star { font-size: 10px; margin-left: 4px; flex-shrink: 0; cursor: pointer;
+              color: #555; visibility: hidden; }
+  .mob-row:hover .mob-star { visibility: visible; }
+  .mob-star.star-named { color: #e8c76a; }
+  .mob-star.star-ovr { visibility: visible; }
+  #named-menu {
+    position: fixed; z-index: 90; background: #1c1c22; border: 1px solid #3a3a44;
+    border-radius: 6px; padding: 4px 0; font-size: 12px; min-width: 170px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.5); display: none;
+  }
+  #named-menu .nm-title { padding: 3px 12px 5px; color: #8a8a99; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid #2a2a32;
+    margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #named-menu .nm-opt { padding: 4px 12px; cursor: pointer; color: #cdd6f4; }
+  #named-menu .nm-opt:hover { background: #26262e; }
+  #named-menu .nm-opt.nm-cur { color: #e8c76a; }
 
   /* ── Summary panel ── */
   #summary {
@@ -519,11 +537,104 @@ function noteKillForDemotion(name, ts) {
   }
   lastKillTs.set(key, ts);
 }
+// Owner-curated overrides, fetched from the server (per-stream, shared by
+// every viewer of the stream): name(lower) -> 'named' | 'trash'. The owner's
+// judgment beats the heuristic in both directions — pin a modest-looking
+// watched NPC as ★, or strip a capitalized farm-elite the corpse-count
+// demotion hasn't caught yet.
+const mobOverrides = new Map();
+function overridesUrl() {
+  // /stream/{id} pages carry the view token; /player/... pages are public.
+  if (location.pathname.startsWith('/player/')) {
+    return location.pathname.replace(/\/$/, '') + '/mob_overrides';
+  }
+  const m = location.pathname.match(/^\/stream\/[^/]+/);
+  return m ? `${m[0]}/mob_overrides?vtok=${encodeURIComponent(VIEW_TOKEN)}` : null;
+}
+async function fetchMobOverrides() {
+  const url = overridesUrl();
+  if (!url) return;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return;
+    mobOverrides.clear();
+    for (const o of await r.json()) mobOverrides.set(o.name, o.kind);
+    overridesRev++;
+    scheduleRender();
+  } catch (e) { /* offline viewer keeps the heuristic */ }
+}
+// Curation needs a token the server will accept; the public tokenless page
+// is read-only and simply never shows the toggle.
+function canCurate() { return VIEW_TOKEN !== ''; }
+async function setMobOverride(name, kind) {
+  const m = location.pathname.match(/^\/stream\/[^/]+/);
+  if (!m) return;
+  const key = name.toLowerCase();
+  if (kind === 'auto') mobOverrides.delete(key); else mobOverrides.set(key, kind);
+  overridesRev++;
+  scheduleRender();
+  try {
+    await fetch(`${m[0]}/mob_override?vtok=${encodeURIComponent(VIEW_TOKEN)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, kind }),
+    });
+  } catch (e) { /* local view already updated; next reload re-syncs */ }
+}
+// Bumped whenever the override set changes so caches keyed on the pull set
+// (the encounter dropdown) know to rebuild.
+let overridesRev = 0;
 function isNamedMob(name) {
+  const ovr = mobOverrides.get(name.toLowerCase());
+  if (ovr) return ovr === 'named';
   const c = name[0];
   return c === c.toUpperCase() && c !== c.toLowerCase()
     && !lowercaseNames.has(name.toLowerCase())
     && !demotedNames.has(name.toLowerCase());
+}
+// The heuristic's verdict alone, for showing "Automatic" state in the menu.
+function isAutoNamed(name) {
+  const c = name[0];
+  return c === c.toUpperCase() && c !== c.toLowerCase()
+    && !lowercaseNames.has(name.toLowerCase())
+    && !demotedNames.has(name.toLowerCase());
+}
+
+// ── Named-status menu (click the ☆/★ on a mob row) ──────────────────────────
+let namedMenuEl = null;
+function closeNamedMenu() { if (namedMenuEl) namedMenuEl.style.display = 'none'; }
+function showNamedMenu(ev, name) {
+  ev.stopPropagation();
+  if (!canCurate()) return;
+  if (!namedMenuEl) {
+    namedMenuEl = document.createElement('div');
+    namedMenuEl.id = 'named-menu';
+    document.body.appendChild(namedMenuEl);
+    document.addEventListener('click', closeNamedMenu);
+  }
+  const ovr = mobOverrides.get(name.toLowerCase()) || 'auto';
+  const auto = isAutoNamed(name) ? 'named' : 'trash';
+  const opt = (kind, label) => {
+    const cur = ovr === kind ? ' nm-cur' : '';
+    return `<div class="nm-opt${cur}" data-kind="${kind}">${label}</div>`;
+  };
+  namedMenuEl.innerHTML =
+    `<div class="nm-title">${name.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>` +
+    opt('named', '★ Always named') +
+    opt('trash', '☆ Never named') +
+    opt('auto', `↺ Automatic (${auto === 'named' ? 'named' : 'trash'})`);
+  for (const el of namedMenuEl.querySelectorAll('.nm-opt')) {
+    el.addEventListener('click', function(e) {
+      e.stopPropagation();
+      closeNamedMenu();
+      setMobOverride(name, this.dataset.kind);
+    });
+  }
+  namedMenuEl.style.display = 'block';
+  // Position near the click, nudged inside the viewport.
+  const mw = 190, mh = 110;
+  namedMenuEl.style.left = Math.min(ev.clientX, window.innerWidth - mw) + 'px';
+  namedMenuEl.style.top  = Math.min(ev.clientY, window.innerHeight - mh) + 'px';
 }
 const allMobOrderEver = []; // mob_ids in first-appearance order (oldest first)
 // Loot cache that spans seeks: populated from ALL cached batches, not just up
@@ -774,6 +885,15 @@ function tlEntry(tl, mob, name) {
   if (!tl[mob]) tl[mob] = {};
   if (!tl[mob][name]) tl[mob][name] = [];
   return tl[mob][name];
+}
+// "★ A" / "★ A + B" / "★ A + B +2" — every named in the pull, first-engaged
+// first, capped at two spelled out so headers stay readable.
+function encNamedLabel(enc) {
+  const all = enc.namedAll || (enc.named ? [enc.named] : []);
+  if (!all.length) return null;
+  const shown = all.slice(0, 2).join(' + ');
+  const extra = all.length > 2 ? ` +${all.length - 2}` : '';
+  return `${shown}${extra}`;
 }
 function trackMob(mob, name, ts) {
   // DoT ticks on a dead mob arrive as "X's corpse" — strip the suffix so the
@@ -1319,8 +1439,15 @@ function buildRenderState() {
     curEnc.any_active = curEnc.any_active || m.is_active;
     // NAMED detection: a capitalized proper-noun member (never seen
     // lowercase) marks this as a named encounter, vs trash; adds
-    // ("Marrowbane pet") don't override the named itself.
-    if (!curEnc.named && isNamedMob(m.name) && !m.name.endsWith(' pet')) curEnc.named = m.name;
+    // ("Marrowbane pet") don't override the named itself. A pull can hold
+    // MORE than one named (D`Vinn + Emperor Crush pulled together) — all of
+    // them are collected so the label can say so, with the first-engaged one
+    // remaining `named` for everything keyed on a single name.
+    if (isNamedMob(m.name) && !m.name.endsWith(' pet')) {
+      curEnc.namedAll = curEnc.namedAll || [];
+      if (!curEnc.namedAll.includes(m.name)) curEnc.namedAll.push(m.name);
+      if (!curEnc.named) curEnc.named = m.name;
+    }
     const nk = m.name.toLowerCase();
     curEnc.names[nk] = (curEnc.names[nk] || 0) + 1;
   }
@@ -1542,7 +1669,7 @@ function buildFightLabel(d) {
     if (enc) {
       // Title matches the pull list — the named (true casing) or "Pull #N";
       // the composition rides along as a small subtitle.
-      const title = enc.named ? `★ ${enc.named}` : `Pull #${enc.num}`;
+      const title = enc.named ? `★ ${encNamedLabel(enc)}` : `Pull #${enc.num}`;
       const comp = Object.entries(enc.names)
         .sort((a, b) => b[1] - a[1])
         .map(([n, c]) => c > 1 ? `${n} ×${c}` : n)
@@ -1714,7 +1841,7 @@ function renderMobList(d) {
   const encSel = document.getElementById('enc-select');
   if (encSel) {
     const encsAll = d.encounters || [];
-    const sig = encsAll.length + ':' + encsAll.filter(e => e.named).length
+    const sig = encsAll.length + ':' + overridesRev + ':' + encsAll.filter(e => e.named).length
       + ':' + (encsAll.length ? encsAll[encsAll.length - 1].key : 0);
     if (encSel.dataset.sig !== sig) {
       encSel.dataset.sig = sig;
@@ -1722,7 +1849,7 @@ function renderMobList(d) {
         + [...encsAll].reverse().map(e => {
             const t = new Date(e.start_ts * 1000)
               .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-            const label = e.named ? `★ ${e.named} · ${t}` : `Pull #${e.num} · ${t}`;
+            const label = e.named ? `★ ${encNamedLabel(e)} · ${t}` : `Pull #${e.num} · ${t}`;
             return `<option value="${e.key}">${label}</option>`;
           }).join('');
     }
@@ -1767,7 +1894,7 @@ function renderMobList(d) {
       const startClock = new Date(enc.start_ts * 1000)
         .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       const label = enc.named
-        ? `★ ${enc.named} · ${startClock}`
+        ? `★ ${encNamedLabel(enc)} · ${startClock}`
         : `Pull #${enc.num} · ${startClock}`;
       const cls = 'enc-row'
         + (enc.named ? ' enc-named' : '')
@@ -1817,20 +1944,37 @@ function renderMobList(d) {
       row = document.createElement('div');
       row.dataset.mobId = idStr;
       row.addEventListener('click', function(e) { e.stopPropagation(); selectMob(+this.dataset.mobId); });
-      row.innerHTML = '<span class="mob-dot">●</span><span class="mob-name"></span><span class="mob-time"></span>';
+      row.innerHTML = '<span class="mob-dot">●</span><span class="mob-name"></span><span class="mob-star"></span><span class="mob-time"></span>';
       row._dot  = row.children[0];
       row._name = row.children[1];
-      row._time = row.children[2];
+      row._star = row.children[2];
+      row._time = row.children[3];
+      row._star.addEventListener('click', function(e) {
+        showNamedMenu(e, this.parentNode._mobName || '');
+      });
     }
+    row._mobName = m.name;
 
     if (row.className          !== newCls)   row.className          = newCls;
     if (row._dot.style.color   !== dotColor) row._dot.style.color   = dotColor;
-    // Named (capitalized proper-noun) mobs render gold unless dead/outside.
+    // Named (owner override or capitalized proper-noun) mobs render gold
+    // unless dead/outside.
     const finalNameColor = (!outside && !m.is_dead && isNamedMob(m.name)) ? '#e8c76a' : nameColor;
     if (row._name.style.color  !== finalNameColor) row._name.style.color = finalNameColor;
     const nameText = truncate(m.name, 18);
     if (row._name.textContent  !== nameText)  row._name.textContent = nameText;
     if (row._time.textContent  !== timeStr)   row._time.textContent = timeStr;
+    // Named-status toggle: ★/☆ shown on hover (always when pinned by an
+    // override). Public tokenless pages can't curate, so no toggle there.
+    if (canCurate()) {
+      const named = isNamedMob(m.name);
+      const pinned = mobOverrides.has(m.name.toLowerCase());
+      const starTxt = named ? '★' : '☆';
+      const starCls = 'mob-star' + (named ? ' star-named' : '') + (pinned ? ' star-ovr' : '');
+      if (row._star.textContent !== starTxt) row._star.textContent = starTxt;
+      if (row._star.className   !== starCls) row._star.className   = starCls;
+      row._star.title = pinned ? 'Named status (pinned by you)' : 'Named status';
+    }
 
     // Move row to correct position only when needed to avoid layout thrash.
     if (container.children[i] !== row) container.insertBefore(row, container.children[i] || null);
@@ -2868,6 +3012,7 @@ function onSessionChange(val) {
   location.href = url.toString();
 }
 
+fetchMobOverrides();
 if (SESSIONS_PATH) {
   fetch(SESSIONS_PATH)
     .then(r => r.ok ? r.json() : [])

@@ -94,6 +94,10 @@ pub(crate) fn open_db(data_dir: &std::path::Path, stream_id: &str) -> std::io::R
             ts    INTEGER NOT NULL,
             kind  TEXT NOT NULL,
             label TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS mob_overrides (
+            name  TEXT PRIMARY KEY,
+            kind  TEXT NOT NULL CHECK (kind IN ('named', 'trash'))
         );",
     )
     .map_err(sql_err)?;

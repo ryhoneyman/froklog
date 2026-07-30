@@ -3,6 +3,7 @@ mod config;
 mod ingest;
 mod journal;
 mod markers;
+mod mob_overrides;
 mod ratelimit;
 mod session_index;
 mod streams;
@@ -256,6 +257,12 @@ async fn main() {
         .route("/stream/{id}/marker", post(add_marker_handler))
         .route("/stream/{id}/marker/{mid}", delete(delete_marker_handler))
         .route("/stream/{id}/markers", get(list_markers_handler))
+        // Named-NPC curation (owner judgment over the ★ heuristic)
+        .route(
+            "/stream/{id}/mob_overrides",
+            get(list_mob_overrides_handler),
+        )
+        .route("/stream/{id}/mob_override", post(set_mob_override_handler))
         // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
         .route("/stream/{id}/ws", get(viewer::stream_ws_handler))
@@ -276,6 +283,10 @@ async fn main() {
         .route(
             "/player/{game}/{server}/{name}/sessions",
             get(viewer::player_sessions_handler),
+        )
+        .route(
+            "/player/{game}/{server}/{name}/mob_overrides",
+            get(player_mob_overrides_handler),
         )
         // Ingest route (Windows clients push here)
         .route("/ingest/{id}", get(ingest::ingest_ws_handler))
@@ -797,6 +808,136 @@ async fn list_markers_handler(
         Ok(list) => Json(list).into_response(),
         Err(e) => {
             warn!("Markers [{stream_id}]: list failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── Named-NPC curation ────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct SetMobOverrideBody {
+    name: String,
+    /// "named" | "trash" | "auto" (auto clears the override).
+    kind: String,
+}
+
+/// `GET /stream/:id/mob_overrides?vtok=…` — list the curated set. A valid
+/// view token OR a public stream reads it; the public player page needs the
+/// list to label pulls the same way the private page does.
+async fn list_mob_overrides_handler(
+    Path(stream_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
+    State(state): State<ServerState>,
+) -> Response {
+    let overrides = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(entry) => {
+                let valid = entry.public_stream
+                    || params
+                        .vtok
+                        .as_deref()
+                        .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
+                        .unwrap_or(false);
+                if !valid {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                Arc::clone(&entry.mob_overrides)
+            }
+        }
+    };
+    match overrides.list() {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            warn!("MobOverrides [{stream_id}]: list failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `GET /player/:game/:server/:name/mob_overrides` — the public page's route
+/// to the same list; only resolves for streams marked public.
+async fn player_mob_overrides_handler(
+    Path((game, server, name)): Path<(String, String, String)>,
+    State(state): State<ServerState>,
+) -> Response {
+    let overrides = {
+        let reg = state.registry.read().await;
+        let Some(id) = reg.find_id_by_player(&game, &server, &name) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        match reg.get(&id) {
+            Some(entry) if entry.public_stream => Arc::clone(&entry.mob_overrides),
+            _ => return StatusCode::NOT_FOUND.into_response(),
+        }
+    };
+    match overrides.list() {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            warn!("MobOverrides [{game}/{server}/{name}]: list failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `POST /stream/:id/mob_override?vtok=…` with `{name, kind}` — curate one
+/// NPC. Unlike markers, the write is done from the viewer page, which holds
+/// the VIEW token — so a valid view token authorizes it (as does the stream
+/// or admin token). The public tokenless page gets no write path.
+async fn set_mob_override_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+    Json(body): Json<SetMobOverrideBody>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 100 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !matches!(body.kind.as_str(), "named" | "trash" | "auto") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let overrides = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(entry) => {
+                let by_vtok = params
+                    .vtok
+                    .as_deref()
+                    .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
+                    .unwrap_or(false);
+                let by_bearer = ingest::extract_bearer(&headers)
+                    .map(|t| {
+                        froklog::auth::tokens_match(&entry.stream_token, &t)
+                            || state.is_admin_token(&t)
+                    })
+                    .unwrap_or(false);
+                if !by_vtok && !by_bearer {
+                    warn!("MobOverride [{stream_id}] [{ip}]: bad or missing token");
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                Arc::clone(&entry.mob_overrides)
+            }
+        }
+    };
+    let result = if body.kind == "auto" {
+        overrides.clear(name).map(|_| ())
+    } else {
+        overrides.set(name, &body.kind)
+    };
+    match result {
+        Ok(()) => {
+            info!("MobOverride [{stream_id}]: \"{name}\" -> {}", body.kind);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => {
+            warn!("MobOverride [{stream_id}]: set failed: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
