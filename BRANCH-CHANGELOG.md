@@ -591,6 +591,26 @@ re-owned by someone else's summon. Bug found en route: RE_CAST's spell
 charset had no ':' — colon-named spells ("Lesser Summoning: Water") never
 matched, so those casts produced no Cast events at all.
 
+## 33. Player-card deep stats (collapsed by default)
+
+Every damage card gains a "▸ more stats" toggle. Expanded, it shows what
+the totals hide:
+
+- **Per type/spell hit ranges** — hits, low / avg / high, and crit rate,
+  from per-event aggregation (count, min, max, crit-flag) tracked on both
+  the global and per-mob buckets, so the section obeys the same scope as
+  the rest of the card (pull-merged stats widen ranges and sum counts).
+- **Melee accuracy** — landed swings vs mob-avoided attempts with the
+  avoidance breakdown ("Accuracy 78.4% — 156 landed / 43 avoided (dodge
+  21, parry 12, miss 10)"). The attacker-side Miss events were already in
+  the stream; the viewer just discarded them.
+- **Fizzles** — new `fizzle {src, sp}` event (the parser deliberately
+  skipped these before). EQ only logs your own fizzles, so the count
+  appears on the streamer's card, with a per-spell breakdown.
+
+Tanked cards get the same ranges for incoming hits. Expansion state
+sticks per entity across the continuous re-render.
+
 ---
 
 *(subsequent changes appended as they land)*

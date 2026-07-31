@@ -141,6 +141,10 @@ pub enum CombatEvent {
         #[serde(default)]
         level: u8,
     },
+    /// A spell fizzle. Only the streamer's own fizzles appear in the log,
+    /// so `src` is always the streaming player — kept explicit anyway for
+    /// servers that might log others'.
+    Fizzle { ts: u32, src: String, sp: String },
     /// A pet's owner became known — warder possessive names, or a
     /// pet-buff cast (Burnout) landing on a generated-name pet. Summoned
     /// pets get a fresh random name every summon, so associations are
@@ -221,6 +225,7 @@ impl CombatEvent {
             | Self::Absorb { ts, .. }
             | Self::Resist { ts, .. }
             | Self::Who { ts, .. }
+            | Self::Fizzle { ts, .. }
             | Self::Pet { ts, .. }
             | Self::Login { ts }
             | Self::CurrencyLoot { ts, .. }

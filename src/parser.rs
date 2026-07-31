@@ -868,6 +868,17 @@ pub fn run(
                 },
             );
 
+        // ── Fizzles (own only — EQ doesn't log other players') ─────────────────
+        } else if let Some(caps) = crate::patterns::RE_FIZZLE.captures(line) {
+            emit(
+                &event_tx,
+                CombatEvent::Fizzle {
+                    ts: current_ts,
+                    src: player_name.clone(),
+                    sp: caps["sp"].to_owned(),
+                },
+            );
+
         // ── Pet ownership: Burnout landing ─────────────────────────────────────
         // "<Pet> goes berserk." right after "<Player> begins casting Burnout"
         // → that generated-name pet belongs to that player. Re-learned on

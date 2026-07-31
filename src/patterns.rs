@@ -321,6 +321,11 @@ pub fn is_pet_buff_spell(spell: &str) -> bool {
     spell.starts_with("Burnout")
 }
 
+// "Your Light Healing spell fizzles!" — own fizzles only (EQ does not log
+// other players' fizzles), with the spell name.
+pub static RE_FIZZLE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^Your (?P<sp>[A-Za-z][A-Za-z `':-]+?) spell fizzles!$").unwrap());
+
 /// Pet-summoning spells, by the shapes seen on the server: mage
 /// "Lesser Summoning: Water" (any rank/element), enchanter animations
 /// ("Sisna's Animation"). The generated-name pet that first appears in

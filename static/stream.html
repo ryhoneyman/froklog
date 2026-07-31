@@ -168,6 +168,22 @@
   .mob-time { font-size: 10px; color: #666; margin-left: 4px; flex-shrink: 0; }
   /* Named-status toggle: hidden until the row is hovered so the list stays
      clean; always shown when an override pins the automatic heuristic. */
+  /* ── Card deep stats (collapsed "more stats") ── */
+  .ms-btn { padding: 3px 10px; font-size: 10px; color: #7a7a8a; cursor: pointer;
+            user-select: none; }
+  .ms-btn:hover { color: #b8b8c8; }
+  .ms-section { padding: 2px 10px 4px; border-top: 1px solid #262630; }
+  .ms-hdr, .ms-row { display: grid; font-size: 10px;
+    grid-template-columns: minmax(60px,1.4fr) repeat(5, minmax(30px,1fr));
+    column-gap: 4px; }
+  .ms-hdr { color: #666; text-transform: uppercase; letter-spacing: .04em;
+            padding: 2px 0; }
+  .ms-row { color: #b8b8c0; padding: 1px 0; }
+  .ms-row span:not(.ms-k), .ms-hdr span:not(.ms-k) { text-align: right; }
+  .ms-k { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .ms-line { font-size: 10px; color: #9a9aa8; padding: 3px 0 1px; }
+  .ms-line b { color: #d8d8e0; font-weight: 600; }
+
   .mob-star { font-size: 10px; margin-left: 4px; flex-shrink: 0; cursor: pointer;
               color: #555; visibility: hidden; }
   .mob-row:hover .mob-star { visibility: visible; }
@@ -898,6 +914,16 @@ function tlEntry(tl, mob, name) {
   if (!tl[mob][name]) tl[mob][name] = [];
   return tl[mob][name];
 }
+// Per-hit distribution for a damage bucket: count / min / max / crits per
+// type-or-spell key. Feeds the card's collapsed "more stats" section.
+function bumpHit(bucket, key, dmg, mods) {
+  const t = bucket.hitStats || (bucket.hitStats = {});
+  const s = t[key] || (t[key] = { n: 0, min: Infinity, max: 0, crit: 0 });
+  s.n++;
+  if (dmg < s.min) s.min = dmg;
+  if (dmg > s.max) s.max = dmg;
+  if (mods & 1) s.crit++;
+}
 // "★ A" / "★ A + B" / "★ A + B +2" — every named in the pull, first-engaged
 // first, capped at two spelled out so headers stay readable.
 function encNamedLabel(enc) {
@@ -1023,14 +1049,17 @@ function applyEvent(ev) {
         const p = player(ev.src);
         p.dmg += ev.dmg;
         p.dmgByType[ev.typ] = (p.dmgByType[ev.typ]||0) + ev.dmg;
+        bumpHit(p, ev.typ, ev.dmg, ev.mods);
         const mp = mobDmgPlayer(ev.mob, ev.src);
         mp.dmg += ev.dmg;
         mp.dmgByType[ev.typ] = (mp.dmgByType[ev.typ]||0) + ev.dmg;
+        bumpHit(mp, ev.typ, ev.dmg, ev.mods);
         tlEntry(S.mobDmgTL, ev.mob, ev.src).push({ts: ev.ts, v: ev.dmg});
       } else {
         const mt = mobTankPlayer(ev.mob, ev.tgt);
         mt.dmg += ev.dmg;
         mt.dmgByType[ev.typ] = (mt.dmgByType[ev.typ]||0) + ev.dmg;
+        bumpHit(mt, ev.typ, ev.dmg, ev.mods);
         tlEntry(S.mobTankTL, ev.mob, ev.tgt).push({ts: ev.ts, v: ev.dmg});
       }
       break;
@@ -1042,9 +1071,11 @@ function applyEvent(ev) {
         const p = player(ev.src);
         p.dmg += ev.dmg;
         p.dmgBySpell[ev.sp] = (p.dmgBySpell[ev.sp]||0) + ev.dmg;
+        bumpHit(p, ev.sp, ev.dmg, ev.mods);
         const mp = mobDmgPlayer(ev.mob, ev.src);
         mp.dmg += ev.dmg;
         mp.dmgBySpell[ev.sp] = (mp.dmgBySpell[ev.sp]||0) + ev.dmg;
+        bumpHit(mp, ev.sp, ev.dmg, ev.mods);
         tlEntry(S.mobDmgTL, ev.mob, ev.src).push({ts: ev.ts, v: ev.dmg});
       } else {
         const mt = mobTankPlayer(ev.mob, ev.tgt);
@@ -1135,6 +1166,15 @@ function applyEvent(ev) {
     }
     case 'miss': {
       bumpTs(ev.ts);
+      // Outgoing side: a player's swing the MOB avoided — the denominator
+      // of the accuracy ratio in the card's deep stats.
+      if (S.mobs[ev.mob]?.name === ev.tgt && ev.src && !ev.src.includes(' ')) {
+        for (const b of [player(ev.src), mobDmgPlayer(ev.mob, ev.src)]) {
+          const om = b.outMiss || (b.outMiss = { total: 0, byType: {} });
+          om.total++;
+          om.byType[ev.typ] = (om.byType[ev.typ]||0) + 1;
+        }
+      }
       // Only count player avoidance: src must be the mob (mob attacking player).
       // When a player attacks a mob and the mob dodges, src=player, tgt=mob — skip those.
       if (S.mobs[ev.mob]?.name !== ev.src) break;
@@ -1167,6 +1207,14 @@ function applyEvent(ev) {
       p.classes = ev.classes || [];
       p.cls = p.classes[0] || '';
       p.level = ev.level || 0;
+      break;
+    }
+    case 'fizzle': {
+      bumpTs(ev.ts);
+      const p = player(ev.src);
+      const f = p.fizzles || (p.fizzles = { total: 0, bySpell: {} });
+      f.total++;
+      f.bySpell[ev.sp] = (f.bySpell[ev.sp]||0) + 1;
       break;
     }
     case 'pet': {
@@ -1262,6 +1310,11 @@ function buildRenderState() {
           spells: Object.entries(p.dmgBySpell||{})
             .sort((a,b)=>b[1]-a[1])
             .map(([spell,damage])=>({ spell, damage, dps: Math.round(damage/el) })),
+          // Deep stats for the card's collapsed section. Fizzles are global
+          // (they carry no mob), so they read from S.players in every scope.
+          hit_stats: p.hitStats || null,
+          out_miss: p.outMiss || null,
+          fizzles: sp.fizzles || null,
         };
       });
   }
@@ -1281,6 +1334,8 @@ function buildRenderState() {
           damage_by_type: Object.entries(p.dmgByType||{})
             .sort((a,b)=>b[1]-a[1])
             .map(([type,damage])=>({ type, damage, dps: Math.round(damage/el) })),
+          // Incoming-hit ranges for the tanked card's deep-stats section.
+          hit_stats: p.hitStats || null,
         };
       });
   }
@@ -2166,6 +2221,23 @@ function mergeEncounterEntries(map, members, totalField, lists) {
         const m = a._lists[listName] || (a._lists[listName] = {});
         for (const r of e[listName] || []) m[r[k]] = (m[r[k]] || 0) + (r[v] || 0);
       }
+      // Deep stats merge across the pull's members: counts add, ranges widen.
+      if (e.hit_stats) {
+        const hs = a.hit_stats || (a.hit_stats = {});
+        for (const [key, s] of Object.entries(e.hit_stats)) {
+          const t = hs[key] || (hs[key] = { n: 0, min: Infinity, max: 0, crit: 0 });
+          t.n += s.n; t.crit += s.crit;
+          if (s.min < t.min) t.min = s.min;
+          if (s.max > t.max) t.max = s.max;
+        }
+      }
+      if (e.out_miss) {
+        const om = a.out_miss || (a.out_miss = { total: 0, byType: {} });
+        om.total += e.out_miss.total;
+        for (const [k, v] of Object.entries(e.out_miss.byType || {}))
+          om.byType[k] = (om.byType[k] || 0) + v;
+      }
+      if (e.fizzles && !a.fizzles) a.fizzles = e.fizzles; // global, not additive
     }
   }
   return Object.values(acc).map(a => {
@@ -2241,6 +2313,60 @@ function castBarHtml(playerName) {
   return `<div class="cast-bar"><div class="cast-bar-shimmer"></div><span class="cast-bar-text">✦ ${cast.spell}</span></div>`;
 }
 
+// Cards whose "more stats" section the user has expanded, by entity name.
+// Survives the constant re-render; cleared only on page load.
+const expandedCards = new Set();
+function toggleCardStats(name) {
+  if (expandedCards.has(name)) expandedCards.delete(name);
+  else expandedCards.add(name);
+  scheduleRender();
+}
+
+// The collapsed-by-default deep-stats section: per-type/spell hit ranges,
+// swing accuracy with the avoidance breakdown, crit rate, fizzles.
+function deepStatsHtml(e) {
+  const hs = e.hit_stats, om = e.out_miss, fz = e.fizzles;
+  if (!hs && !(om && om.total) && !(fz && fz.total)) return '';
+  const open = expandedCards.has(e.name);
+  const btn = `<div class="ms-btn" data-name="${e.name.replace(/"/g, '&quot;')}">${open ? '▾ less stats' : '▸ more stats'}</div>`;
+  if (!open) return btn;
+
+  let html = '';
+  const totals = {};
+  for (const r of e.damage_by_type || []) totals[r.type] = r.damage;
+  for (const r of e.spells || []) totals[r.spell] = r.damage;
+  const keys = Object.keys(hs || {}).sort((a, b) => hs[b].n - hs[a].n);
+  if (keys.length) {
+    html += `<div class="ms-hdr"><span class="ms-k">Type</span><span>Hits</span><span>Low</span><span>Avg</span><span>High</span><span>Crit</span></div>`;
+    for (const k of keys) {
+      const s = hs[k];
+      const avg = totals[k] != null && s.n ? fmtK(Math.round(totals[k] / s.n)) : '–';
+      const crit = s.crit ? `${(s.crit / s.n * 100).toFixed(0)}%` : '–';
+      html += `<div class="ms-row"><span class="ms-k">${truncate(k, 14)}</span><span>${s.n}</span><span>${fmtK(s.min === Infinity ? 0 : s.min)}</span><span>${avg}</span><span>${fmtK(s.max)}</span><span>${crit}</span></div>`;
+    }
+  }
+  // Accuracy covers melee swings: landed hits (melee-type keys) vs the
+  // mob-avoided attempts. Spells resist rather than miss — separate story.
+  const meleeKeys = new Set((e.damage_by_type || []).map(r => r.type));
+  let landed = 0;
+  for (const k of keys) if (meleeKeys.has(k)) landed += hs[k].n;
+  if (om && om.total) {
+    const swings = landed + om.total;
+    const acc = swings ? (landed / swings * 100).toFixed(1) : '0.0';
+    const breakdown = Object.entries(om.byType || {}).sort((a, b) => b[1] - a[1])
+      .map(([t, c]) => `${t} ${c}`).join(', ');
+    html += `<div class="ms-line">Accuracy <b>${acc}%</b> — ${landed} landed / ${om.total} avoided (${breakdown})</div>`;
+  } else if (landed) {
+    html += `<div class="ms-line">Accuracy <b>100%</b> — ${landed} landed, none avoided</div>`;
+  }
+  if (fz && fz.total) {
+    const top = Object.entries(fz.bySpell || {}).sort((a, b) => b[1] - a[1]).slice(0, 4)
+      .map(([s, c]) => `${truncate(s, 14)} ×${c}`).join(', ');
+    html += `<div class="ms-line">Fizzles <b>${fz.total}</b> — ${top}</div>`;
+  }
+  return btn + `<div class="ms-section">${html}</div>`;
+}
+
 function damageCard(e, elapsed, barColor = null) {
   const classes = e.classes || (e.class ? [e.class] : []);
   const hdrStyle = barColor ? `background:${barColor}` : classHeaderStyle(classes);
@@ -2252,7 +2378,7 @@ function damageCard(e, elapsed, barColor = null) {
   const spellRows = spells.length ? `<hr class="spell-sep">` + spells.map(r => typeRow(truncate(r.spell, 17), r.damage, total, '#3c64a0', elapsed)).join('') : '';
   const clsHtml = classCodesHtml(classes);
   const lvlHtml = petChipHtml(e.name) || (e.level ? `<span class="lvl">${e.level}</span>` : '');
-  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Damage</span><span class="c-rate">DPS</span></div>${typeRows}${spellRows}<div class="card-pad"></div></div>`;
+  return `<div class="card"><div class="card-hdr" style="${hdrStyle}"><span>${e.name}</span>${clsHtml ? `<span class="cls">– ${clsHtml}</span>` : ''}${lvlHtml}</div>${castBarHtml(e.name)}<div class="card-col-hdr"><span class="c-type">Type</span><span class="c-val">Damage</span><span class="c-rate">DPS</span></div>${typeRows}${spellRows}${deepStatsHtml(e)}<div class="card-pad"></div></div>`;
 }
 
 function healerCard(e, elapsed) {
@@ -3041,6 +3167,15 @@ function onSessionChange(val) {
   }
   location.href = url.toString();
 }
+
+// One delegated listener for every card's "more stats" toggle — cards are
+// rebuilt as innerHTML on each render, so per-node listeners wouldn't stick.
+document.getElementById('cards').addEventListener('click', ev => {
+  const btn = ev.target.closest('.ms-btn');
+  if (!btn) return;
+  ev.stopPropagation();
+  toggleCardStats(btn.dataset.name);
+});
 
 fetchMobOverrides();
 if (SESSIONS_PATH) {

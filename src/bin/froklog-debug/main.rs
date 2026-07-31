@@ -1296,6 +1296,13 @@ fn main() {
             event_desc = format!("Resist src={src:?} spell={spell:?} tgt={tgt:?}");
             matched = true;
 
+        // ── RE_FIZZLE ─────────────────────────────────────────────────────────
+        } else if let Some(caps) = froklog::patterns::RE_FIZZLE.captures(line) {
+            t!(
+                "MATCH",
+                format!("RE_FIZZLE — spell={:?} (own fizzle)", &caps["sp"])
+            );
+
         // ── RE_PET_BERSERK (before generic handling; mirrors parser order) ────
         } else if let Some(caps) = froklog::patterns::RE_PET_BERSERK.captures(line) {
             let pet = caps["name"].to_owned();
