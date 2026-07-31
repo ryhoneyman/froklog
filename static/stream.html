@@ -172,17 +172,20 @@
   .ms-btn { padding: 3px 10px; font-size: 10px; color: #7a7a8a; cursor: pointer;
             user-select: none; }
   .ms-btn:hover { color: #b8b8c8; }
-  .ms-section { padding: 2px 10px 4px; border-top: 1px solid #262630; }
+  .ms-section { padding: 3px 10px 5px; border-top: 1px solid #262630; }
   .ms-hdr, .ms-row { display: grid; font-size: 10px;
-    grid-template-columns: minmax(60px,1.4fr) repeat(5, minmax(30px,1fr));
-    column-gap: 4px; }
-  .ms-hdr { color: #666; text-transform: uppercase; letter-spacing: .04em;
-            padding: 2px 0; }
-  .ms-row { color: #b8b8c0; padding: 1px 0; }
-  .ms-row span:not(.ms-k), .ms-hdr span:not(.ms-k) { text-align: right; }
+    grid-template-columns: minmax(44px,1.1fr) minmax(26px,0.7fr) minmax(74px,1.9fr) minmax(26px,0.7fr);
+    column-gap: 5px; align-items: baseline; }
+  .ms-hdr { color: #666; text-transform: uppercase; letter-spacing: .03em;
+            padding: 2px 0 3px; }
+  .ms-row { color: #c4c4cc; padding: 1.5px 0; line-height: 1.35; }
+  .ms-row span:not(.ms-k), .ms-hdr span:not(.ms-k) { text-align: right;
+    white-space: nowrap; }
   .ms-k { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .ms-line { font-size: 10px; color: #9a9aa8; padding: 3px 0 1px; }
+  .ms-dim { color: #71717e; }
+  .ms-line { font-size: 10px; color: #9a9aa8; padding: 4px 0 0; line-height: 1.4; }
   .ms-line b { color: #d8d8e0; font-weight: 600; }
+  .ms-sub { font-size: 9.5px; color: #71717e; padding: 1px 0 1px 8px; line-height: 1.4; }
 
   .mob-star { font-size: 10px; margin-left: 4px; flex-shrink: 0; cursor: pointer;
               color: #555; visibility: hidden; }
@@ -2337,12 +2340,16 @@ function deepStatsHtml(e) {
   for (const r of e.spells || []) totals[r.spell] = r.damage;
   const keys = Object.keys(hs || {}).sort((a, b) => hs[b].n - hs[a].n);
   if (keys.length) {
-    html += `<div class="ms-hdr"><span class="ms-k">Type</span><span>Hits</span><span>Low</span><span>Avg</span><span>High</span><span>Crit</span></div>`;
+    // Four columns: the three range numbers share one cell (avg bright,
+    // bounds dim) — six separate columns overflowed the card width.
+    html += `<div class="ms-hdr"><span class="ms-k">Type</span><span>Hits</span><span>Low·Avg·High</span><span>Crit</span></div>`;
     for (const k of keys) {
       const s = hs[k];
       const avg = totals[k] != null && s.n ? fmtK(Math.round(totals[k] / s.n)) : '–';
       const crit = s.crit ? `${(s.crit / s.n * 100).toFixed(0)}%` : '–';
-      html += `<div class="ms-row"><span class="ms-k">${truncate(k, 14)}</span><span>${s.n}</span><span>${fmtK(s.min === Infinity ? 0 : s.min)}</span><span>${avg}</span><span>${fmtK(s.max)}</span><span>${crit}</span></div>`;
+      const lo = fmtK(s.min === Infinity ? 0 : s.min);
+      const range = `<span class="ms-dim">${lo} /</span> ${avg} <span class="ms-dim">/ ${fmtK(s.max)}</span>`;
+      html += `<div class="ms-row"><span class="ms-k">${truncate(k, 12)}</span><span>${s.n}</span><span>${range}</span><span>${crit}</span></div>`;
     }
   }
   // Accuracy covers melee swings: landed hits (melee-type keys) vs the
@@ -2354,15 +2361,17 @@ function deepStatsHtml(e) {
     const swings = landed + om.total;
     const acc = swings ? (landed / swings * 100).toFixed(1) : '0.0';
     const breakdown = Object.entries(om.byType || {}).sort((a, b) => b[1] - a[1])
-      .map(([t, c]) => `${t} ${c}`).join(', ');
-    html += `<div class="ms-line">Accuracy <b>${acc}%</b> — ${landed} landed / ${om.total} avoided (${breakdown})</div>`;
+      .map(([t, c]) => `${t} ${c}`).join(' · ');
+    html += `<div class="ms-line">Accuracy <b>${acc}%</b> · ${landed} landed / ${om.total} avoided</div>`
+          + `<div class="ms-sub">${breakdown}</div>`;
   } else if (landed) {
-    html += `<div class="ms-line">Accuracy <b>100%</b> — ${landed} landed, none avoided</div>`;
+    html += `<div class="ms-line">Accuracy <b>100%</b> · ${landed} landed, none avoided</div>`;
   }
   if (fz && fz.total) {
     const top = Object.entries(fz.bySpell || {}).sort((a, b) => b[1] - a[1]).slice(0, 4)
-      .map(([s, c]) => `${truncate(s, 14)} ×${c}`).join(', ');
-    html += `<div class="ms-line">Fizzles <b>${fz.total}</b> — ${top}</div>`;
+      .map(([s, c]) => `${truncate(s, 16)} ×${c}`).join(' · ');
+    html += `<div class="ms-line">Fizzles <b>${fz.total}</b></div>`
+          + `<div class="ms-sub">${top}</div>`;
   }
   return btn + `<div class="ms-section">${html}</div>`;
 }
