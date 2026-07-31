@@ -186,6 +186,10 @@
   .ms-line { font-size: 10px; color: #9a9aa8; padding: 4px 0 0; line-height: 1.4; }
   .ms-line b { color: #d8d8e0; font-weight: 600; }
   .ms-sub { font-size: 9.5px; color: #71717e; padding: 1px 0 1px 8px; line-height: 1.4; }
+  .ms-mini { display: grid; font-size: 10px; color: #9a9aa8;
+    grid-template-columns: minmax(52px,1.6fr) minmax(34px,1fr) minmax(38px,1fr);
+    column-gap: 5px; padding: 1px 0 1px 8px; line-height: 1.35; }
+  .ms-mini span:not(.ms-k) { text-align: right; white-space: nowrap; }
 
   .mob-star { font-size: 10px; margin-left: 4px; flex-shrink: 0; cursor: pointer;
               color: #555; visibility: hidden; }
@@ -2360,18 +2364,21 @@ function deepStatsHtml(e) {
   if (om && om.total) {
     const swings = landed + om.total;
     const acc = swings ? (landed / swings * 100).toFixed(1) : '0.0';
-    const breakdown = Object.entries(om.byType || {}).sort((a, b) => b[1] - a[1])
-      .map(([t, c]) => `${t} ${c}`).join(' · ');
-    html += `<div class="ms-line">Accuracy <b>${acc}%</b> · ${landed} landed / ${om.total} avoided</div>`
-          + `<div class="ms-sub">${breakdown}</div>`;
+    html += `<div class="ms-line">Accuracy <b>${acc}%</b> · ${landed} landed / ${om.total} avoided</div>`;
+    // Stacked, not inline-wrapped: matches the tabular section above and
+    // makes room for each avoidance's share of total swings.
+    for (const [t, c] of Object.entries(om.byType || {}).sort((a, b) => b[1] - a[1])) {
+      const pct = swings ? (c / swings * 100).toFixed(1) : '0.0';
+      html += `<div class="ms-mini"><span class="ms-k">${t}</span><span>${c}</span><span class="ms-dim">${pct}%</span></div>`;
+    }
   } else if (landed) {
     html += `<div class="ms-line">Accuracy <b>100%</b> · ${landed} landed, none avoided</div>`;
   }
   if (fz && fz.total) {
-    const top = Object.entries(fz.bySpell || {}).sort((a, b) => b[1] - a[1]).slice(0, 4)
-      .map(([s, c]) => `${truncate(s, 16)} ×${c}`).join(' · ');
-    html += `<div class="ms-line">Fizzles <b>${fz.total}</b></div>`
-          + `<div class="ms-sub">${top}</div>`;
+    html += `<div class="ms-line">Fizzles <b>${fz.total}</b></div>`;
+    for (const [s, c] of Object.entries(fz.bySpell || {}).sort((a, b) => b[1] - a[1]).slice(0, 5)) {
+      html += `<div class="ms-mini"><span class="ms-k">${truncate(s, 18)}</span><span>${c}</span><span class="ms-dim"></span></div>`;
+    }
   }
   return btn + `<div class="ms-section">${html}</div>`;
 }
