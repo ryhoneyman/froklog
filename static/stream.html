@@ -53,6 +53,12 @@
     font: inherit; font-size: 11px; margin-right: 8px;
   }
   #golive-pill:hover { background: #363213; color: #ffe9b8; }
+  #sib-pill {
+    background: #13221a; color: #7ce87c; border: 1px solid #2c5a3a;
+    border-radius: 10px; font-size: 11px; padding: 2px 10px; cursor: pointer;
+    font-family: inherit;
+  }
+  #sib-pill:hover { background: #1a3324; color: #a8f4a8; }
   #player-name  { color: #a4f; }
 
   #time-display {
@@ -453,6 +459,7 @@
     <span class="td-log"  id="log-clock"></span>
   </div>
   <button id="golive-pill" onclick="goLive()" style="display:none" title="Return to the live view">&#9205; Go Live</button>
+  <button id="sib-pill" style="display:none"></button>
   <div id="status" class="error" title="Streamer's client connection">● disconnected</div>
 </div>
 
@@ -3132,6 +3139,40 @@ function setStatus(cls, txt) {
 /// (green connected / gray disconnected); the separate "⏵ Go Live" pill is
 /// the navigation control, shown only when the client is connected but the
 /// viewer isn't watching live.
+// ── Sibling streams: "another of your characters is live" ────────────────────
+// The multi-character client stamps its registrations with one owner key, so
+// the server can list this stream's siblings. When a sibling saw combat in
+// the last half-minute and THIS stream has gone quiet, offer the switch.
+let sibActive = null;
+async function pollSiblings() {
+  const m = location.pathname.match(/^\/stream\/[^/]+/);
+  if (!m || !VIEW_TOKEN) return; // public pages: no sibling access
+  try {
+    const r = await fetch(`${m[0]}/siblings?vtok=${encodeURIComponent(VIEW_TOKEN)}`);
+    if (!r.ok) return;
+    const sibs = await r.json();
+    sibActive = sibs.filter(s => s.active).sort((a, b) => a.idle_secs - b.idle_secs)[0] || null;
+    syncSibPill();
+  } catch (e) { /* transient — next poll retries */ }
+}
+function syncSibPill() {
+  const pill = document.getElementById('sib-pill');
+  if (!pill) return;
+  // This stream counts as quiet after 30 s without a log event (timestamps
+  // are true epoch, so wall clock compares directly).
+  const quiet = !logLastTs || (Date.now() / 1000 - logLastTs) > 30;
+  if (sibActive && quiet) {
+    pill.textContent = `⚡ ${sibActive.player} is live — switch`;
+    pill.title = `${sibActive.player} on ${sibActive.server} is fighting right now`;
+    pill.onclick = () => { location.href = sibActive.path; };
+    pill.style.display = '';
+  } else {
+    pill.style.display = 'none';
+  }
+}
+setInterval(pollSiblings, 20000);
+pollSiblings();
+
 function syncStatusIndicator() {
   const pill = document.getElementById('golive-pill');
   if (!ws) { if (pill) pill.style.display = 'none'; return; } // reconnecting badge stays

@@ -611,6 +611,33 @@ the totals hide:
 Tanked cards get the same ranges for incoming hits. Expansion state
 sticks per entity across the continuous re-render.
 
+## 34. Sibling streams — "another character is live"
+
+One person plays many characters, each its own stream — and a viewer tab
+left on the idle one looks broken ("why is the web not up to date?" when
+the answer was "you switched characters"). Streams now carry an optional
+`owner_key`: an opaque random key the multi-character client mints once
+and stamps on every registration (and backfills onto older streams via
+PATCH). `GET /stream/:id/siblings` lists the household's other streams
+with recent-activity state, and the viewer polls it: when a sibling saw
+combat within 30 s while the watched stream has gone quiet, a green
+"⚡ Izzin is live — switch" pill appears next to the status badge.
+
+Trust model: the endpoint needs the stream's view or stream token, and
+sibling private links are included — whoever holds one of a household's
+links was given it by the person who registered all of them. Public
+tokenless pages get no sibling access. Streams without a key have no
+siblings.
+
+## 35. Stream deletion from the owning client
+
+Old characters accumulate dead streams that never go away. The purge
+endpoint (`DELETE /stream/:id/purge` — registry removal plus the whole
+on-disk directory, journal database included) previously required the
+admin token; the stream's OWN token now qualifies, so the client that
+created a stream can retire it. The view token still cannot: watchers
+must never be able to destroy history.
+
 ---
 
 *(subsequent changes appended as they land)*

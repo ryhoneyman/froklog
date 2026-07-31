@@ -257,6 +257,8 @@ async fn main() {
         .route("/stream/{id}/marker", post(add_marker_handler))
         .route("/stream/{id}/marker/{mid}", delete(delete_marker_handler))
         .route("/stream/{id}/markers", get(list_markers_handler))
+        // Sibling streams (same owner_key household link)
+        .route("/stream/{id}/siblings", get(siblings_handler))
         // Named-NPC curation (owner judgment over the ★ heuristic)
         .route(
             "/stream/{id}/mob_overrides",
@@ -331,6 +333,9 @@ struct CreateStreamBody {
     public_stream: bool,
     #[serde(default)]
     is_replay: bool,
+    /// Optional household link — see StreamEntry.owner_key.
+    #[serde(default)]
+    owner_key: String,
 }
 
 #[derive(Serialize)]
@@ -378,6 +383,11 @@ async fn create_stream_handler(
         None
     };
 
+    let owner_key = if body.owner_key.len() <= 64 {
+        body.owner_key.clone()
+    } else {
+        String::new()
+    };
     let entry = StreamEntry::new(
         stream_id.clone(),
         stream_token.clone(),
@@ -387,6 +397,7 @@ async fn create_stream_handler(
         body.player.clone(),
         body.public_stream,
         body.is_replay,
+        owner_key.clone(),
         &state.data_dir,
     );
 
@@ -409,6 +420,7 @@ async fn create_stream_handler(
         "player": body.player,
         "public_stream": body.public_stream,
         "is_replay": body.is_replay,
+        "owner_key": owner_key,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         tracing::warn!("Failed to write meta for {stream_id}: {e}");
@@ -438,6 +450,8 @@ async fn create_stream_handler(
 #[derive(Deserialize)]
 struct PatchStreamBody {
     public_stream: Option<bool>,
+    /// Backfill the household link on an existing stream (see owner_key).
+    owner_key: Option<String>,
 }
 
 /// `PATCH /stream/:id` — update mutable stream metadata.
@@ -476,6 +490,11 @@ async fn patch_stream_handler(
                 let _ = entry.public_revoke_tx.send(());
             }
         }
+        if let Some(key) = &body.owner_key {
+            if key.len() <= 64 {
+                entry.owner_key = key.clone();
+            }
+        }
         (
             entry.stream_id.clone(),
             entry.stream_token.clone(),
@@ -485,6 +504,7 @@ async fn patch_stream_handler(
             entry.player_name.clone(),
             entry.public_stream,
             entry.is_replay,
+            entry.owner_key.clone(),
         )
     }; // write lock released here
 
@@ -498,6 +518,7 @@ async fn patch_stream_handler(
         "player":       snapshot.5,
         "public_stream": snapshot.6,
         "is_replay":    snapshot.7,
+        "owner_key":    snapshot.8,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         warn!("Patch [{stream_id}]: failed to rewrite meta: {e}");
@@ -576,7 +597,19 @@ async fn delete_stream_handler(
             return StatusCode::UNAUTHORIZED.into_response();
         }
     };
-    if !state.is_admin_token(&token) {
+    // The stream's own token may destroy the stream and its data — the
+    // owning client retires old characters this way. The view token
+    // deliberately cannot: watchers must never be able to destroy history.
+    let authorized = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(e) => {
+                froklog::auth::tokens_match(&e.stream_token, &token) || state.is_admin_token(&token)
+            }
+        }
+    };
+    if !authorized {
         warn!("Delete [{stream_id}] [{ip}]: bad token");
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -811,6 +844,80 @@ async fn list_markers_handler(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+// ── Sibling streams ───────────────────────────────────────────────────────────
+
+/// `GET /stream/:id/siblings?vtok=…` — the other streams sharing this
+/// stream's owner_key (one household's characters), each with its recent-
+/// activity state so the viewer can hint "another character is live".
+///
+/// Requires this stream's view or stream token. Sibling view links are
+/// included: whoever holds one of a household's links is trusted with the
+/// household's others (they were registered by the same client). Streams
+/// with no owner_key have no siblings.
+async fn siblings_handler(
+    Path(stream_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+) -> Response {
+    let reg = state.registry.read().await;
+    let me = match reg.get(&stream_id) {
+        None => return StatusCode::NOT_FOUND.into_response(),
+        Some(e) => e,
+    };
+    let by_vtok = params
+        .vtok
+        .as_deref()
+        .map(|t| froklog::auth::tokens_match(&me.view_token, t))
+        .unwrap_or(false);
+    let by_bearer = ingest::extract_bearer(&headers)
+        .map(|t| froklog::auth::tokens_match(&me.stream_token, &t) || state.is_admin_token(&t))
+        .unwrap_or(false);
+    if !by_vtok && !by_bearer {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if me.owner_key.is_empty() {
+        return Json(serde_json::json!([])).into_response();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut out = Vec::new();
+    for info in reg.list_admin() {
+        if info.stream_id == stream_id {
+            continue;
+        }
+        let Some(entry) = reg.get(&info.stream_id) else {
+            continue;
+        };
+        if entry.owner_key != me.owner_key {
+            continue;
+        }
+        // Last received event (wall clock) from the in-memory journal index.
+        let last_wall = entry
+            .journal
+            .read()
+            .await
+            .index
+            .last()
+            .map(|e| e.wall_ts)
+            .unwrap_or(0);
+        let idle_secs = now.saturating_sub(last_wall);
+        out.push(serde_json::json!({
+            "player": entry.player_name,
+            "server": entry.server,
+            "game": entry.game,
+            "public": entry.public_stream,
+            "connected": entry.client_connected.load(std::sync::atomic::Ordering::Relaxed),
+            "idle_secs": idle_secs,
+            "active": idle_secs <= 30,
+            "path": format!("/stream/{}?vtok={}", entry.stream_id, entry.view_token),
+        }));
+    }
+    Json(out).into_response()
 }
 
 // ── Named-NPC curation ────────────────────────────────────────────────────────
@@ -1058,6 +1165,8 @@ struct StreamMeta {
     public_stream: bool,
     #[serde(default)]
     is_replay: bool,
+    #[serde(default)]
+    owner_key: String,
 }
 
 fn default_eql() -> String {
@@ -1105,6 +1214,7 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
             meta.player.clone(),
             meta.public_stream,
             meta.is_replay,
+            meta.owner_key,
             data_dir,
         ) {
             Ok(entry) => {

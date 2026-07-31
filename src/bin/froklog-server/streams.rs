@@ -31,6 +31,11 @@ pub struct StreamEntry {
     pub player_name: String,
     /// Whether the user opted in to public streaming via the client checkbox.
     pub public_stream: bool,
+    /// Opaque client-chosen key linking one household's streams: streams
+    /// sharing a non-empty owner_key are "siblings" (the multi-character
+    /// client stamps all its registrations with one persistent key). Empty
+    /// = unlinked. Powers the viewer's "another character is live" hint.
+    pub owner_key: String,
     /// True when the stream was created by froklog-replay (never goes live).
     pub is_replay: bool,
     /// Fires `()` when `public_stream` flips to false so open public viewer
@@ -67,6 +72,7 @@ impl StreamEntry {
         player_name: String,
         public_stream: bool,
         is_replay: bool,
+        owner_key: String,
         data_dir: &std::path::Path,
     ) -> std::io::Result<Self> {
         // Open journal first so the retroactive session scan can read its index.
@@ -93,6 +99,7 @@ impl StreamEntry {
             player_name,
             public_stream,
             is_replay,
+            owner_key,
             public_revoke_tx,
             journal,
             session_index,
