@@ -2609,6 +2609,10 @@ let tlLastTs   = null;  // wall-clock unix seconds (used for seek)
 let tlIsLive   = true;  // currently following live
 let tlPaused   = false; // paused during replay
 let tlCanGoLive = true; // false for completed recordings with no live ingest
+// The page entered its ended state because the ingest client dropped —
+// distinct from a user pause. Only this state auto-returns to live when
+// the server announces the client is back.
+let endedByDisconnect = false;
 let logFirstTs = null;  // EQ log-event unix seconds (used for labels)
 let logLastTs  = null;  // EQ log-event unix seconds (used for labels)
 let sessionPreloading = false; // true while initial session cache preload is in flight
@@ -2697,6 +2701,7 @@ function connectWS() {
       // the stream is not live anymore. Green/Go-Live must reflect the
       // STREAM's state, so retire them in favor of the ended badge.
       tlCanGoLive = false;
+      endedByDisconnect = true; // self-heal target if the client returns
       updateLiveBtn();
       if (sessionPreloading) {
         // Preload complete (completed recording) — show full session state at end.
@@ -2715,6 +2720,21 @@ function connectWS() {
     }
     if (msg.t === 'now_live') {
       cacheComplete = true;
+      // Self-heal: the ingest client is back. If this page had gone into
+      // the "stream ended" state because of the disconnect, un-end it and
+      // return to following live — no manual refresh needed. A page the
+      // USER paused or is replaying just gets its Go Live pill back.
+      if (!tlCanGoLive) {
+        tlCanGoLive = true;
+        updateLiveBtn();
+        syncStatusIndicator();
+      }
+      if (endedByDisconnect && !sessionPreloading) {
+        endedByDisconnect = false;
+        goLive();
+        return;
+      }
+      endedByDisconnect = false;
       if (sessionPreloading) {
         // Preload caught up to live edge — show full session state and go live.
         tlPaused = true;

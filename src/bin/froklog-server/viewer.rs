@@ -275,6 +275,10 @@ async fn handle_viewer_ws(
 
     // Start by replaying the full history, then follow live.
     let mut mode = ViewerMode::CatchUp { pos: 0 };
+    // True when WE paused this viewer because the ingest client vanished —
+    // as opposed to the user pausing on purpose. Only that kind of pause is
+    // undone when the client comes back (the self-heal path).
+    let mut paused_by_disconnect = false;
 
     loop {
         // Fast non-blocking check: close immediately if public access was revoked.
@@ -373,6 +377,7 @@ async fn handle_viewer_ws(
                     if !client_connected.load(Ordering::Relaxed) {
                         // Stream is a completed recording; no live data will
                         // follow.  Tell the client and pause at the end.
+                        paused_by_disconnect = true;
                         if let Ok(txt) = serde_json::to_string(&ServerMsg::StreamDone) {
                             let _ = socket.send(Message::Text(txt.into())).await;
                         }
@@ -436,7 +441,8 @@ async fn handle_viewer_ws(
                     _ = sleep(Duration::from_secs(2)) => {
                         if !client_connected.load(Ordering::Relaxed) {
                             let pos = { journal.read().await.len() };
-                            if let Ok(txt) = serde_json::to_string(&ServerMsg::StreamDone) {
+                            paused_by_disconnect = true;
+                        if let Ok(txt) = serde_json::to_string(&ServerMsg::StreamDone) {
                                 let _ = socket.send(Message::Text(txt.into())).await;
                             }
                             mode = ViewerMode::Paused { pos };
@@ -511,6 +517,7 @@ async fn handle_viewer_ws(
                         mode = ViewerMode::Live;
                     } else {
                         // Completed recording — tell the client and pause at end.
+                        paused_by_disconnect = true;
                         if let Ok(txt) = serde_json::to_string(&ServerMsg::StreamDone) {
                             let _ = socket.send(Message::Text(txt.into())).await;
                         }
@@ -526,11 +533,27 @@ async fn handle_viewer_ws(
                         if let Some(new_mode) =
                             handle_client_msg(&txt, &journal, &mut socket, pos).await
                         {
+                            // The user took the wheel — whatever pause the
+                            // disconnect forced is no longer ours to undo.
+                            paused_by_disconnect = false;
                             mode = new_mode;
                         }
                     }
                     None | Some(Ok(Message::Close(_))) | Some(Err(_)) => return,
                     _ => {}
+                },
+                // Self-heal: this pause was forced by the ingest client
+                // vanishing — when it comes back, catch the viewer up on
+                // whatever it missed and return to live, announcing it so
+                // the page can un-end itself.
+                _ = sleep(Duration::from_secs(2)) => {
+                    if paused_by_disconnect && client_connected.load(Ordering::Relaxed) {
+                        paused_by_disconnect = false;
+                        if let Ok(txt) = serde_json::to_string(&ServerMsg::NowLive) {
+                            let _ = socket.send(Message::Text(txt.into())).await;
+                        }
+                        mode = ViewerMode::CatchUp { pos };
+                    }
                 },
                 _ = async {
                     if let Some(rx) = revoke_rx.as_mut() {
