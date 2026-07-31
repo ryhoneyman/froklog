@@ -133,6 +133,35 @@ pub async fn stream_ws_handler(
 
 // ── WS control messages ───────────────────────────────────────────────────────
 
+/// What the Paused arm should do on its periodic tick.
+#[derive(Debug, PartialEq)]
+struct PausedTick {
+    /// Tell the page the ingest client is back.
+    announce: bool,
+    /// Also resume delivery ourselves.
+    resume: bool,
+}
+
+/// Decide whether to announce the ingest client's return, and whether to
+/// resume delivery.
+///
+/// These are deliberately separate. `ingest_was_down` records that the
+/// stream went away at some point and is NOT cleared when the page sends a
+/// control message; `paused_by_disconnect` records that WE forced the pause
+/// and IS cleared, because a control message means the user took the wheel.
+///
+/// Conflating them cost a live viewer an hour: the page repositions itself
+/// on `stream_done`, that reposition looked like a user pause, and the
+/// viewer then never learned the client had returned — it sat frozen at the
+/// moment of the disconnect while still reporting the stream connected.
+fn on_paused_tick(ingest_was_down: bool, connected: bool, paused_by_disconnect: bool) -> PausedTick {
+    let back = ingest_was_down && connected;
+    PausedTick {
+        announce: back,
+        resume: back && paused_by_disconnect,
+    }
+}
+
 /// Messages the client sends to the server.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -279,6 +308,14 @@ async fn handle_viewer_ws(
     // as opposed to the user pausing on purpose. Only that kind of pause is
     // undone when the client comes back (the self-heal path).
     let mut paused_by_disconnect = false;
+    // Whether the ingest client has gone away at any point during this
+    // viewer's life. Unlike `paused_by_disconnect` this is NOT cleared when
+    // the page sends a control message, because the page sends one as a
+    // REACTION to the disconnect (snapSessionToStart repositions itself on
+    // stream_done). Clearing on that message left the viewer permanently
+    // unable to learn the client had come back: it sat frozen at the moment
+    // of the disconnect while still reporting the stream as connected.
+    let mut ingest_was_down = false;
 
     loop {
         // Fast non-blocking check: close immediately if public access was revoked.
@@ -378,6 +415,7 @@ async fn handle_viewer_ws(
                         // Stream is a completed recording; no live data will
                         // follow.  Tell the client and pause at the end.
                         paused_by_disconnect = true;
+                        ingest_was_down = true;
                         if let Ok(txt) = serde_json::to_string(&ServerMsg::StreamDone) {
                             let _ = socket.send(Message::Text(txt.into())).await;
                         }
@@ -442,6 +480,7 @@ async fn handle_viewer_ws(
                         if !client_connected.load(Ordering::Relaxed) {
                             let pos = { journal.read().await.len() };
                             paused_by_disconnect = true;
+                            ingest_was_down = true;
                         if let Ok(txt) = serde_json::to_string(&ServerMsg::StreamDone) {
                                 let _ = socket.send(Message::Text(txt.into())).await;
                             }
@@ -518,6 +557,7 @@ async fn handle_viewer_ws(
                     } else {
                         // Completed recording — tell the client and pause at end.
                         paused_by_disconnect = true;
+                        ingest_was_down = true;
                         if let Ok(txt) = serde_json::to_string(&ServerMsg::StreamDone) {
                             let _ = socket.send(Message::Text(txt.into())).await;
                         }
@@ -547,11 +587,19 @@ async fn handle_viewer_ws(
                 // whatever it missed and return to live, announcing it so
                 // the page can un-end itself.
                 _ = sleep(Duration::from_secs(2)) => {
-                    if paused_by_disconnect && client_connected.load(Ordering::Relaxed) {
-                        paused_by_disconnect = false;
+                    let act = on_paused_tick(
+                        ingest_was_down,
+                        client_connected.load(Ordering::Relaxed),
+                        paused_by_disconnect,
+                    );
+                    if act.announce {
+                        ingest_was_down = false;
                         if let Ok(txt) = serde_json::to_string(&ServerMsg::NowLive) {
                             let _ = socket.send(Message::Text(txt.into())).await;
                         }
+                    }
+                    if act.resume {
+                        paused_by_disconnect = false;
                         mode = ViewerMode::CatchUp { pos };
                     }
                 },
@@ -904,5 +952,48 @@ async fn is_valid_view_token(stream_id: &str, vtok: &Option<String>, state: &Ser
             .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
             .unwrap_or(false),
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The page repositions ITSELF when the stream ends (snapSessionToStart
+    /// sends seek_paused_log on stream_done). That clears
+    /// `paused_by_disconnect`, and for an hour it also silently disabled the
+    /// return announcement — the viewer never learned the client was back.
+    /// The announcement must survive a control message.
+    #[test]
+    fn a_page_repositioning_itself_still_hears_the_client_return() {
+        // user (or the page) sent a control message => paused_by_disconnect
+        // cleared, but the stream did go down at some point.
+        let t = on_paused_tick(true, true, false);
+        assert!(t.announce, "the page must be told the client is back");
+        assert!(!t.resume, "but we do not drag a user-paused viewer to live");
+    }
+
+    /// The pause we forced ourselves resumes on its own.
+    #[test]
+    fn a_disconnect_forced_pause_resumes_itself() {
+        assert_eq!(
+            on_paused_tick(true, true, true),
+            PausedTick { announce: true, resume: true }
+        );
+    }
+
+    /// Nothing to say while the client is still gone, or if it never went.
+    #[test]
+    fn silence_when_there_is_no_return_to_report() {
+        assert_eq!(
+            on_paused_tick(true, false, true),
+            PausedTick { announce: false, resume: false },
+            "still disconnected"
+        );
+        assert_eq!(
+            on_paused_tick(false, true, false),
+            PausedTick { announce: false, resume: false },
+            "never disconnected — an ordinary user pause stays paused"
+        );
     }
 }
