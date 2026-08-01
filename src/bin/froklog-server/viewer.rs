@@ -162,6 +162,16 @@ fn on_paused_tick(ingest_was_down: bool, connected: bool, paused_by_disconnect: 
     }
 }
 
+/// Clamp a preload range so the target is never behind the start.
+///
+/// `seek_index_by_log_ts` returns the journal length when a timestamp is past
+/// the end, so an empty or not-yet-written session can legitimately produce
+/// `to < from`. CatchUpTo treats `pos >= target_pos` as "done", so the only
+/// thing that must not happen is a target that makes it stream backwards.
+fn preload_bounds(from_pos: usize, to_pos: usize) -> (usize, usize) {
+    (from_pos, to_pos.max(from_pos))
+}
+
 /// Messages the client sends to the server.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -181,6 +191,15 @@ enum ClientMsg {
     SeekFullLog { to_log_ts: u64, speed: f64 },
     /// Like SeekFullPaused but seeks by EQ log-event timestamp.
     SeekFullPausedLog { to_log_ts: u64 },
+    /// Preload a bounded RANGE of the journal — batches from `from_log_ts` up
+    /// to `to_log_ts` — then pause.
+    ///
+    /// The session-scoped viewer needs exactly one session and discards
+    /// everything before it on arrival. Preloading from position 0 made every
+    /// page load re-stream the whole journal: by the second day that was
+    /// 65,000 batches and 39 MB to render one evening's play, and the page sat
+    /// on "Loading data…" long enough to look broken.
+    PreloadRange { from_log_ts: u64, to_log_ts: u64 },
     /// Direct seek by EQ log-event timestamp — jumps to position and replays
     /// without re-streaming history.  The client is responsible for rebuilding
     /// state from its own in-memory batch cache before sending this.
@@ -709,6 +728,30 @@ async fn handle_client_msg(
                 then_speed: None,
             })
         }
+        ClientMsg::PreloadRange {
+            from_log_ts,
+            to_log_ts,
+        } => {
+            let (pos, target_pos, first_ts, last_ts) = {
+                let j = journal.read().await;
+                (
+                    j.seek_index_by_log_ts(from_log_ts),
+                    j.seek_index_by_log_ts(to_log_ts),
+                    j.first_ts(),
+                    j.last_ts(),
+                )
+            };
+            let (pos, target_pos) = preload_bounds(pos, target_pos);
+            let ack = ServerMsg::SeekOk { first_ts, last_ts };
+            if let Ok(txt) = serde_json::to_string(&ack) {
+                let _ = socket.send(Message::Text(txt.into())).await;
+            }
+            Some(ViewerMode::CatchUpTo {
+                pos,
+                target_pos,
+                then_speed: None,
+            })
+        }
         ClientMsg::SeekLog { to_log_ts, speed } => {
             // Direct seek — client has already rebuilt state from its cache.
             // Jump to the position and start replaying without re-streaming.
@@ -964,6 +1007,21 @@ mod tests {
     /// `paused_by_disconnect`, and for an hour it also silently disabled the
     /// return announcement — the viewer never learned the client was back.
     /// The announcement must survive a control message.
+    /// A session preload must START at the session, not at batch 0 — that
+    /// was 65,000 batches and 39 MB per page load by day two.
+    #[test]
+    fn a_preload_starts_where_the_session_starts() {
+        assert_eq!(preload_bounds(40_000, 65_859), (40_000, 65_859));
+    }
+
+    /// A session with nothing in it yet must not stream backwards.
+    #[test]
+    fn an_empty_session_preloads_nothing() {
+        let (pos, target) = preload_bounds(500, 200);
+        assert_eq!((pos, target), (500, 500));
+        assert!(pos >= target, "CatchUpTo sees this as immediately done");
+    }
+
     #[test]
     fn a_page_repositioning_itself_still_hears_the_client_return() {
         // user (or the page) sent a control message => paused_by_disconnect

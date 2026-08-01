@@ -2673,13 +2673,17 @@ function connectWS() {
         // fires once preloading completes (batch past end / stream_done / now_live).
         const preloadEndTs = SESSION_END_LOG_TS > 0 ? SESSION_END_LOG_TS
                            : (msg.log_last_ts || null);
+        // Ask for THIS SESSION only. Everything before it is discarded on
+        // arrival anyway (see the SESSION_LOG_TS guard in the batch handler),
+        // and preloading from the start of the journal meant re-streaming
+        // every previous day's play on every page load.
         if (preloadEndTs && preloadEndTs > SESSION_LOG_TS) {
           sessionPreloading = true;
           document.getElementById('cards').innerHTML = '<div class="waiting-state">Loading data…</div>';
-          sendWS({ t: 'seek_full_paused_log', to_log_ts: preloadEndTs });
+          sendWS({ t: 'preload_range', from_log_ts: SESSION_LOG_TS, to_log_ts: preloadEndTs });
         } else {
           // Empty session or no end known — park at session start.
-          sendWS({ t: 'seek_full_paused_log', to_log_ts: SESSION_LOG_TS });
+          sendWS({ t: 'preload_range', from_log_ts: SESSION_LOG_TS, to_log_ts: SESSION_LOG_TS });
         }
       }
       updateTimelineBar();
