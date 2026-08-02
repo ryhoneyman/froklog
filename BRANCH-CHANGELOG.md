@@ -640,4 +640,150 @@ must never be able to destroy history.
 
 ---
 
+## 36. Viewer self-heal actually heals
+
+The self-heal in 35's neighbourhood keyed the client-returned
+announcement off `paused_by_disconnect`, which any control message
+clears — and the page sends one AS A REACTION to the disconnect
+(`snapSessionToStart` repositions on `stream_done`). The event that
+should have armed the heal disarmed it, and a live viewer sat an hour
+behind while reporting the stream connected. `ingest_was_down` now
+survives control messages and decides whether to ANNOUNCE the return;
+`paused_by_disconnect` still decides whether the server resumes
+delivery, so a user-paused viewer gets its Go Live pill back without
+being dragged to live. The decision is a pure function with the
+failing case pinned as a test.
+
+## 37. Session-scoped preload
+
+Every page load re-streamed the whole journal: the page pins itself to
+the latest session and discards pre-session batches on arrival, but
+asked the server for a preload from position 0. Two days of play made
+that 66,000 batches / 39 MB / a minute of "Loading data…" per load.
+New `preload_range` control message streams a bounded window instead —
+measured on the same journal: 9,409 batches in 0.6 s. The range is
+clamped (`preload_bounds`) because `seek_index_by_log_ts` returns the
+journal length for a timestamp past the end, and an empty session must
+not stream backwards. `seek_full_paused_log` is untouched for seeks
+that genuinely want full accumulated history.
+
+## 38. Symbolic `session=latest`, and dead-session escape hatches
+
+The page auto-selects the newest session on load and writes the choice
+into the URL — as a NUMBER, which froze. Once the next session began,
+the tab was pinned to a session that had ended: stale data, every new
+batch discarded, and refresh could not escape because the auto-select
+only runs when the parameter is absent. `?session=latest` re-resolves
+on every load (`resolve_session_window`, either page). Deliberately
+numbered links still pin; a page pinned to a finished session says so
+in a banner with a one-click way out, and Go Live navigates to the
+latest session instead of following a live feed the window filter
+silently discards.
+
+## 39. Socket liveness
+
+No keepalive, no staleness detection: a viewer socket killed by laptop
+sleep or a proxy idle-reap left the page showing "client connected"
+over data that stopped arriving, indefinitely. The server now sends a
+`heartbeat` frame every 25 s from the Live and Paused arms (quiet
+streams only — arriving batches already prove liveness), and the page
+force-closes after 70 s of total silence, which lands it on the
+reconnect path that already existed.
+
+## 40. Sessions cut on the game's clock
+
+A client reconnect said nothing about whether the player took a break,
+yet it cut a session — so restarts, crashes and game disconnects
+fragmented one evening into many sessions (twelve in two days
+observed), each a chance to strand a pinned viewer. The only automatic
+boundary is now a ≥1 h gap between consecutive batches' LOG timestamps
+(`is_session_gap`, one definition shared by live ingest and
+`retroactive_scan` — they previously had different thresholds AND
+different comparisons). Login events still cut, unchanged.
+
+## 41. Segments: sessions and raids as first-class scopes
+
+The pull list is cut into segments — the session, plus any raid marked
+inside it — each with a clickable header and pull numbers restarting
+under it. A segment is built with an encounter's shape (key, members,
+start_ts, end_ts) and one resolver (`scopeByKey`) answers for either,
+so every existing aggregate path (cards, summary rows, header, chart)
+works on a segment unchanged; there is no second aggregation
+implementation to drift. Raid boundaries are `raid_start`/`raid_end`
+markers; marking from the page lands at the position being VIEWED, not
+wall-clock, so last night's raid can be marked up while reviewing it.
+
+## 42. Per-segment rosters (exclusions, not whitelists)
+
+Who counts toward a segment's aggregate is a stored, per-segment
+choice (`segment_members`), edited in a modal on the header. Everyone
+recorded starts included, and the roster is the UNION of damage,
+tanking, healing and heals-received — a healer never appears in the
+damage map, and a damage-derived list would make them impossible to
+exclude and invisible in their own raid. Exclusions rather than a
+whitelist because membership cannot be derived: `/who` returns the
+whole ZONE (1–14 people observed per block), and silence proves
+nothing. The failure mode is one row too many, never a silently
+dropped player. Markers became writable with the view token (same
+precedent as mob curation) so the page can set them at all.
+
+## 43. Raid boundaries called from inside the game
+
+`RE_CHAT` + `raid_mark()`: a chat message that IS the phrase
+("raid start", "raid end", optional description after a separator —
+"raid start -- Vox D3" names the raid on its header) emits a new
+`RaidMark` event, which ingest turns into a marker, deduplicated on
+(ts, kind) so replays don't stack them. The whole-message rule and the
+required separator exist because guild chat is full of "when does the
+raid start?" — validated against 9,449 real chat lines: zero false
+positives, 41 raid-mentioning messages correctly ignored. The chat
+pattern covers both directions (EQ Legends writes your own guild chat
+as "You say to your guild," not classic "You tell your guild,") and
+the separator is a run of `-—:` because one log had "-", "--" and
+"---" from the same person within minutes. The page refetches markers
+when a `raid_mark` event passes through the live feed, so a raid
+called mid-session appears without a reload.
+
+## 44. Marker feedback
+
+Setting a marker changed stored state and showed nothing — observed
+consequence: two identical raid_end markers one click apart. Now a
+toast names the time it landed on ("Raid ended at 8:42 PM"), failures
+say so, a trailing raid_end with no pulls after it stays visible as
+"raid ended here" instead of being filtered as an empty segment, and
+Raid end is disabled unless a raid is actually open.
+
+## 45. Character picker and the front door
+
+`/stream` pages get a "Characters (N)" picker built from the siblings
+list the page already fetched (it previously kept only the most-active
+entry to drive the switch pill). `GET /home?key=<home_token>` is the
+bookmarkable version: every character an install streams, live/idle
+state, private and public links. The key is a NEW secret minted by the
+client — deliberately not `owner_key`, which is documented as a
+non-secret grouping id; giving it this power would have silently
+turned it into a password for every existing install. Unknown key =
+plain 404. Player/server names come from the log, so they are
+percent-encoded into URLs and HTML-escaped into text, with tests
+including traversal and query injection through a name.
+
+## 46. Liveness measured on the game's clock, everywhere
+
+The front door and the sibling hint computed idle from batch ARRIVAL
+time — and the multi-character client seeds a `/who` scan for every
+watched character on startup, so a client restart made characters
+unplayed for days light up as live. Idle now derives from the log's
+own timestamps (`last_log_ts`), matching 40's principle: liveness is a
+question about the game, not the network.
+
+## 47. Viewer DOM leak
+
+The mob-list's row-reuse map collected only `.mob-row`, and the same
+map drives the cleanup pass — so pull headers were rebuilt every frame
+AND never removed. A live page reached 559,647 DOM nodes (184,331
+children in a list showing ~155 rows) in a quarter hour of combat.
+The map now collects every row type; measured after: 1,011 nodes.
+
+---
+
 *(subsequent changes appended as they land)*
