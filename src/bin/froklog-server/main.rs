@@ -1292,9 +1292,7 @@ async fn home_handler(
         let Some(entry) = reg.get(&info.stream_id) else {
             continue;
         };
-        if entry.home_token.is_empty()
-            || !froklog::auth::tokens_match(&entry.home_token, &q.key)
-        {
+        if entry.home_token.is_empty() || !froklog::auth::tokens_match(&entry.home_token, &q.key) {
             continue;
         }
         // Log time, not arrival time — see the note in siblings_handler.
@@ -1308,7 +1306,9 @@ async fn home_handler(
             entry.view_token.clone(),
             entry.public_stream,
             if last_log == 0 { u64::MAX } else { idle },
-            entry.client_connected.load(std::sync::atomic::Ordering::Relaxed),
+            entry
+                .client_connected
+                .load(std::sync::atomic::Ordering::Relaxed),
         ));
     }
     drop(reg);
@@ -1320,40 +1320,42 @@ async fn home_handler(
 
     let body: String = rows
         .iter()
-        .map(|(player, server, game, id, vtok, public, idle, connected)| {
-            let state_html = if *connected && *idle < 60 {
-                "<span class=\"live\">\u{25cf} live</span>".to_string()
-            } else if *idle == u64::MAX {
-                "<span class=\"idle\">no data yet</span>".to_string()
-            } else if *idle > 86_400 {
-                format!("<span class=\"idle\">{}d idle</span>", idle / 86_400)
-            } else if *idle > 3_600 {
-                format!("<span class=\"idle\">{}h idle</span>", idle / 3_600)
-            } else {
-                format!("<span class=\"idle\">{}m idle</span>", idle / 60)
-            };
-            let public_html = if *public {
+        .map(
+            |(player, server, game, id, vtok, public, idle, connected)| {
+                let state_html = if *connected && *idle < 60 {
+                    "<span class=\"live\">\u{25cf} live</span>".to_string()
+                } else if *idle == u64::MAX {
+                    "<span class=\"idle\">no data yet</span>".to_string()
+                } else if *idle > 86_400 {
+                    format!("<span class=\"idle\">{}d idle</span>", idle / 86_400)
+                } else if *idle > 3_600 {
+                    format!("<span class=\"idle\">{}h idle</span>", idle / 3_600)
+                } else {
+                    format!("<span class=\"idle\">{}m idle</span>", idle / 60)
+                };
+                let public_html = if *public {
+                    format!(
+                        "<a class=\"pub\" href=\"/player/{}/{}/{}\">public link</a>",
+                        urlenc(game),
+                        urlenc(server),
+                        urlenc(player)
+                    )
+                } else {
+                    "<span class=\"nopub\">not published</span>".to_string()
+                };
                 format!(
-                    "<a class=\"pub\" href=\"/player/{}/{}/{}\">public link</a>",
-                    urlenc(game),
-                    urlenc(server),
-                    urlenc(player)
-                )
-            } else {
-                "<span class=\"nopub\">not published</span>".to_string()
-            };
-            format!(
-                "<a class=\"row\" href=\"/stream/{}?vtok={}\">\
+                    "<a class=\"row\" href=\"/stream/{}?vtok={}\">\
                    <span class=\"name\">{}</span>\
                    <span class=\"server\">{}</span>\
                    {state_html}\
                  </a><span class=\"links\">{public_html}</span>",
-                urlenc(id),
-                urlenc(vtok),
-                admin::html_escape(player),
-                admin::html_escape(server),
-            )
-        })
+                    urlenc(id),
+                    urlenc(vtok),
+                    admin::html_escape(player),
+                    admin::html_escape(server),
+                )
+            },
+        )
         .collect();
 
     let html = format!(

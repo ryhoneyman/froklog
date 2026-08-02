@@ -1429,7 +1429,10 @@ mod raid_mark_tests {
             );
         }
         // A bare phrase with trailing whitespace is still a plain marker.
-        assert_eq!(raid_mark("Raid Start "), Some(("raid_start", String::new())));
+        assert_eq!(
+            raid_mark("Raid Start "),
+            Some(("raid_start", String::new()))
+        );
     }
 
     /// Without a separator the phrase would only need to be a PREFIX, which

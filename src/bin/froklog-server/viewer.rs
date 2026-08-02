@@ -156,7 +156,11 @@ struct PausedTick {
 /// on `stream_done`, that reposition looked like a user pause, and the
 /// viewer then never learned the client had returned — it sat frozen at the
 /// moment of the disconnect while still reporting the stream connected.
-fn on_paused_tick(ingest_was_down: bool, connected: bool, paused_by_disconnect: bool) -> PausedTick {
+fn on_paused_tick(
+    ingest_was_down: bool,
+    connected: bool,
+    paused_by_disconnect: bool,
+) -> PausedTick {
     let back = ingest_was_down && connected;
     PausedTick {
         announce: back,
@@ -180,7 +184,10 @@ fn preload_bounds(from_pos: usize, to_pos: usize) -> (usize, usize) {
 ///
 /// `latest` always resolves to the newest session, which is what keeps a
 /// long-lived tab from being pinned to a session that has since ended.
-fn resolve_session_window(param: &str, sessions: &[crate::session_index::SessionEntry]) -> (u64, u64) {
+fn resolve_session_window(
+    param: &str,
+    sessions: &[crate::session_index::SessionEntry],
+) -> (u64, u64) {
     let num = if param.eq_ignore_ascii_case("latest") {
         match sessions.last() {
             Some(s) => s.num,
@@ -1124,7 +1131,10 @@ mod tests {
     fn a_disconnect_forced_pause_resumes_itself() {
         assert_eq!(
             on_paused_tick(true, true, true),
-            PausedTick { announce: true, resume: true }
+            PausedTick {
+                announce: true,
+                resume: true
+            }
         );
     }
 
@@ -1133,12 +1143,18 @@ mod tests {
     fn silence_when_there_is_no_return_to_report() {
         assert_eq!(
             on_paused_tick(true, false, true),
-            PausedTick { announce: false, resume: false },
+            PausedTick {
+                announce: false,
+                resume: false
+            },
             "still disconnected"
         );
         assert_eq!(
             on_paused_tick(false, true, false),
-            PausedTick { announce: false, resume: false },
+            PausedTick {
+                announce: false,
+                resume: false
+            },
             "never disconnected — an ordinary user pause stays paused"
         );
     }

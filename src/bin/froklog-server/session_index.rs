@@ -38,7 +38,6 @@ use crate::journal::IndexEntry;
 /// fresh one.
 pub const SESSION_GAP_SECS: u64 = 3600;
 
-
 /// Does a batch at `log_ts` begin a new play session, given the log timestamp
 /// of the last thing stored?
 ///

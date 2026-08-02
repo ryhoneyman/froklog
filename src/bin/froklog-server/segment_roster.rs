@@ -52,11 +52,7 @@ impl SegmentRoster {
              ON CONFLICT(seg_ts, name) DO UPDATE SET display = excluded.display",
         )
         .map_err(sql_err)?
-        .execute(rusqlite::params![
-            seg_ts as i64,
-            name.to_lowercase(),
-            name
-        ])
+        .execute(rusqlite::params![seg_ts as i64, name.to_lowercase(), name])
         .map_err(sql_err)?;
         Ok(())
     }
@@ -132,7 +128,10 @@ mod tests {
         s.exclude(1000, "Zarri").unwrap();
         s.exclude(1000, "zarri").unwrap();
         assert_eq!(s.list().unwrap().len(), 1);
-        assert!(s.include(1000, "ZARRI").unwrap(), "matched case-insensitively");
+        assert!(
+            s.include(1000, "ZARRI").unwrap(),
+            "matched case-insensitively"
+        );
         assert!(s.list().unwrap().is_empty());
     }
 
