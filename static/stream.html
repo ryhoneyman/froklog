@@ -212,6 +212,55 @@
              color: #6c6c7a; flex-shrink: 0; padding: 0 3px; }
   .fl-star.star-named { color: #e8c76a; }
   .fl-star:hover { color: #ffd970; }
+  /* Segment headers: the session, and any raid marked out inside it. */
+  .seg-row { display: flex; align-items: center; gap: 6px; cursor: pointer;
+             padding: 5px 8px; margin-top: 6px; font-size: 12px;
+             background: #16161c; border-left: 3px solid #4a6a9a;
+             color: #b8c4d4; letter-spacing: .02em; }
+  .seg-row:hover { background: #1c1c24; }
+  .seg-row.selected { background: #22222c; color: #e8eef8; }
+  .seg-row.seg-raid { border-left-color: #e8c76a; color: #e8d8b0; }
+  .seg-label { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
+  .seg-who { cursor: pointer; opacity: .55; font-size: 13px; padding: 0 2px; }
+  .seg-who:hover { opacity: 1; }
+  .seg-count { color: #7a8494; font-size: 11px; white-space: nowrap; }
+
+  #seg-modal-back { position: fixed; inset: 0; z-index: 200; display: flex;
+                    align-items: center; justify-content: center;
+                    background: rgba(0,0,0,.55); }
+  #seg-modal { background: #17171d; border: 1px solid #33333f; border-radius: 8px;
+               width: min(420px, 92vw); max-height: 80vh; display: flex;
+               flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.6);
+               font-size: 13px; color: #d8d8e0; }
+  .sm-head { display: flex; justify-content: space-between; align-items: baseline;
+             padding: 12px 14px 4px; }
+  .sm-title { font-weight: 600; }
+  .sm-when { color: #7a8494; font-size: 11px; }
+  .sm-hint { padding: 0 14px 10px; color: #8a8a96; font-size: 11.5px; line-height: 1.45; }
+  .sm-hint code { background: #23232c; padding: 0 3px; border-radius: 3px; }
+  .sm-tools { display: flex; gap: 6px; align-items: center; padding: 0 14px 8px;
+              border-bottom: 1px solid #2a2a34; }
+  .sm-tools button { background: #262630; color: #cfcfda; border: 1px solid #3a3a46;
+                     border-radius: 4px; padding: 2px 10px; font-size: 11px; cursor: pointer; }
+  .sm-tools button:hover { background: #30303c; }
+  .sm-count { margin-left: auto; color: #7a8494; font-size: 11px; }
+  .sm-list { overflow-y: auto; padding: 6px 0; flex: 1; min-height: 40px; }
+  .sm-row { display: flex; align-items: center; gap: 4px; padding: 4px 14px; cursor: pointer; }
+  .sm-row:hover { background: #1f1f28; }
+  .sm-empty { padding: 10px 14px; color: #7a8494; font-style: italic; }
+  .sm-foot { display: flex; justify-content: space-between; align-items: center;
+             padding: 10px 14px; border-top: 1px solid #2a2a34; }
+  .sm-foot button { border-radius: 4px; padding: 4px 14px; font-size: 12px; cursor: pointer; }
+  .sm-close { background: #e8c76a; color: #241d06; border: 0; }
+  .sm-del { background: transparent; color: #c07070; border: 1px solid #503034; }
+  .sm-del:hover { background: #2a1a1c; }
+
+  .raid-btns { display: inline-flex; gap: 4px; margin-left: 8px; }
+  .raid-btns button { background: #23232c; color: #b8c4d4; border: 1px solid #3a3a46;
+                      border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
+  .raid-btns button:hover { background: #2e2e3a; color: #e8eef8; }
+
   #stale-session {
     background: #4a3a12; color: #f0d890; border-bottom: 1px solid #6a5520;
     padding: 7px 12px; font-size: 13px; text-align: center;
@@ -497,6 +546,12 @@
     <option value="32">32×</option>
   </select>
   <select id="tl-session" title="Session" onchange="onSessionChange(this.value)"></select>
+  <span class="raid-btns" id="raid-btns" style="display:none">
+    <button type="button" onclick="addRaidMarker('raid_start')"
+            title="Mark a raid starting here — pulls after it aggregate as one raid">Raid start</button>
+    <button type="button" onclick="addRaidMarker('raid_end')"
+            title="Close the raid here — later pulls go back to the session">Raid end</button>
+  </span>
 </div>
 
 <div id="layout" onclick="deselectMob()">
@@ -599,6 +654,107 @@ function overridesUrl() {
   const m = location.pathname.match(/^\/stream\/[^/]+/);
   return m ? `${m[0]}/mob_overrides?vtok=${encodeURIComponent(VIEW_TOKEN)}` : null;
 }
+// ── Segments: sessions and raids ──────────────────────────────────────────────
+// A SEGMENT is a stretch of the timeline you can aggregate as a whole: the
+// session itself, or a raid marked out inside it. Raid boundaries come from
+// `raid_start` / `raid_end` markers; the session boundary is the page's own
+// scope (an hour away from the game starts a new one server-side).
+let raidMarkers = [];                  // [{id, ts, kind, label}] in time order
+const segExclusions = new Map();       // segTs -> Set(lowercased names)
+let segmentsRev = 0;                   // bumped so caches keyed on segments rebuild
+
+/// Build a stream-scoped API path that works on both the tokened /stream page
+/// and the public /player page.
+function apiPath(suffix) {
+  if (location.pathname.startsWith('/player/')) {
+    return location.pathname.replace(/\/$/, '') + '/' + suffix;
+  }
+  const m = location.pathname.match(/^\/stream\/[^/]+/);
+  return m ? `${m[0]}/${suffix}?vtok=${encodeURIComponent(VIEW_TOKEN)}` : null;
+}
+
+async function fetchMarkers() {
+  const url = apiPath('markers');
+  if (!url) return;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return;
+    raidMarkers = (await r.json()).sort((a, b) => a.ts - b.ts);
+    segmentsRev++;
+    scheduleRender();
+  } catch (e) { /* no markers is a valid state */ }
+}
+
+async function fetchSegmentMembers() {
+  const url = apiPath('segment_members');
+  if (!url) return;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return;
+    segExclusions.clear();
+    for (const e of await r.json()) {
+      const k = String(e.seg_ts);
+      if (!segExclusions.has(k)) segExclusions.set(k, new Set());
+      segExclusions.get(k).add(e.name.toLowerCase());
+    }
+    segmentsRev++;
+    scheduleRender();
+  } catch (e) { /* everyone counts until told otherwise */ }
+}
+
+function isExcluded(segTs, name) {
+  const set = segExclusions.get(String(segTs));
+  return !!set && set.has(String(name).toLowerCase());
+}
+
+/// Include or exclude one player from one segment's aggregate. Applied
+/// locally first so the modal feels immediate, then persisted.
+async function setSegmentMember(segTs, name, included) {
+  const k = String(segTs);
+  if (!segExclusions.has(k)) segExclusions.set(k, new Set());
+  const set = segExclusions.get(k);
+  if (included) set.delete(name.toLowerCase()); else set.add(name.toLowerCase());
+  segmentsRev++;
+  scheduleRender();
+  const m = location.pathname.match(/^\/stream\/[^/]+/);
+  if (!m) return;
+  try {
+    await fetch(`${m[0]}/segment_member?vtok=${encodeURIComponent(VIEW_TOKEN)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seg_ts: Number(segTs), name, included }),
+    });
+  } catch (e) { /* local view already updated; next reload re-syncs */ }
+}
+
+/// Drop a raid boundary at the position currently being viewed.
+async function addRaidMarker(kind) {
+  const m = location.pathname.match(/^\/stream\/[^/]+/);
+  if (!m) return;
+  // The position on screen, not wall-clock: marking a raid while reviewing
+  // last night should land where you are looking.
+  const ts = Math.round(S.lastTs || logLastTs || Date.now() / 1000);
+  try {
+    const r = await fetch(`${m[0]}/marker?vtok=${encodeURIComponent(VIEW_TOKEN)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ts, kind, label: '' }),
+    });
+    if (r.ok) { raidMarkers.push(await r.json()); raidMarkers.sort((a,b)=>a.ts-b.ts); segmentsRev++; scheduleRender(); }
+  } catch (e) { /* nothing marked */ }
+}
+
+async function deleteRaidMarker(id) {
+  const m = location.pathname.match(/^\/stream\/[^/]+/);
+  if (!m) return;
+  raidMarkers = raidMarkers.filter(x => x.id !== id);
+  segmentsRev++;
+  scheduleRender();
+  try {
+    await fetch(`${m[0]}/marker/${id}?vtok=${encodeURIComponent(VIEW_TOKEN)}`, { method: 'DELETE' });
+  } catch (e) { /* removed locally; next reload re-syncs */ }
+}
+
 async function fetchMobOverrides() {
   const url = overridesUrl();
   if (!url) return;
@@ -1556,9 +1712,17 @@ function buildRenderState() {
     curEnc.names[nk] = (curEnc.names[nk] || 0) + 1;
   }
 
+  // ── Segments ───────────────────────────────────────────────────────────
+  // Cut the pull list into stretches you can aggregate as a unit. The first
+  // one is the session (the page's own scope); a `raid_start` marker opens a
+  // raid, and `raid_end` closes it back to the session.
+  const segments = buildSegments(encounters);
+
   // fight_elapsed_secs: scope to the selected encounter or mob so the header
   // label and card rates cover the pull's / mob's own fight window.
-  const selEnc = (selectedEnc !== null && selectedMob === null) ? encounters.find(e => e.key === selectedEnc) : null;
+  const selEnc = (selectedEnc !== null && selectedMob === null)
+    ? (encounters.find(e => e.key === selectedEnc) || segments.find(sg => sg.key === selectedEnc) || null)
+    : null;
   const fight_elapsed_secs = selEnc
     ? Math.max(selEnc.end_ts - selEnc.start_ts, 1)
     : (selectedMob !== null && S.mobs[selectedMob])
@@ -1583,7 +1747,7 @@ function buildRenderState() {
 
   return {
     entities, healers, healees,
-    mob_list, encounters, now_secs: nowSecs,
+    mob_list, encounters, segments, now_secs: nowSecs,
     mob_damage, mob_tanking, mob_healing, mob_healed, tanked,
     avoidance, mob_avoid,
     fight_start_display: fightStartDisplay,
@@ -1593,13 +1757,80 @@ function buildRenderState() {
   };
 }
 
+/// Group encounters into segments and renumber pulls within each.
+///
+/// Boundaries, in time order: the start of what this page is showing, then
+/// every `raid_start`. A `raid_end` closes the raid it follows, so the pulls
+/// after it belong to the session again rather than to the raid.
+///
+/// A segment carries the same shape as an encounter — `key`, `members`,
+/// `start_ts`, `end_ts` — so selecting one flows through every path that
+/// already aggregates a pull, without a parallel set of them.
+function buildSegments(encounters) {
+  if (!encounters.length) return [];
+  const first = encounters[0].start_ts;
+  const last = encounters[encounters.length - 1].end_ts;
+
+  // Boundaries inside the window being viewed.
+  const inWindow = t => t >= first - 1 && t <= last + 1;
+  const bounds = [{ ts: SESSION_LOG_TS > 0 ? Math.min(SESSION_LOG_TS, first) : first, kind: 'session' }];
+  for (const m of raidMarkers) {
+    if (!inWindow(m.ts)) continue;
+    if (m.kind === 'raid_start') bounds.push({ ts: m.ts, kind: 'raid', id: m.id });
+    else if (m.kind === 'raid_end') bounds.push({ ts: m.ts, kind: 'session', id: m.id, closes: true });
+  }
+  bounds.sort((a, b) => a.ts - b.ts);
+
+  const segs = bounds.map((b, i) => ({
+    key: 'seg' + b.ts,
+    seg_ts: b.ts,
+    kind: b.kind,
+    marker_id: b.id || null,
+    closes: !!b.closes,
+    start_ts: b.ts,
+    end_ts: i + 1 < bounds.length ? bounds[i + 1].ts : Math.max(last, b.ts),
+    members: [], encs: [], names: {}, all_dead: true, any_active: false,
+  }));
+
+  // Assign every pull to the last boundary at or before it, and renumber
+  // within the segment — "Pull #3 of this raid" is what you actually want to
+  // say out loud, not #47 of the evening.
+  let si = 0;
+  const counters = new Map();
+  for (const enc of encounters) {
+    while (si + 1 < segs.length && segs[si + 1].start_ts <= enc.start_ts) si++;
+    const seg = segs[si];
+    enc.segKey = seg.key;
+    const n = (counters.get(seg.key) || 0) + 1;
+    counters.set(seg.key, n);
+    enc.num = n;
+    seg.encs.push(enc.key);
+    seg.members.push(...enc.members);
+    seg.end_ts = Math.max(seg.end_ts, enc.end_ts);
+    seg.all_dead = seg.all_dead && enc.all_dead;
+    seg.any_active = seg.any_active || enc.any_active;
+    for (const [k, v] of Object.entries(enc.names)) seg.names[k] = (seg.names[k] || 0) + v;
+  }
+  // A trailing boundary with nothing after it is not a segment worth a header
+  // (the "raid end" that closes the evening, say).
+  return segs.filter(sg => sg.encs.length);
+}
+
 // Wall-clock time (seconds) when the most recent batch was applied.
 // Used to advance "nowSecs" between batches without depending on client timezone.
 let lastBatchWallTimeSecs = 0;
 
 // ── UI state ──────────────────────────────────────────────────────────────────
 let selectedMob      = null;
-let selectedEnc      = null;   // encounter key (start_ts) — pull-level scoping
+let selectedEnc      = null;   // encounter key (start_ts) or segment key ('seg<ts>')
+/// The scoped thing, whichever kind it is. Segments carry an encounter's
+/// shape, so every aggregate path works on either without knowing which.
+function scopeByKey(d, key) {
+  if (key === null || !d) return null;
+  return (d.encounters || []).find(e => e.key === key)
+      || (d.segments || []).find(sg => sg.key === key)
+      || null;
+}
 let encManuallySelected = false; // true only for a user click (not live auto-follow)
 let tlEncScope       = null;   // {start, end}: timeline bar scoped to a selected pull
 let pendingMobRestore = null;  // mob id to re-select after a seek reset, if still in window
@@ -1619,7 +1850,7 @@ function selectEnc(key) {
   // Scope the timeline bar to this pull's window (small pad past the end).
   tlEncScope = null;
   if (key !== null && lastData) {
-    const enc = (lastData.encounters || []).find(e => e.key === key);
+    const enc = scopeByKey(lastData, key);
     if (enc && enc.end_ts > enc.start_ts) tlEncScope = { start: enc.start_ts, end: enc.end_ts + 5 };
   }
   if (key !== null) detailMode = 'damage';
@@ -1641,7 +1872,7 @@ function encSelectChanged(value) {
 
 /// ⟲ on a selected pull: replay it from its first event at the chosen speed.
 function replayEncounter(key) {
-  const enc = lastData ? (lastData.encounters || []).find(e => e.key === key) : null;
+  const enc = scopeByKey(lastData, key);
   if (!enc) return;
   if (tlIsLive) liveAutoSelect = false;
   encManuallySelected = true;
@@ -1657,7 +1888,7 @@ function selectMob(id) {
   // Clicking a MEMBER of the selected pull keeps the pull's replay context
   // (scoped bar, ⟲, Play-replays-pull) while the panels drill into that mob.
   const encSel = selectedEnc !== null && lastData
-    ? (lastData.encounters || []).find(e => e.key === selectedEnc) : null;
+    ? scopeByKey(lastData, selectedEnc) : null;
   const memberOfSel = !!(encSel && id !== null && encSel.members.includes(id));
   if (!memberOfSel) {
     selectedEnc = null;
@@ -1769,11 +2000,13 @@ function buildFightLabel(d) {
   // Encounter (pull) selected: combined stats over the pull's whole life.
   // A selected member mob takes precedence in the panels; the pull keeps the bar.
   if (selectedEnc !== null && selectedMob === null) {
-    const enc = (d.encounters || []).find(e => e.key === selectedEnc);
+    const enc = scopeByKey(d, selectedEnc);
     if (enc) {
       // Title matches the pull list — the named (true casing) or "Pull #N";
       // the composition rides along as a small subtitle.
-      const title = enc.named ? `★ ${encNamedLabel(enc)}` : `Pull #${enc.num}`;
+      const title = enc.seg_ts !== undefined
+        ? (enc.kind === 'raid' ? '\u2694 Raid' : '\u25c6 Session')
+        : enc.named ? `★ ${encNamedLabel(enc)}` : `Pull #${enc.num}`;
       const comp = Object.entries(enc.names)
         .sort((a, b) => b[1] - a[1])
         .map(([n, c]) => c > 1 ? `${n} ×${c}` : n)
@@ -1890,7 +2123,7 @@ function renderLootRows() {
   const hdr = `<div class="loot-player-hdr">${playerName || '—'}</div>`;
 
   if (selectedEnc !== null && selectedMob === null && lastData) {
-    const enc = (lastData.encounters || []).find(e => e.key === selectedEnc);
+    const enc = scopeByKey(lastData, selectedEnc);
     if (enc) {
       const blocks = enc.members.map(id => {
         const entry = allMobLootEver[id] || S.mobLoot[id];
@@ -1986,8 +2219,17 @@ function renderMobList(d) {
   const inEnc = new Set();
   const items = [];
   const encs = (d.encounters || []);
+  const segsByKey = new Map((d.segments || []).map(sg => [sg.key, sg]));
+  let lastSegKey = null;
   for (let e = encs.length - 1; e >= 0; e--) {
     const enc = encs[e];
+    // Newest-first: a segment's header sits above its newest pull, which is
+    // the moment the segment changes as we walk backwards.
+    if (enc.segKey && enc.segKey !== lastSegKey) {
+      lastSegKey = enc.segKey;
+      const sg = segsByKey.get(enc.segKey);
+      if (sg) items.push({ type: 'seg', seg: sg });
+    }
     items.push({ type: 'enc', enc });
     for (let j = enc.members.length - 1; j >= 0; j--) {
       const m = byId.get(enc.members[j]);
@@ -2001,6 +2243,44 @@ function renderMobList(d) {
   const seen = new Set();
   let domIdx = 0;
   for (const item of items) {
+    if (item.type === 'seg') {
+      const sg = item.seg;
+      const idStr = 's' + sg.key;
+      seen.add(idStr);
+      const clock = new Date(sg.start_ts * 1000)
+        .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      const excl = (segExclusions.get(String(sg.seg_ts)) || new Set()).size;
+      const label = (sg.kind === 'raid' ? '\u2694 Raid' : '\u25c6 Session') + ' \u00b7 ' + clock;
+      const cls = 'seg-row' + (sg.kind === 'raid' ? ' seg-raid' : '')
+        + (selectedEnc === sg.key ? ' selected' : '');
+      let row = existing[idStr];
+      if (!row) {
+        row = document.createElement('div');
+        row.dataset.mobId = idStr;
+        row.dataset.segKey = sg.key;
+        row.innerHTML = '<span class="seg-label"></span>'
+          + '<span class="seg-who" title="Choose who counts toward this aggregate">\u{1F465}</span>'
+          + '<span class="seg-count"></span>';
+        row._label = row.children[0];
+        row._who   = row.children[1];
+        row._count = row.children[2];
+        row.addEventListener('click', function(e) { e.stopPropagation(); selectEnc(this.dataset.segKey); });
+        row._who.addEventListener('click', function(e) {
+          e.stopPropagation();
+          openSegmentModal(this.parentNode.dataset.segKey);
+        });
+      }
+      row._segKey = sg.key;
+      if (row.className !== cls) row.className = cls;
+      if (row._label.textContent !== label) row._label.textContent = label;
+      const countText = `${sg.encs.length} pull${sg.encs.length === 1 ? '' : 's'}`
+        + (excl ? ` \u00b7 ${excl} out` : '');
+      if (row._count.textContent !== countText) row._count.textContent = countText;
+      row._who.style.display = canCurate() ? '' : 'none';
+      if (container.children[domIdx] !== row) container.insertBefore(row, container.children[domIdx] || null);
+      domIdx++;
+      continue;
+    }
     if (item.type === 'enc') {
       const enc = item.enc;
       const idStr = 'e' + enc.key;
@@ -2126,7 +2406,7 @@ function renderSummary(d) {
   const hasRealElapsed = !mobEntry || (mobEntry.first_ts && mobEntry.last_ts && mobEntry.last_ts > mobEntry.first_ts);
 
   let rows = '';
-  const selEncEntry = (selectedEnc !== null && selectedMob === null) ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
+  const selEncEntry = (selectedEnc !== null && selectedMob === null) ? scopeByKey(d, selectedEnc) : null;
   if (selEncEntry) {
     // Encounter scope: merge member-mob stats per player; rates over the
     // pull's own duration.
@@ -2138,7 +2418,8 @@ function renderSummary(d) {
           a.total += e[totalField] || 0;
         }
       }
-      return Object.values(acc).sort((a, b) => b.total - a.total);
+      return applyExclusions(
+        Object.values(acc).sort((a, b) => b.total - a.total), selEncEntry);
     };
     const encSecs = Math.max(selEncEntry.end_ts - selEncEntry.start_ts, 1);
     if (detailMode === 'damage' || detailMode === 'tanked') {
@@ -2237,6 +2518,114 @@ function sumRow(name, classes, val, rate, rateLabel, pct) {
 /// Merge per-mob card entries across an encounter's members: totals summed per
 /// player, breakdown lists (by type / by spell) summed by key. Rates are NOT
 /// carried over — cards recompute them from the pull's own elapsed time.
+/// Everyone who appears anywhere in a segment, whether or not they swung.
+///
+/// The union of damage, tanking, healing and heals-received — a healer never
+/// appears in the damage map, and leaving them out of the picker would make
+/// them impossible to exclude and invisible in the roster.
+function segmentRoster(d, seg) {
+  const names = new Map();   // lowercased -> display
+  const add = map => {
+    for (const id of seg.members) {
+      for (const e of (map || {})[String(id)] || []) {
+        if (e.name) names.set(e.name.toLowerCase(), e.name);
+      }
+    }
+  };
+  add(d.mob_damage); add(d.mob_tanking); add(d.mob_healing); add(d.mob_healed);
+  return [...names.values()].sort((a, b) => a.localeCompare(b));
+}
+
+/// Pick who counts toward a segment's aggregate.
+///
+/// Everyone starts counted — a /who is zone-wide and a healer never swings,
+/// so neither source can decide membership on its own. All / None are here
+/// because a busy zone can put a dozen strangers in the list and picking the
+/// five people you care about should not cost twelve clicks.
+function openSegmentModal(segKey) {
+  const d = lastData;
+  const seg = scopeByKey(d, segKey);
+  if (!seg) return;
+  const roster = segmentRoster(d, seg);
+  const kindLabel = seg.kind === 'raid' ? 'raid' : 'session';
+  const when = new Date(seg.start_ts * 1000)
+    .toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+  const back = document.createElement('div');
+  back.id = 'seg-modal-back';
+  back.innerHTML = `
+    <div id="seg-modal" role="dialog" aria-label="Who counts toward this ${kindLabel}">
+      <div class="sm-head">
+        <span class="sm-title">Who counts toward this ${kindLabel}</span>
+        <span class="sm-when">${when}</span>
+      </div>
+      <div class="sm-hint">Everyone here is counted. Untick anyone who was not
+        really with you — a <code>/who</code> sees the whole zone.</div>
+      <div class="sm-tools">
+        <button type="button" data-all="1">All</button>
+        <button type="button" data-all="0">None</button>
+        <span class="sm-count"></span>
+      </div>
+      <div class="sm-list"></div>
+      <div class="sm-foot">
+        ${seg.marker_id ? '<button type="button" class="sm-del">Remove this marker</button>' : '<span></span>'}
+        <button type="button" class="sm-close">Done</button>
+      </div>
+    </div>`;
+  const list = back.querySelector('.sm-list');
+  const countEl = back.querySelector('.sm-count');
+  const refreshCount = () => {
+    const on = [...list.querySelectorAll('input')].filter(i => i.checked).length;
+    countEl.textContent = `${on} of ${roster.length} counted`;
+  };
+  if (!roster.length) {
+    list.innerHTML = '<div class="sm-empty">Nobody recorded in this stretch yet.</div>';
+  }
+  for (const name of roster) {
+    const row = document.createElement('label');
+    row.className = 'sm-row';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !isExcluded(seg.seg_ts, name);
+    box.addEventListener('change', () => {
+      setSegmentMember(seg.seg_ts, name, box.checked);
+      refreshCount();
+    });
+    row.appendChild(box);
+    row.appendChild(document.createTextNode(' ' + name));
+    list.appendChild(row);
+  }
+  refreshCount();
+
+  for (const b of back.querySelectorAll('[data-all]')) {
+    b.addEventListener('click', () => {
+      const on = b.dataset.all === '1';
+      for (const box of list.querySelectorAll('input')) {
+        if (box.checked !== on) { box.checked = on; box.dispatchEvent(new Event('change')); }
+      }
+    });
+  }
+  const close = () => back.remove();
+  back.querySelector('.sm-close').addEventListener('click', close);
+  back.addEventListener('click', e => { if (e.target === back) close(); });
+  document.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+  });
+  const del = back.querySelector('.sm-del');
+  if (del) del.addEventListener('click', () => { deleteRaidMarker(seg.marker_id); close(); });
+  document.body.appendChild(back);
+}
+
+/// Drop the players you have taken out of this segment. A no-op for a pull:
+/// exclusions are a segment-level judgement ("that was a zone random, not one
+/// of us"), and pulls inherit nothing.
+function applyExclusions(list, scope) {
+  if (!scope || scope.seg_ts === undefined) return list;
+  const set = segExclusions.get(String(scope.seg_ts));
+  if (!set || !set.size) return list;
+  return list.filter(e => !set.has(String(e.name).toLowerCase()));
+}
+
 function mergeEncounterEntries(map, members, totalField, lists) {
   const acc = {};
   for (const id of members) {
@@ -2292,28 +2681,28 @@ function renderCards(d) {
 
   // Pull selected: cards cover the encounter — same scope as the header and
   // summary, so every number on screen agrees.
-  const encEntry = (selectedEnc !== null && selectedMob === null) ? (d.encounters || []).find(e => e.key === selectedEnc) : null;
+  const encEntry = (selectedEnc !== null && selectedMob === null) ? scopeByKey(d, selectedEnc) : null;
   if (encEntry) {
     const ids = encEntry.members;
     if (detailMode === 'damage' || detailMode === 'tanked') {
-      const p = mergeEncounterEntries(
+      const p = applyExclusions(mergeEncounterEntries(
         detailMode === 'damage' ? d.mob_damage : d.mob_tanking, ids,
-        'total_damage', { damage_by_type: ['type', 'damage'], spells: ['spell', 'damage'] });
+        'total_damage', { damage_by_type: ['type', 'damage'], spells: ['spell', 'damage'] }), encEntry);
       cardsEl.innerHTML = p.length ? p.map(e => damageCard(e, elapsed)).join('')
         : '<div class="empty-state">No data recorded for this pull</div>';
     } else if (detailMode === 'healing') {
-      const h = mergeEncounterEntries(d.mob_healing, ids,
-        'total_heals', { heals_by_spell: ['spell', 'healed'] });
+      const h = applyExclusions(mergeEncounterEntries(d.mob_healing, ids,
+        'total_heals', { heals_by_spell: ['spell', 'healed'] }), encEntry);
       cardsEl.innerHTML = h.length ? h.map(e => healerCard(e, elapsed)).join('')
         : '<div class="empty-state">No healing recorded for this pull</div>';
     } else if (detailMode === 'healed') {
-      const h = mergeEncounterEntries(d.mob_healed, ids,
-        'total_healed_received', { healed_received_by_spell: ['spell', 'healed'] });
+      const h = applyExclusions(mergeEncounterEntries(d.mob_healed, ids,
+        'total_healed_received', { healed_received_by_spell: ['spell', 'healed'] }), encEntry);
       cardsEl.innerHTML = h.length ? h.map(e => healeeCard(e, elapsed)).join('')
         : '<div class="empty-state">No heals received recorded for this pull</div>';
     } else {
-      const a = mergeEncounterEntries(d.mob_avoid, ids,
-        'total', { by_type: ['type', 'count'] });
+      const a = applyExclusions(mergeEncounterEntries(d.mob_avoid, ids,
+        'total', { by_type: ['type', 'count'] }), encEntry);
       cardsEl.innerHTML = a.length ? a.map(e => avoidCard(e)).join('')
         : '<div class="empty-state">No avoidance recorded for this pull</div>';
     }
@@ -2515,7 +2904,7 @@ function renderGraph() {
 
   let tl, fightStart, fightEnd;
   const encG = (selectedEnc !== null && selectedMob === null && lastData)
-    ? (lastData.encounters || []).find(e => e.key === selectedEnc) : null;
+    ? scopeByKey(lastData, selectedEnc) : null;
   if (encG) {
     // Pull selected: merge member-mob timelines per player over the pull window.
     tl = {};
@@ -3314,7 +3703,10 @@ document.getElementById('cards').addEventListener('click', ev => {
   toggleCardStats(btn.dataset.name);
 });
 
+if (canCurate()) document.getElementById('raid-btns').style.display = 'inline-flex';
 fetchMobOverrides();
+fetchMarkers();
+fetchSegmentMembers();
 if (SESSIONS_PATH) {
   fetch(SESSIONS_PATH)
     .then(r => r.ok ? r.json() : [])

@@ -303,6 +303,10 @@ async fn main() {
             "/player/{game}/{server}/{name}/segment_members",
             get(player_segment_members_handler),
         )
+        .route(
+            "/player/{game}/{server}/{name}/markers",
+            get(player_markers_handler),
+        )
         // Ingest route (Windows clients push here)
         .route("/ingest/{id}", get(ingest::ingest_ws_handler))
         // Health check
@@ -842,11 +846,15 @@ async fn list_markers_handler(
         match reg.get(&stream_id) {
             None => return StatusCode::NOT_FOUND.into_response(),
             Some(entry) => {
-                let valid = params
-                    .vtok
-                    .as_deref()
-                    .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
-                    .unwrap_or(false);
+                // Public streams read markers too: the tokenless player page
+                // draws the same raid segments as the private one, it just
+                // cannot create them.
+                let valid = entry.public_stream
+                    || params
+                        .vtok
+                        .as_deref()
+                        .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
+                        .unwrap_or(false);
                 if !valid {
                     return StatusCode::UNAUTHORIZED.into_response();
                 }
@@ -1096,6 +1104,31 @@ async fn list_segment_members_handler(
         Ok(list) => Json(list).into_response(),
         Err(e) => {
             warn!("SegmentRoster [{stream_id}]: list failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `GET /player/:game/:server/:name/markers` — raid boundaries for the public
+/// page, so it segments the timeline the same way the private one does.
+async fn player_markers_handler(
+    Path((game, server, name)): Path<(String, String, String)>,
+    State(state): State<ServerState>,
+) -> Response {
+    let markers = {
+        let reg = state.registry.read().await;
+        let Some(id) = reg.find_id_by_player(&game, &server, &name) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        match reg.get(&id) {
+            Some(entry) if entry.public_stream => Arc::clone(&entry.markers),
+            _ => return StatusCode::NOT_FOUND.into_response(),
+        }
+    };
+    match markers.list() {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            warn!("Markers [{game}/{server}/{name}]: list failed: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
