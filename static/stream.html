@@ -3063,6 +3063,14 @@ function commitSeek() {
 }
 
 function goLive() {
+  // Pinned to a session that has ENDED: there is no "live" inside a window
+  // that stops at a fixed timestamp — every newer batch is filtered out, so
+  // following live here would silently do nothing. Going live means going to
+  // where the data is, so leave the dead session behind.
+  if (SESSION_END_LOG_TS > 0) {
+    onSessionChange('latest');
+    return;
+  }
   tlIsLive = true;
   tlPaused = false;
   liveAutoSelect = true;
