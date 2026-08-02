@@ -2204,11 +2204,17 @@ function renderMobList(d) {
     if (encSel.value !== want) encSel.value = want;
   }
 
-  // Build a map of existing DOM rows keyed by mob id string so we can reuse
+  // Build a map of existing DOM rows keyed by row id string so we can reuse
   // them across renders.  Reusing nodes avoids tearing down elements that may
   // be mid-click, which previously caused clicks to land on the wrong mob.
+  //
+  // EVERY row type belongs here, not just the mob rows. This map is also what
+  // the cleanup pass at the end walks to drop rows that are no longer needed,
+  // so a type missing from it is both rebuilt from scratch every frame AND
+  // never removed: the pull headers accumulated one fresh copy per render,
+  // reaching 184,000 children in a quarter of an hour of live combat.
   const existing = {};
-  for (const row of container.querySelectorAll('.mob-row')) {
+  for (const row of container.querySelectorAll('.mob-row, .enc-row, .seg-row')) {
     existing[row.dataset.mobId] = row;
   }
 
@@ -2375,7 +2381,7 @@ function renderMobList(d) {
     domIdx++;
   }
 
-  // Remove rows for mobs that are no longer in the list.
+  // Remove rows — of any type — that are no longer in the list.
   for (const [idStr, row] of Object.entries(existing)) {
     if (!seen.has(idStr)) row.remove();
   }
