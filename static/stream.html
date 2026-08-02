@@ -261,6 +261,14 @@
                       border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
   .raid-btns button:hover { background: #2e2e3a; color: #e8eef8; }
 
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 26px;
+           z-index: 300; display: none; background: #1d2a1d; color: #b8f0b8;
+           border: 1px solid #2f4a2f; border-radius: 6px; padding: 9px 18px;
+           font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+  #toast.bad { background: #2c1a1c; color: #f0b8b8; border-color: #503034; }
+  .raid-btns button:disabled { opacity: .4; cursor: not-allowed; }
+  .raid-btns button:disabled:hover { background: #23232c; color: #b8c4d4; }
+
   #char-btn { background: #1b1b24; color: #b8c4d4; border: 1px solid #33333f;
               border-radius: 4px; padding: 3px 10px; font-size: 11.5px;
               cursor: pointer; margin-left: 8px; }
@@ -568,10 +576,8 @@
   </select>
   <select id="tl-session" title="Session" onchange="onSessionChange(this.value)"></select>
   <span class="raid-btns" id="raid-btns" style="display:none">
-    <button type="button" onclick="addRaidMarker('raid_start')"
-            title="Mark a raid starting here — pulls after it aggregate as one raid">Raid start</button>
-    <button type="button" onclick="addRaidMarker('raid_end')"
-            title="Close the raid here — later pulls go back to the session">Raid end</button>
+    <button type="button" data-raid="raid_start" onclick="addRaidMarker('raid_start')">Raid start</button>
+    <button type="button" data-raid="raid_end" onclick="addRaidMarker('raid_end')">Raid end</button>
   </span>
 </div>
 
@@ -703,6 +709,7 @@ async function fetchMarkers() {
     raidMarkers = (await r.json()).sort((a, b) => a.ts - b.ts);
     segmentsRev++;
     scheduleRender();
+    syncRaidBtns();
   } catch (e) { /* no markers is a valid state */ }
 }
 
@@ -749,6 +756,27 @@ async function setSegmentMember(segTs, name, included) {
 }
 
 /// Drop a raid boundary at the position currently being viewed.
+/// Brief confirmation of something that just happened. An action that
+/// changes stored state and shows nothing is indistinguishable from one that
+/// silently failed — which is exactly how ending a raid felt.
+function toast(text, bad) {
+  let el = document.getElementById('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.className = bad ? 'bad' : '';
+  el.style.display = 'block';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, 3200);
+}
+
+function clockOf(ts) {
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
 async function addRaidMarker(kind) {
   const m = location.pathname.match(/^\/stream\/[^/]+/);
   if (!m) return;
@@ -761,8 +789,21 @@ async function addRaidMarker(kind) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ts, kind, label: '' }),
     });
-    if (r.ok) { raidMarkers.push(await r.json()); raidMarkers.sort((a,b)=>a.ts-b.ts); segmentsRev++; scheduleRender(); }
-  } catch (e) { /* nothing marked */ }
+    if (r.ok) {
+      raidMarkers.push(await r.json());
+      raidMarkers.sort((a, b) => a.ts - b.ts);
+      segmentsRev++;
+      scheduleRender();
+      syncRaidBtns();
+      toast(kind === 'raid_start'
+        ? `Raid started at ${clockOf(ts)}`
+        : `Raid ended at ${clockOf(ts)}`);
+    } else {
+      toast('Could not set the marker — the server refused it', true);
+    }
+  } catch (e) {
+    toast('Could not set the marker — no connection', true);
+  }
 }
 
 async function deleteRaidMarker(id) {
@@ -770,6 +811,8 @@ async function deleteRaidMarker(id) {
   if (!m) return;
   raidMarkers = raidMarkers.filter(x => x.id !== id);
   segmentsRev++;
+  syncRaidBtns();
+  toast('Marker removed');
   scheduleRender();
   try {
     await fetch(`${m[0]}/marker/${id}?vtok=${encodeURIComponent(VIEW_TOKEN)}`, { method: 'DELETE' });
@@ -1840,7 +1883,10 @@ function buildSegments(encounters) {
   }
   // A trailing boundary with nothing after it is not a segment worth a header
   // (the "raid end" that closes the evening, say).
-  return segs.filter(sg => sg.encs.length);
+  // Keep an empty TRAILING boundary: ending a raid when you are done playing
+  // has no pulls after it, and dropping it made the action leave no trace.
+  // Empty boundaries in the middle are just noise and stay filtered.
+  return segs.filter((sg, i) => sg.encs.length || i === segs.length - 1);
 }
 
 // Wall-clock time (seconds) when the most recent batch was applied.
@@ -2308,7 +2354,9 @@ function renderMobList(d) {
       row._segKey = sg.key;
       if (row.className !== cls) row.className = cls;
       if (row._label.textContent !== label) row._label.textContent = label;
-      const countText = `${sg.encs.length} pull${sg.encs.length === 1 ? '' : 's'}`
+      const countText = (sg.encs.length
+          ? `${sg.encs.length} pull${sg.encs.length === 1 ? '' : 's'}`
+          : 'raid ended here')
         + (excl ? ` \u00b7 ${excl} out` : '');
       if (row._count.textContent !== countText) row._count.textContent = countText;
       row._who.style.display = canCurate() ? '' : 'none';
@@ -3650,6 +3698,38 @@ function escapeHtml(v) {
 /// "my characters" without anything resembling an account.
 let sibList = [];
 
+/// Only offer "Raid end" while a raid is actually open, and say when it
+/// started. A button that does nothing in the current state is a question
+/// the interface should answer, not ask.
+function syncRaidBtns() {
+  const box = document.getElementById('raid-btns');
+  if (!box || !canCurate()) return;
+  const open = openRaidMarker();
+  const endBtn = box.querySelector('[data-raid="raid_end"]');
+  const startBtn = box.querySelector('[data-raid="raid_start"]');
+  if (endBtn) {
+    endBtn.disabled = !open;
+    endBtn.title = open
+      ? `End the raid that started at ${clockOf(open.ts)}`
+      : 'No raid is open — start one first';
+  }
+  if (startBtn) {
+    startBtn.title = open
+      ? `Start a new raid here (ends the one from ${clockOf(open.ts)})`
+      : 'Mark a raid starting here';
+  }
+}
+
+/// The raid currently open — the last raid_start with no raid_end after it.
+function openRaidMarker() {
+  let open = null;
+  for (const m of raidMarkers) {
+    if (m.kind === 'raid_start') open = m;
+    else if (m.kind === 'raid_end') open = null;
+  }
+  return open;
+}
+
 function syncCharBtn() {
   const btn = document.getElementById('char-btn');
   if (!btn) return;
@@ -3816,7 +3896,10 @@ document.getElementById('cards').addEventListener('click', ev => {
   toggleCardStats(btn.dataset.name);
 });
 
-if (canCurate()) document.getElementById('raid-btns').style.display = 'inline-flex';
+if (canCurate()) {
+  document.getElementById('raid-btns').style.display = 'inline-flex';
+  syncRaidBtns();
+}
 fetchMobOverrides();
 fetchMarkers();
 fetchSegmentMembers();
