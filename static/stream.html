@@ -1797,7 +1797,7 @@ function buildSegments(encounters) {
   const bounds = [{ ts: SESSION_LOG_TS > 0 ? Math.min(SESSION_LOG_TS, first) : first, kind: 'session' }];
   for (const m of raidMarkers) {
     if (!inWindow(m.ts)) continue;
-    if (m.kind === 'raid_start') bounds.push({ ts: m.ts, kind: 'raid', id: m.id });
+    if (m.kind === 'raid_start') bounds.push({ ts: m.ts, kind: 'raid', id: m.id, label: m.label });
     else if (m.kind === 'raid_end') bounds.push({ ts: m.ts, kind: 'session', id: m.id, closes: true });
   }
   bounds.sort((a, b) => a.ts - b.ts);
@@ -1807,6 +1807,7 @@ function buildSegments(encounters) {
     seg_ts: b.ts,
     kind: b.kind,
     marker_id: b.id || null,
+    label: b.label || '',
     closes: !!b.closes,
     start_ts: b.ts,
     end_ts: i + 1 < bounds.length ? bounds[i + 1].ts : Math.max(last, b.ts),
@@ -2026,7 +2027,7 @@ function buildFightLabel(d) {
       // Title matches the pull list — the named (true casing) or "Pull #N";
       // the composition rides along as a small subtitle.
       const title = enc.seg_ts !== undefined
-        ? (enc.kind === 'raid' ? '\u2694 Raid' : '\u25c6 Session')
+        ? (enc.kind === 'raid' ? '\u2694 ' + (enc.label || 'Raid') : '\u25c6 Session')
         : enc.named ? `★ ${encNamedLabel(enc)}` : `Pull #${enc.num}`;
       const comp = Object.entries(enc.names)
         .sort((a, b) => b[1] - a[1])
@@ -2277,7 +2278,9 @@ function renderMobList(d) {
       const clock = new Date(sg.start_ts * 1000)
         .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       const excl = (segExclusions.get(String(sg.seg_ts)) || new Set()).size;
-      const label = (sg.kind === 'raid' ? '\u2694 Raid' : '\u25c6 Session') + ' \u00b7 ' + clock;
+      const label = (sg.kind === 'raid'
+          ? '\u2694 ' + (sg.label || 'Raid')
+          : '\u25c6 Session') + ' \u00b7 ' + clock;
       const cls = 'seg-row' + (sg.kind === 'raid' ? ' seg-raid' : '')
         + (selectedEnc === sg.key ? ' selected' : '');
       let row = existing[idStr];
@@ -3209,6 +3212,11 @@ function connectWS() {
       try {
         // Empty batches carry nothing to apply or cache.
         if (!msg.batch.events || !msg.batch.events.length) return;
+        // A raid boundary was just called in game. Markers are fetched over
+        // HTTP, not carried in the batch, so without this the page would not
+        // learn about it until the next reload — which is exactly what made
+        // calling "raid start" mid-session look like it had done nothing.
+        if (msg.batch.events.some(e => e.k === 'raid_mark')) fetchMarkers();
         const rawLogTs = Math.max(...msg.batch.events.map(e => e.ts));
 
         // Re-streamed batch (replay/seek resends journal content we already
@@ -3723,6 +3731,7 @@ function syncSibPill() {
   }
 }
 setInterval(pollSiblings, 20000);
+setInterval(fetchMarkers, 60000);   // backstop: markers set elsewhere
 setInterval(wsWatchdog, 15000);
 pollSiblings();
 

@@ -160,8 +160,13 @@ pub enum CombatEvent {
     /// Somebody said "raid start" or "raid end" in chat. The server turns it
     /// into a timeline marker, so a raid can be bracketed from inside the
     /// game — hands on the keyboard, not on the web page.
-    /// `kind` is "raid_start" or "raid_end".
-    RaidMark { ts: u32, kind: String },
+    /// `kind` is "raid_start" or "raid_end"; `label` is the optional
+    /// description after a separator ("raid start -- Vox D3").
+    RaidMark {
+        ts: u32,
+        kind: String,
+        label: String,
+    },
     /// Currency looted from a corpse.  `mob` = mob-instance ID (0 if unattributed).
     /// Amount is the total in copper (pp×1000 + gp×100 + sp×10 + cp).
     CurrencyLoot { ts: u32, mob: u32, copper: u32 },
@@ -441,5 +446,26 @@ impl EventBatch {
     /// Maximum EQ log timestamp across all events in this batch, or `None` if empty.
     pub fn max_log_ts(&self) -> Option<u64> {
         self.events.iter().map(|e| e.ts() as u64).max()
+    }
+}
+
+#[cfg(test)]
+mod raid_tag_tests {
+    use super::*;
+
+    /// The viewer watches the live batch stream for this exact tag to know a
+    /// raid boundary was just called. A rename here silently stops the page
+    /// noticing, which is indistinguishable from the feature not working.
+    #[test]
+    fn raid_mark_serialises_as_raid_mark() {
+        let json = serde_json::to_string(&CombatEvent::RaidMark {
+            ts: 1785666788,
+            kind: "raid_start".into(),
+            label: "Vox D3".into(),
+        })
+        .unwrap();
+        assert!(json.contains(r#""k":"raid_mark""#), "{json}");
+        assert!(json.contains(r#""kind":"raid_start""#), "{json}");
+        assert!(json.contains(r#""label":"Vox D3""#), "{json}");
     }
 }

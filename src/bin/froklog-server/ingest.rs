@@ -171,7 +171,7 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                 // against markers already at that second, because a replay or
                 // a re-import would otherwise stack them up.
                 for e in &batch.events {
-                    if let froklog::event::CombatEvent::RaidMark { ts, kind } = e {
+                    if let froklog::event::CombatEvent::RaidMark { ts, kind, label } = e {
                         let markers = {
                             let reg = state.registry.read().await;
                             reg.get(&stream_id).map(|en| Arc::clone(&en.markers))
@@ -183,7 +183,7 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                                 .map(|ms| ms.iter().any(|m| m.ts == ts && &m.kind == kind))
                                 .unwrap_or(false);
                             if !already {
-                                match markers.add(ts, kind, "from chat") {
+                                match markers.add(ts, kind, label) {
                                     Ok(_) => info!("Marker [{stream_id}]: {kind} @ {ts} (chat)"),
                                     Err(e) => {
                                         warn!("Marker [{stream_id}]: chat marker failed: {e}")

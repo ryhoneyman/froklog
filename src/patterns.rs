@@ -498,17 +498,49 @@ pub static RE_CHAT: Lazy<Regex> = Lazy::new(|| {
         .expect("valid regex")
 });
 
-/// A chat message that marks a raid boundary, or None.
+/// A chat message that marks a raid boundary: `(kind, label)`, or None.
 ///
-/// The WHOLE message must be the phrase. Matching a mere mention would make
-/// "when does the raid start?" cut your evening in half, and guild chat is
-/// full of exactly that sentence.
-pub fn raid_mark(message: &str) -> Option<&'static str> {
-    match message.trim().to_ascii_lowercase().as_str() {
-        "raid start" | "raidstart" => Some("raid_start"),
-        "raid end" | "raidend" => Some("raid_end"),
-        _ => None,
+/// Accepts an optional description after a separator, so a night of raiding
+/// reads as itself rather than as "Raid, Raid, Raid":
+///
+///   raid start                 -> ("raid_start", "")
+///   raid start -- Vox D3       -> ("raid_start", "Vox D3")
+///   raid start: Nagafen        -> ("raid_start", "Nagafen")
+///   raid end -- wiped          -> ("raid_end", "wiped")
+///
+/// A separator is REQUIRED before a description. Without that rule the
+/// phrase would only have to be a prefix, and "raid start now?" — or any of
+/// the forty-odd messages in one real log that merely mention a raid — would
+/// start marking up the timeline.
+pub fn raid_mark(message: &str) -> Option<(&'static str, String)> {
+    let m = message.trim();
+    let lower = m.to_ascii_lowercase();
+    for (phrase, kind) in [
+        ("raid start", "raid_start"),
+        ("raidstart", "raid_start"),
+        ("raid end", "raid_end"),
+        ("raidend", "raid_end"),
+    ] {
+        let Some(rest) = lower.strip_prefix(phrase) else {
+            continue;
+        };
+        let rest_raw = &m[phrase.len()..];
+        if rest.trim().is_empty() {
+            return Some((kind, String::new()));
+        }
+        let trimmed = rest_raw.trim_start();
+        // A RUN of separator characters, not a fixed one: people type
+        // "-", "--" and "---" interchangeably (all three appear in one real
+        // log), and matching a fixed "--" left the third dash stuck to the
+        // front of the description.
+        let is_sep = |c: char| c == '-' || c == '\u{2014}' || c == ':';
+        if trimmed.starts_with(is_sep) {
+            let label = trimmed.trim_start_matches(is_sep).trim();
+            return Some((kind, label.to_string()));
+        }
+        return None; // trailing words with no separator: not a marker
     }
+    None
 }
 
 #[cfg(test)]
@@ -1347,14 +1379,65 @@ mod raid_mark_tests {
     /// asking when the raid starts, and none of that should move a marker.
     #[test]
     fn raid_mark_needs_the_whole_message() {
-        assert_eq!(raid_mark("raid start"), Some("raid_start"));
-        assert_eq!(raid_mark("  Raid Start  "), Some("raid_start"));
-        assert_eq!(raid_mark("RAIDSTART"), Some("raid_start"));
-        assert_eq!(raid_mark("raid end"), Some("raid_end"));
+        let kind = |m| raid_mark(m).map(|(k, _)| k);
+        assert_eq!(kind("raid start"), Some("raid_start"));
+        assert_eq!(kind("  Raid Start  "), Some("raid_start"));
+        assert_eq!(kind("RAIDSTART"), Some("raid_start"));
+        assert_eq!(kind("raid end"), Some("raid_end"));
 
-        assert_eq!(raid_mark("when does the raid start?"), None);
-        assert_eq!(raid_mark("raid starts in 10"), None);
-        assert_eq!(raid_mark("is the raid ending soon"), None);
-        assert_eq!(raid_mark(""), None);
+        assert_eq!(kind("when does the raid start?"), None);
+        assert_eq!(kind("raid starts in 10"), None);
+        assert_eq!(kind("is the raid ending soon"), None);
+        assert_eq!(kind(""), None);
+    }
+
+    /// A description after a separator names the raid.
+    #[test]
+    fn raid_mark_takes_a_description() {
+        assert_eq!(
+            raid_mark("raid start -- Vox D3"),
+            Some(("raid_start", "Vox D3".to_string()))
+        );
+        assert_eq!(
+            raid_mark("Raid Start: Nagafen"),
+            Some(("raid_start", "Nagafen".to_string()))
+        );
+        assert_eq!(
+            raid_mark("raid start - Plane of Fear"),
+            Some(("raid_start", "Plane of Fear".to_string()))
+        );
+        assert_eq!(
+            raid_mark("raid end -- wiped on trash"),
+            Some(("raid_end", "wiped on trash".to_string()))
+        );
+    }
+
+    /// Separator runs vary by typist. All of these appeared in one real log.
+    #[test]
+    fn any_run_of_separators_works() {
+        for line in [
+            "Raid Start - Naggy D2 ",
+            "Raid Start -- Naggy D2",
+            "Raid Start --- Naggy D2",
+            "Raid Start: Naggy D2",
+            "Raid Start :- Naggy D2",
+        ] {
+            assert_eq!(
+                raid_mark(line),
+                Some(("raid_start", "Naggy D2".to_string())),
+                "{line}"
+            );
+        }
+        // A bare phrase with trailing whitespace is still a plain marker.
+        assert_eq!(raid_mark("Raid Start "), Some(("raid_start", String::new())));
+    }
+
+    /// Without a separator the phrase would only need to be a PREFIX, which
+    /// is how ordinary chat starts marking up the timeline.
+    #[test]
+    fn a_description_needs_a_separator() {
+        assert_eq!(raid_mark("raid start now?"), None);
+        assert_eq!(raid_mark("raid start in 5 minutes"), None);
+        assert_eq!(raid_mark("raid ending soon folks"), None);
     }
 }

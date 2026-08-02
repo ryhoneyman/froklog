@@ -171,12 +171,13 @@ pub fn run(
         // because a chat line can quote anything, including something that
         // looks like a hit ("Zyro says, 'you slash it for 90'").
         if let Some(caps) = crate::patterns::RE_CHAT.captures(line) {
-            if let Some(kind) = crate::patterns::raid_mark(&caps[1]) {
+            if let Some((kind, label)) = crate::patterns::raid_mark(&caps[1]) {
                 emit(
                     &event_tx,
                     CombatEvent::RaidMark {
                         ts: current_ts,
                         kind: kind.to_string(),
+                        label,
                     },
                 );
             }
@@ -1974,7 +1975,7 @@ mod tests {
         )
         .into_iter()
         .filter_map(|e| match e {
-            CombatEvent::RaidMark { ts, kind } => Some((ts, kind)),
+            CombatEvent::RaidMark { ts, kind, .. } => Some((ts, kind)),
             _ => None,
         })
         .collect();
