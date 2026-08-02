@@ -261,6 +261,25 @@
                       border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; }
   .raid-btns button:hover { background: #2e2e3a; color: #e8eef8; }
 
+  #char-btn { background: #1b1b24; color: #b8c4d4; border: 1px solid #33333f;
+              border-radius: 4px; padding: 3px 10px; font-size: 11.5px;
+              cursor: pointer; margin-left: 8px; }
+  #char-btn:hover { background: #262632; color: #e8eef8; }
+  .cp-list { padding: 4px 0; }
+  .cp-row { display: flex; align-items: center; gap: 8px; padding: 7px 14px; cursor: pointer; }
+  .cp-row:hover { background: #1f1f28; }
+  .cp-row.cp-self { cursor: default; opacity: .7; }
+  .cp-row.cp-self:hover { background: none; }
+  .cp-name { font-weight: 600; min-width: 90px; }
+  .cp-server { color: #7a8494; font-size: 11.5px; flex: 1; }
+  .cp-live { color: #3cdc3c; font-size: 11px; }
+  .cp-idle { color: #7a8494; font-size: 11px; }
+  .cp-tag  { color: #7a8494; font-size: 11px; font-style: italic; }
+  .cp-link { color: #6aa9ff; font-size: 11px; text-decoration: none; border: 1px solid #2a3a52;
+             border-radius: 3px; padding: 1px 6px; }
+  .cp-link:hover { background: #16233a; }
+  .cp-nolink { color: #5a5a66; font-size: 11px; font-style: italic; }
+
   #stale-session {
     background: #4a3a12; color: #f0d890; border-bottom: 1px solid #6a5520;
     padding: 7px 12px; font-size: 13px; text-align: center;
@@ -524,6 +543,8 @@
   </div>
   <button id="golive-pill" onclick="goLive()" style="display:none" title="Return to the live view">&#9205; Go Live</button>
   <button id="sib-pill" style="display:none"></button>
+  <button id="char-btn" style="display:none" onclick="openCharPicker()"
+          title="Switch to another character this install streams"></button>
   <div id="status" class="error" title="Streamer's client connection">● disconnected</div>
 </div>
 
@@ -3603,15 +3624,87 @@ function setStatus(cls, txt) {
 // the server can list this stream's siblings. When a sibling saw combat in
 // the last half-minute and THIS stream has gone quiet, offer the switch.
 let sibActive = null;
+/// Names and server labels come from the log, so they are user-controlled:
+/// escape before putting them in markup.
+function escapeHtml(v) {
+  return String(v === undefined || v === null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/// Every stream this install registered, the current one included. They are
+/// linked by the owner_key the client stamps on each registration, so this is
+/// "my characters" without anything resembling an account.
+let sibList = [];
+
+function syncCharBtn() {
+  const btn = document.getElementById('char-btn');
+  if (!btn) return;
+  btn.style.display = sibList.length ? '' : 'none';
+  btn.textContent = `Characters (${sibList.length + 1}) \u25be`;
+}
+
+/// The character switcher: where else this install is streaming, which of
+/// them is live right now, and both links for each.
+function openCharPicker() {
+  const nameEl = document.getElementById('player-name');
+  const here = {
+    player: (nameEl && nameEl.textContent.trim()) || 'this stream',
+    server: '', path: null, self: true,
+  };
+  const all = [here, ...sibList];
+  const back = document.createElement('div');
+  back.id = 'seg-modal-back';
+  const rows = all.map(sc => {
+    if (sc.self) {
+      return `<div class="cp-row cp-self"><span class="cp-name">${escapeHtml(sc.player)}</span>
+        <span class="cp-tag">you are here</span></div>`;
+    }
+    const live = sc.active ? '<span class="cp-live">\u25cf live</span>'
+      : `<span class="cp-idle">${sc.idle_secs > 86400
+          ? Math.round(sc.idle_secs / 86400) + 'd'
+          : sc.idle_secs > 3600 ? Math.round(sc.idle_secs / 3600) + 'h'
+          : Math.round(sc.idle_secs / 60) + 'm'} idle</span>`;
+    const pub = sc.public
+      ? `<a class="cp-link" href="/player/${encodeURIComponent(sc.game)}/${encodeURIComponent(sc.server)}/${encodeURIComponent(sc.player)}" title="Public link — no token, safe to share">public</a>`
+      : '<span class="cp-nolink" title="Not published">private only</span>';
+    return `<div class="cp-row" data-path="${escapeHtml(sc.path)}">
+      <span class="cp-name">${escapeHtml(sc.player)}</span>
+      <span class="cp-server">${escapeHtml(sc.server)}</span>
+      ${live}
+      ${pub}
+    </div>`;
+  }).join('');
+  back.innerHTML = `
+    <div id="seg-modal" role="dialog" aria-label="Characters">
+      <div class="sm-head"><span class="sm-title">Characters</span></div>
+      <div class="sm-hint">Every character this install streams. Clicking a row
+        opens its private view; <b>public</b> opens the shareable link instead.</div>
+      <div class="sm-list cp-list">${rows}</div>
+      <div class="sm-foot"><span></span><button type="button" class="sm-close">Done</button></div>
+    </div>`;
+  const close = () => back.remove();
+  back.querySelector('.sm-close').addEventListener('click', close);
+  back.addEventListener('click', e => { if (e.target === back) close(); });
+  for (const row of back.querySelectorAll('.cp-row[data-path]')) {
+    row.addEventListener('click', e => {
+      if (e.target.classList.contains('cp-link')) return;  // let the public link win
+      location.href = row.dataset.path;
+    });
+  }
+  document.body.appendChild(back);
+}
+
 async function pollSiblings() {
   const m = location.pathname.match(/^\/stream\/[^/]+/);
   if (!m || !VIEW_TOKEN) return; // public pages: no sibling access
   try {
     const r = await fetch(`${m[0]}/siblings?vtok=${encodeURIComponent(VIEW_TOKEN)}`);
     if (!r.ok) return;
-    const sibs = await r.json();
-    sibActive = sibs.filter(s => s.active).sort((a, b) => a.idle_secs - b.idle_secs)[0] || null;
+    sibList = await r.json();
+    sibActive = sibList.filter(s => s.active).sort((a, b) => a.idle_secs - b.idle_secs)[0] || null;
     syncSibPill();
+    syncCharBtn();
   } catch (e) { /* transient — next poll retries */ }
 }
 function syncSibPill() {
