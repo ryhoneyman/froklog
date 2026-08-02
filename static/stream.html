@@ -212,6 +212,14 @@
              color: #6c6c7a; flex-shrink: 0; padding: 0 3px; }
   .fl-star.star-named { color: #e8c76a; }
   .fl-star:hover { color: #ffd970; }
+  #stale-session {
+    background: #4a3a12; color: #f0d890; border-bottom: 1px solid #6a5520;
+    padding: 7px 12px; font-size: 13px; text-align: center;
+  }
+  #stale-session button {
+    margin-left: 8px; background: #e8c76a; color: #241d06; border: 0;
+    border-radius: 4px; padding: 3px 10px; font-size: 12px; cursor: pointer;
+  }
   #named-menu {
     position: fixed; z-index: 90; background: #1c1c22; border: 1px solid #3a3a44;
     border-radius: 6px; padding: 4px 0; font-size: 12px; min-width: 170px;
@@ -2624,14 +2632,31 @@ let logFirstTs = null;  // EQ log-event unix seconds (used for labels)
 let logLastTs  = null;  // EQ log-event unix seconds (used for labels)
 let sessionPreloading = false; // true while initial session cache preload is in flight
 
+let lastMsgAt = Date.now();
+
+/// A socket can die without the browser ever firing onclose — laptop sleep, a
+/// proxy reaping an idle connection. The page then sits on its last status
+/// showing "client connected" while nothing arrives, which is exactly what a
+/// broken stream looks like. The server beats every 25s, so silence for more
+/// than a minute means the socket is gone whether or not it said so: drop it
+/// and let the existing reconnect path run.
+function wsWatchdog() {
+  if (!ws) return;                       // already reconnecting
+  if (Date.now() - lastMsgAt < 70000) return;
+  setStatus('error', '● reconnecting…');
+  try { ws.close(); } catch (_) {}       // fires onclose -> reconnect
+}
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url   = `${proto}://${location.host}${WS_PATH}`;
   ws = new WebSocket(url);
-  ws.onopen    = () => { tlIsLive = true; tlPaused = false; updateLiveBtn(); updatePlayPauseBtn(); };
+  ws.onopen    = () => { lastMsgAt = Date.now(); tlIsLive = true; tlPaused = false; updateLiveBtn(); updatePlayPauseBtn(); };
   ws.onmessage = e => {
+    lastMsgAt = Date.now();   // liveness: see the wsWatchdog below
     let msg;
     try { msg = JSON.parse(e.data); } catch(_) { return; }
+    if (msg.t === 'heartbeat') return;   // liveness only, nothing to apply
 
     if (msg.t === 'info') {
       // Server tells us the full timeline bounds.
@@ -3202,6 +3227,7 @@ function syncSibPill() {
   }
 }
 setInterval(pollSiblings, 20000);
+setInterval(wsWatchdog, 15000);
 pollSiblings();
 
 function syncStatusIndicator() {
@@ -3256,6 +3282,21 @@ function onSessionChange(val) {
   location.href = url.toString();
 }
 
+/// A page pinned to a finished session shows real data that simply stops —
+/// indistinguishable from the stream being broken. Name the situation and
+/// make the fix one click.
+function showStaleSessionBanner(currentNum, latestNum) {
+  if (document.getElementById('stale-session')) return;
+  const bar = document.createElement('div');
+  bar.id = 'stale-session';
+  bar.innerHTML = `Viewing session #${currentNum}, which has ended — `
+    + `session #${latestNum} is the current one. `
+    + `<button type="button" id="stale-session-go">Go to latest</button>`;
+  document.body.insertBefore(bar, document.body.firstChild);
+  document.getElementById('stale-session-go')
+    .addEventListener('click', () => onSessionChange('latest'));
+}
+
 // One delegated listener for every card's "more stats" toggle — cards are
 // rebuilt as innerHTML on each render, so per-node listeners wouldn't stick.
 document.getElementById('cards').addEventListener('click', ev => {
@@ -3272,25 +3313,37 @@ if (SESSIONS_PATH) {
     .then(sessions => {
       if (!sessions || sessions.length === 0) return;
       const urlSession = new URL(location.href).searchParams.get('session');
-      const currentNum = urlSession ? parseInt(urlSession, 10) : null;
-      // No session param: redirect to the most recent session so the page
-      // always opens on the latest play session rather than the full journal.
-      if (!currentNum) {
-        onSessionChange(sessions[sessions.length - 1].num);
+      const latestNum = sessions[sessions.length - 1].num;
+      // No session param: open on the newest session. Write the choice as the
+      // SYMBOLIC 'latest' rather than a number — a number freezes, and once a
+      // new session began the tab was pinned to one that had ended: stale
+      // data, every newer batch dropped, and refresh could not escape because
+      // this auto-select only runs when the parameter is absent.
+      if (!urlSession) {
+        onSessionChange('latest');
         return;
       }
+      const followingLatest = urlSession === 'latest';
+      const currentNum = followingLatest ? latestNum : parseInt(urlSession, 10);
       sessionSel.innerHTML = '';
       for (let i = sessions.length - 1; i >= 0; i--) {
         const s = sessions[i];
         const opt = document.createElement('option');
-        opt.value = s.num;
-        opt.textContent = i === sessions.length - 1
-          ? `Latest — ${s.label}`
-          : `#${s.num} — ${s.label}`;
-        if (currentNum === s.num) opt.selected = true;
+        const isLatest = i === sessions.length - 1;
+        opt.value = isLatest ? 'latest' : String(s.num);
+        opt.textContent = isLatest ? `Latest — ${s.label}` : `#${s.num} — ${s.label}`;
+        if (isLatest ? followingLatest || currentNum === s.num : currentNum === s.num) {
+          opt.selected = true;
+        }
         sessionSel.appendChild(opt);
       }
       sessionSel.style.display = 'inline-block';
+
+      // Pinned to a session that has since ended while play continues: say so
+      // and offer the way out, instead of looking silently broken.
+      if (!followingLatest && currentNum !== latestNum) {
+        showStaleSessionBanner(currentNum, latestNum);
+      }
     })
     .catch(() => {});
 }

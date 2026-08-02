@@ -19,11 +19,24 @@ use axum::Json;
 /// Number of journal batches to send per loop iteration during catch-up.
 /// Amortises per-batch async overhead without affecting replay granularity.
 const CATCHUP_BURST: usize = 64;
+/// How often a viewer socket proves it is still alive. Comfortably under the
+/// 60 s idle timeout typical of reverse proxies, and well under the client's
+/// own staleness watchdog.
+const HEARTBEAT_EVERY: Duration = Duration::from_secs(25);
 
 #[derive(Deserialize)]
 pub struct ViewQuery {
     pub vtok: Option<String>,
-    pub session: Option<u32>,
+    /// Either a session number, or the literal `latest`.
+    ///
+    /// It has to be able to say "latest" symbolically. The page auto-selects
+    /// the newest session on load and writes its choice into the URL; when
+    /// that was a NUMBER the choice froze, so once a new session began the
+    /// tab was pinned to a session that had ended — showing stale data,
+    /// dropping every newer batch, and surviving refresh because the
+    /// auto-select only runs when the parameter is absent. `latest`
+    /// re-resolves on every load.
+    pub session: Option<String>,
     /// Explicit time-slice scoping (log-time epoch seconds), e.g. from a
     /// raid_start/raid_end marker pair. Overrides `session` when present.
     pub from_ts: Option<u64>,
@@ -54,20 +67,9 @@ pub async fn stream_page_handler(
             // Marker/explicit slice: same template slots the session filter
             // uses, so the page scopes stats to the given window.
             (params.from_ts.unwrap_or(0), params.to_ts.unwrap_or(0))
-        } else if let (Some(num), Some(si_arc)) = (params.session, session_index) {
+        } else if let (Some(param), Some(si_arc)) = (params.session.as_deref(), session_index) {
             let si = si_arc.read().await;
-            let sessions = si.list();
-            let start = sessions
-                .iter()
-                .find(|s| s.num == num)
-                .map(|s| s.start_log_ts)
-                .unwrap_or(0);
-            let end = sessions
-                .iter()
-                .find(|s| s.num > num)
-                .map(|s| s.start_log_ts)
-                .unwrap_or(0);
-            (start, end)
+            resolve_session_window(param, &si.list())
         } else {
             (0, 0)
         };
@@ -172,6 +174,37 @@ fn preload_bounds(from_pos: usize, to_pos: usize) -> (usize, usize) {
     (from_pos, to_pos.max(from_pos))
 }
 
+/// Resolve a `session` query value against the session list, returning
+/// `(start_log_ts, end_log_ts)`. `end` is 0 for the newest session, meaning
+/// "unbounded — keep following live".
+///
+/// `latest` always resolves to the newest session, which is what keeps a
+/// long-lived tab from being pinned to a session that has since ended.
+fn resolve_session_window(param: &str, sessions: &[crate::session_index::SessionEntry]) -> (u64, u64) {
+    let num = if param.eq_ignore_ascii_case("latest") {
+        match sessions.last() {
+            Some(s) => s.num,
+            None => return (0, 0),
+        }
+    } else {
+        match param.parse::<u32>() {
+            Ok(n) => n,
+            Err(_) => return (0, 0),
+        }
+    };
+    let start = sessions
+        .iter()
+        .find(|s| s.num == num)
+        .map(|s| s.start_log_ts)
+        .unwrap_or(0);
+    let end = sessions
+        .iter()
+        .find(|s| s.num > num)
+        .map(|s| s.start_log_ts)
+        .unwrap_or(0);
+    (start, end)
+}
+
 /// Messages the client sends to the server.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -242,6 +275,14 @@ enum ServerMsg {
     /// Sent when catch-up completes on a stream whose client is no longer
     /// connected — signals that no further live data will arrive.
     StreamDone,
+    /// Periodic liveness beat.
+    ///
+    /// Without it a viewer socket that dies silently — laptop sleep, a NAT or
+    /// proxy reaping an idle connection during a quiet stretch — is
+    /// indistinguishable from one where simply nothing is happening. The page
+    /// kept showing its last status while nothing updated. This also keeps
+    /// intermediaries from reaping the connection in the first place.
+    Heartbeat,
     /// Sent when a CatchUpTo sequence finishes and the server transitions to
     /// Paused, signalling that all requested batches have been delivered.
     CatchUpDone,
@@ -335,6 +376,7 @@ async fn handle_viewer_ws(
     // unable to learn the client had come back: it sat frozen at the moment
     // of the disconnect while still reporting the stream as connected.
     let mut ingest_was_down = false;
+    let mut last_beat = std::time::Instant::now();
 
     loop {
         // Fast non-blocking check: close immediately if public access was revoked.
@@ -496,6 +538,14 @@ async fn handle_viewer_ws(
                     // If so, the stream is now a completed recording — notify the
                     // viewer so it can stop waiting for data that will never arrive.
                     _ = sleep(Duration::from_secs(2)) => {
+                        if last_beat.elapsed() >= HEARTBEAT_EVERY {
+                            last_beat = std::time::Instant::now();
+                            if let Ok(txt) = serde_json::to_string(&ServerMsg::Heartbeat) {
+                                if socket.send(Message::Text(txt.into())).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
                         if !client_connected.load(Ordering::Relaxed) {
                             let pos = { journal.read().await.len() };
                             paused_by_disconnect = true;
@@ -606,6 +656,14 @@ async fn handle_viewer_ws(
                 // whatever it missed and return to live, announcing it so
                 // the page can un-end itself.
                 _ = sleep(Duration::from_secs(2)) => {
+                    if last_beat.elapsed() >= HEARTBEAT_EVERY {
+                        last_beat = std::time::Instant::now();
+                        if let Ok(txt) = serde_json::to_string(&ServerMsg::Heartbeat) {
+                            if socket.send(Message::Text(txt.into())).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
                     let act = on_paused_tick(
                         ingest_was_down,
                         client_connected.load(Ordering::Relaxed),
@@ -794,7 +852,8 @@ async fn handle_client_msg(
 
 #[derive(Deserialize)]
 pub struct PlayerQuery {
-    pub session: Option<u32>,
+    /// Session number, or the literal `latest` — see `ViewQuery::session`.
+    pub session: Option<String>,
     /// Explicit time-slice scoping (log-time epoch seconds); overrides `session`.
     pub from_ts: Option<u64>,
     pub to_ts: Option<u64>,
@@ -830,20 +889,9 @@ pub async fn player_page_handler(
         Some((stream_id, player_name, session_index)) => {
             let (session_log_ts, session_end_log_ts): (u64, u64) = if params.from_ts.is_some() {
                 (params.from_ts.unwrap_or(0), params.to_ts.unwrap_or(0))
-            } else if let Some(num) = params.session {
+            } else if let Some(param) = params.session.as_deref() {
                 let si = session_index.read().await;
-                let sessions = si.list();
-                let start = sessions
-                    .iter()
-                    .find(|s| s.num == num)
-                    .map(|s| s.start_log_ts)
-                    .unwrap_or(0);
-                let end = sessions
-                    .iter()
-                    .find(|s| s.num > num)
-                    .map(|s| s.start_log_ts)
-                    .unwrap_or(0);
-                (start, end)
+                resolve_session_window(param, &si.list())
             } else {
                 (0, 0)
             };
@@ -1007,6 +1055,46 @@ mod tests {
     /// `paused_by_disconnect`, and for an hour it also silently disabled the
     /// return announcement — the viewer never learned the client was back.
     /// The announcement must survive a control message.
+    fn sessions() -> Vec<crate::session_index::SessionEntry> {
+        [(10u32, 1785609829u64), (11, 1785636419), (12, 1785666788)]
+            .into_iter()
+            .map(|(num, start_log_ts)| crate::session_index::SessionEntry {
+                num,
+                start_batch_id: num as i64,
+                start_log_ts,
+                start_wall_ts: start_log_ts,
+                label: format!("session {num}"),
+            })
+            .collect()
+    }
+
+    /// `latest` must re-resolve every load. This is the whole point: a tab
+    /// left open across a new session used to stay pinned to the old one.
+    #[test]
+    fn latest_resolves_to_the_newest_session_and_stays_unbounded() {
+        let (start, end) = resolve_session_window("latest", &sessions());
+        assert_eq!(start, 1785666788, "newest session start");
+        assert_eq!(end, 0, "0 = unbounded, keep following live");
+    }
+
+    /// The bug as it was reported: a page pinned to #10 gets an END bound at
+    /// the start of #11, so every batch after Aug 1 22:06 is discarded and
+    /// the viewer looks frozen no matter how often it is refreshed.
+    #[test]
+    fn a_numbered_session_is_bounded_by_the_next_one() {
+        let (start, end) = resolve_session_window("10", &sessions());
+        assert_eq!(start, 1785609829);
+        assert_eq!(end, 1785636419, "bounded by session 11's start");
+    }
+
+    /// Junk and unknown numbers must not silently scope the page to nothing.
+    #[test]
+    fn an_unresolvable_session_scopes_to_the_whole_journal() {
+        assert_eq!(resolve_session_window("banana", &sessions()), (0, 0));
+        assert_eq!(resolve_session_window("999", &sessions()), (0, 0));
+        assert_eq!(resolve_session_window("latest", &[]), (0, 0));
+    }
+
     /// A session preload must START at the session, not at batch 0 — that
     /// was 65,000 batches and 39 MB per page load by day two.
     #[test]
