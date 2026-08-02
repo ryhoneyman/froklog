@@ -480,6 +480,37 @@ pub fn normalize_miss(word: &str) -> &'static str {
     }
 }
 
+/// Any chat line, capturing just what was said.
+///
+/// Covers both directions, because a macro you type and a raid leader's call
+/// land in the log completely differently:
+///   You say to your guild, 'raid start'      <- your own /gu
+///   You tell your party, 'raid start'        <- your own /g
+///   Kermitzalot tells the raid, 'raid start' <- someone else's
+///   Zyro tells General:1, 'raid start'       <- a custom channel
+///
+/// The channel is matched loosely (`[^,]*`) on purpose: EQ Legends words
+/// these differently from classic EQ — it says "You say to your guild" where
+/// classic says "You tell your guild" — and custom channels carry arbitrary
+/// names. What matters is the message, not which pipe carried it.
+pub static RE_CHAT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(?:You (?:say|tell|told)|[A-Za-z`'-]+ (?:says?|tells?|told))[^,]*, '(.*)'$")
+        .expect("valid regex")
+});
+
+/// A chat message that marks a raid boundary, or None.
+///
+/// The WHOLE message must be the phrase. Matching a mere mention would make
+/// "when does the raid start?" cut your evening in half, and guild chat is
+/// full of exactly that sentence.
+pub fn raid_mark(message: &str) -> Option<&'static str> {
+    match message.trim().to_ascii_lowercase().as_str() {
+        "raid start" | "raidstart" => Some("raid_start"),
+        "raid end" | "raidend" => Some("raid_end"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod helper_tests {
     use super::*;
@@ -1274,5 +1305,56 @@ mod who_tests {
     #[test]
     fn re_who_no_match_players_header() {
         assert!(RE_WHO.captures("Players in EverQuest:").is_none());
+    }
+}
+
+#[cfg(test)]
+mod raid_mark_tests {
+    use super::*;
+
+    #[test]
+    fn re_chat_matches_both_directions() {
+        let cases = [
+            ("You say to your guild, 'raid start'", "raid start"),
+            ("You say, 'raid start'", "raid start"),
+            ("You tell your party, 'raid start'", "raid start"),
+            ("You say to your raid, 'raid end'", "raid end"),
+            ("Kermitzalot tells the raid, 'raid start'", "raid start"),
+            ("Zyro tells General:1, 'raid start'", "raid start"),
+            ("Gnominated tells the guild, 'hello there'", "hello there"),
+            ("Raimier says, 'hi'", "hi"),
+        ];
+        for (line, want) in cases {
+            let caps = RE_CHAT
+                .captures(line)
+                .unwrap_or_else(|| panic!("no match: {line}"));
+            assert_eq!(&caps[1], want, "{line}");
+        }
+    }
+
+    #[test]
+    fn re_chat_ignores_combat_lines() {
+        for line in [
+            "You slash a greater skeleton for 96 points of damage. (Critical)",
+            "Welcome to EverQuest Legends!",
+            "[45 CLR/SHD/BER] Zyro (Human) <Ancient Artifacts>",
+        ] {
+            assert!(RE_CHAT.captures(line).is_none(), "should not match: {line}");
+        }
+    }
+
+    /// The whole message must be the phrase: guild chat is full of people
+    /// asking when the raid starts, and none of that should move a marker.
+    #[test]
+    fn raid_mark_needs_the_whole_message() {
+        assert_eq!(raid_mark("raid start"), Some("raid_start"));
+        assert_eq!(raid_mark("  Raid Start  "), Some("raid_start"));
+        assert_eq!(raid_mark("RAIDSTART"), Some("raid_start"));
+        assert_eq!(raid_mark("raid end"), Some("raid_end"));
+
+        assert_eq!(raid_mark("when does the raid start?"), None);
+        assert_eq!(raid_mark("raid starts in 10"), None);
+        assert_eq!(raid_mark("is the raid ending soon"), None);
+        assert_eq!(raid_mark(""), None);
     }
 }

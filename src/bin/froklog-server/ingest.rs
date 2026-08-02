@@ -166,6 +166,34 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                     }
                 });
 
+                // Raid boundaries called in chat: turn them into markers, so a
+                // raid can be bracketed from inside the game. Deduplicated
+                // against markers already at that second, because a replay or
+                // a re-import would otherwise stack them up.
+                for e in &batch.events {
+                    if let froklog::event::CombatEvent::RaidMark { ts, kind } = e {
+                        let markers = {
+                            let reg = state.registry.read().await;
+                            reg.get(&stream_id).map(|en| Arc::clone(&en.markers))
+                        };
+                        if let Some(markers) = markers {
+                            let ts = *ts as u64;
+                            let already = markers
+                                .list()
+                                .map(|ms| ms.iter().any(|m| m.ts == ts && &m.kind == kind))
+                                .unwrap_or(false);
+                            if !already {
+                                match markers.add(ts, kind, "from chat") {
+                                    Ok(_) => info!("Marker [{stream_id}]: {kind} @ {ts} (chat)"),
+                                    Err(e) => {
+                                        warn!("Marker [{stream_id}]: chat marker failed: {e}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Split oversized batches (e.g. from dump mode) into per-minute
                 // sub-batches so the seek index has sufficient granularity.
                 let sub_batches = split_by_log_time(batch);

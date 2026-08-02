@@ -167,6 +167,22 @@ pub fn run(
             emit(&event_tx, CombatEvent::Login { ts: current_ts });
         }
 
+        // Raid boundary called in chat. Checked before the combat patterns
+        // because a chat line can quote anything, including something that
+        // looks like a hit ("Zyro says, 'you slash it for 90'").
+        if let Some(caps) = crate::patterns::RE_CHAT.captures(line) {
+            if let Some(kind) = crate::patterns::raid_mark(&caps[1]) {
+                emit(
+                    &event_tx,
+                    CombatEvent::RaidMark {
+                        ts: current_ts,
+                        kind: kind.to_string(),
+                    },
+                );
+            }
+            continue;
+        }
+
         // Strip trailing `(Lucky Critical Twincast)` modifier blocks before matching.
         let (line, mods) = strip_mods(line);
 
@@ -1914,6 +1930,58 @@ mod tests {
             player.to_owned(),
         );
         shared.load_full()
+    }
+
+    /// Collect the events a set of lines produces, so a non-combat emission
+    /// can be asserted on directly.
+    fn run_events(lines: &[&str], player: &str) -> Vec<CombatEvent> {
+        let (tx, rx) = crossbeam_channel::unbounded::<String>();
+        let shared = Arc::new(ArcSwap::from_pointee(CombatState::default()));
+        let reset_flag = Arc::new(AtomicBool::new(false));
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        for &line in lines {
+            tx.send(line.to_owned()).unwrap();
+        }
+        drop(tx);
+        run(
+            rx,
+            shared,
+            reset_flag,
+            broadcast_tx,
+            event_tx,
+            player.to_owned(),
+        );
+        let mut out = Vec::new();
+        while let Ok(e) = event_rx.try_recv() {
+            out.push(e);
+        }
+        out
+    }
+
+    /// The whole path a raid macro takes: a line you could actually type in
+    /// game becomes the event the server turns into a marker — and a
+    /// guildmate wondering aloud when the raid starts does not.
+    #[test]
+    fn integration_chat_macro_marks_a_raid() {
+        let marks: Vec<(u32, String)> = run_events(
+            &[
+                "[Sun Aug 02 20:00:00 2026] You say to your guild, 'raid start'",
+                "[Sun Aug 02 20:00:05 2026] Zyro tells General:1, 'when does the raid start?'",
+                "[Sun Aug 02 22:30:00 2026] Kermitzalot tells the raid, 'raid end'",
+            ],
+            "Izzin",
+        )
+        .into_iter()
+        .filter_map(|e| match e {
+            CombatEvent::RaidMark { ts, kind } => Some((ts, kind)),
+            _ => None,
+        })
+        .collect();
+        assert_eq!(marks.len(), 2, "the question is not a marker: {marks:?}");
+        assert_eq!(marks[0].1, "raid_start");
+        assert_eq!(marks[1].1, "raid_end");
+        assert!(marks[1].0 > marks[0].0, "end comes after start");
     }
 
     #[test]

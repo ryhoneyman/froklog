@@ -157,6 +157,11 @@ pub enum CombatEvent {
     /// Player logged in — emitted when "Welcome to EverQuest Legends!" is seen in the log.
     /// Used by the server to cut a new session boundary in the archive.
     Login { ts: u32 },
+    /// Somebody said "raid start" or "raid end" in chat. The server turns it
+    /// into a timeline marker, so a raid can be bracketed from inside the
+    /// game — hands on the keyboard, not on the web page.
+    /// `kind` is "raid_start" or "raid_end".
+    RaidMark { ts: u32, kind: String },
     /// Currency looted from a corpse.  `mob` = mob-instance ID (0 if unattributed).
     /// Amount is the total in copper (pp×1000 + gp×100 + sp×10 + cp).
     CurrencyLoot { ts: u32, mob: u32, copper: u32 },
@@ -228,6 +233,7 @@ impl CombatEvent {
             | Self::Fizzle { ts, .. }
             | Self::Pet { ts, .. }
             | Self::Login { ts }
+            | Self::RaidMark { ts, .. }
             | Self::CurrencyLoot { ts, .. }
             | Self::ItemLoot { ts, .. }
             | Self::ItemSell { ts, .. }
