@@ -941,16 +941,14 @@ async fn siblings_handler(
         if entry.owner_key != me.owner_key {
             continue;
         }
-        // Last received event (wall clock) from the in-memory journal index.
-        let last_wall = entry
-            .journal
-            .read()
-            .await
-            .index
-            .last()
-            .map(|e| e.wall_ts)
-            .unwrap_or(0);
-        let idle_secs = now.saturating_sub(last_wall);
+        // How long since anything HAPPENED in game, by the log's own clock.
+        //
+        // Not the arrival time of the last batch: the client seeds a /who scan
+        // for every watched character on startup, so a restart pushes a batch
+        // for characters nobody has played in days and they would all read as
+        // live. Log time says when the events actually occurred.
+        let last_log = last_log_ts(&entry.journal).await;
+        let idle_secs = now.saturating_sub(last_log);
         out.push(serde_json::json!({
             "player": entry.player_name,
             "server": entry.server,
@@ -1299,15 +1297,9 @@ async fn home_handler(
         {
             continue;
         }
-        let last_wall = entry
-            .journal
-            .read()
-            .await
-            .index
-            .last()
-            .map(|e| e.wall_ts)
-            .unwrap_or(0);
-        let idle = now.saturating_sub(last_wall);
+        // Log time, not arrival time — see the note in siblings_handler.
+        let last_log = last_log_ts(&entry.journal).await;
+        let idle = now.saturating_sub(last_log);
         rows.push((
             entry.player_name.clone(),
             entry.server.clone(),
@@ -1315,7 +1307,7 @@ async fn home_handler(
             entry.stream_id.clone(),
             entry.view_token.clone(),
             entry.public_stream,
-            if last_wall == 0 { u64::MAX } else { idle },
+            if last_log == 0 { u64::MAX } else { idle },
             entry.client_connected.load(std::sync::atomic::Ordering::Relaxed),
         ));
     }
@@ -1398,6 +1390,17 @@ async fn home_handler(
          </div></body></html>"
     );
     Html(html).into_response()
+}
+
+/// EQ log timestamp of the most recent stored event, or 0 when the journal is
+/// empty. Falls back to arrival time for batches recorded before log
+/// timestamps were kept.
+async fn last_log_ts(journal: &journal::SharedJournal) -> u64 {
+    let j = journal.read().await;
+    j.index
+        .last()
+        .map(|e| e.log_ts.unwrap_or(e.wall_ts))
+        .unwrap_or(0)
 }
 
 /// Resolve the stream's markers handle for a write.
