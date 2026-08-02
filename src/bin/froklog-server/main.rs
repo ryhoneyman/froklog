@@ -1316,7 +1316,7 @@ async fn home_handler(
         return StatusCode::NOT_FOUND.into_response();
     }
     // Busiest first: the character you are playing is the one you want.
-    rows.sort_by(|a, b| a.6.cmp(&b.6));
+    rows.sort_by_key(|a| a.6);
 
     let body: String = rows
         .iter()
