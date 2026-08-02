@@ -17,7 +17,7 @@ use std::sync::Arc;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -121,7 +121,7 @@ async fn main() {
         .init();
 
     // Emit warnings collected before tracing existed (config parse errors
-    // used to vanish here — including the one that regenerates the admin token).
+    // used to vanish here \u{2014} including the one that regenerates the admin token).
     for w in &cfg_warnings {
         warn!("{w}");
     }
@@ -138,7 +138,7 @@ async fn main() {
             }
             Err(_) => {
                 warn!(
-                    "Invalid trusted_proxy '{}' — forwarded headers will be trusted from ANY connection",
+                    "Invalid trusted_proxy '{}' \u{2014} forwarded headers will be trusted from ANY connection",
                     cfg.trusted_proxy
                 );
                 None
@@ -310,6 +310,7 @@ async fn main() {
         // Ingest route (Windows clients push here)
         .route("/ingest/{id}", get(ingest::ingest_ws_handler))
         // Health check
+        .route("/home", get(home_handler))
         .route("/health", get(health_handler))
         // Stream list / index
         .route("/", get(index_handler))
@@ -350,9 +351,12 @@ struct CreateStreamBody {
     public_stream: bool,
     #[serde(default)]
     is_replay: bool,
-    /// Optional household link — see StreamEntry.owner_key.
+    /// Optional household link \u{2014} see StreamEntry.owner_key.
     #[serde(default)]
     owner_key: String,
+    /// Optional front-door secret \u{2014} see StreamEntry.home_token.
+    #[serde(default)]
+    home_token: String,
 }
 
 #[derive(Serialize)]
@@ -376,7 +380,7 @@ async fn create_stream_handler(
     let ip = client_ip(&headers, peer);
     let supplied = ingest::extract_bearer(&headers);
     if !state.stream_auth_ok(supplied.as_deref()) {
-        warn!("Register [{ip}]: rejected — bad or missing stream password");
+        warn!("Register [{ip}]: rejected \u{2014} bad or missing stream password");
         return StatusCode::UNAUTHORIZED.into_response();
     }
     info!(
@@ -400,6 +404,11 @@ async fn create_stream_handler(
         None
     };
 
+    let home_token = if body.home_token.len() <= 64 {
+        body.home_token.clone()
+    } else {
+        String::new()
+    };
     let owner_key = if body.owner_key.len() <= 64 {
         body.owner_key.clone()
     } else {
@@ -415,6 +424,7 @@ async fn create_stream_handler(
         body.public_stream,
         body.is_replay,
         owner_key.clone(),
+        home_token.clone(),
         &state.data_dir,
     );
 
@@ -438,6 +448,7 @@ async fn create_stream_handler(
         "public_stream": body.public_stream,
         "is_replay": body.is_replay,
         "owner_key": owner_key,
+        "home_token": home_token,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         tracing::warn!("Failed to write meta for {stream_id}: {e}");
@@ -469,9 +480,11 @@ struct PatchStreamBody {
     public_stream: Option<bool>,
     /// Backfill the household link on an existing stream (see owner_key).
     owner_key: Option<String>,
+    /// Backfill the front-door secret (see home_token).
+    home_token: Option<String>,
 }
 
-/// `PATCH /stream/:id` — update mutable stream metadata.
+/// `PATCH /stream/:id` \u{2014} update mutable stream metadata.
 /// Authenticated with the per-stream `stream_token` (Bearer).
 async fn patch_stream_handler(
     Path(stream_id): Path<String>,
@@ -489,7 +502,7 @@ async fn patch_stream_handler(
         }
     };
 
-    // Validate token, apply update, and snapshot fields for meta rewrite —
+    // Validate token, apply update, and snapshot fields for meta rewrite \u{2014}
     // all inside the write lock so no reader sees a half-updated entry.
     let snapshot = {
         let mut reg = state.registry.write().await;
@@ -507,6 +520,11 @@ async fn patch_stream_handler(
                 let _ = entry.public_revoke_tx.send(());
             }
         }
+        if let Some(tok) = &body.home_token {
+            if tok.len() <= 64 {
+                entry.home_token = tok.clone();
+            }
+        }
         if let Some(key) = &body.owner_key {
             if key.len() <= 64 {
                 entry.owner_key = key.clone();
@@ -522,6 +540,7 @@ async fn patch_stream_handler(
             entry.public_stream,
             entry.is_replay,
             entry.owner_key.clone(),
+            entry.home_token.clone(),
         )
     }; // write lock released here
 
@@ -536,6 +555,7 @@ async fn patch_stream_handler(
         "public_stream": snapshot.6,
         "is_replay":    snapshot.7,
         "owner_key":    snapshot.8,
+        "home_token":   snapshot.9,
     });
     if let Err(e) = std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()) {
         warn!("Patch [{stream_id}]: failed to rewrite meta: {e}");
@@ -546,7 +566,7 @@ async fn patch_stream_handler(
 
 // ── Stream reset (admin only) ─────────────────────────────────────────────────
 
-/// `DELETE /stream/:id` — wipe journal and sessions; stream identity is preserved.
+/// `DELETE /stream/:id` \u{2014} wipe journal and sessions; stream identity is preserved.
 /// Authenticated with the global admin token (Bearer).
 async fn reset_stream_handler(
     Path(stream_id): Path<String>,
@@ -599,7 +619,7 @@ async fn reset_stream_handler(
 
 // ── Stream delete (admin only) ────────────────────────────────────────────────
 
-/// `DELETE /stream/:id/purge` — remove the stream entirely: deregister and delete all on-disk data.
+/// `DELETE /stream/:id/purge` \u{2014} remove the stream entirely: deregister and delete all on-disk data.
 async fn delete_stream_handler(
     Path(stream_id): Path<String>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -614,7 +634,7 @@ async fn delete_stream_handler(
             return StatusCode::UNAUTHORIZED.into_response();
         }
     };
-    // The stream's own token may destroy the stream and its data — the
+    // The stream's own token may destroy the stream and its data \u{2014} the
     // owning client retires old characters this way. The view token
     // deliberately cannot: watchers must never be able to destroy history.
     let authorized = {
@@ -661,7 +681,7 @@ struct PruneStreamBody {
     before: Option<u64>,
 }
 
-/// `POST /stream/:id/prune` — delete batches older than a cutoff and reclaim
+/// `POST /stream/:id/prune` \u{2014} delete batches older than a cutoff and reclaim
 /// disk space. Sessions that no longer own any batch are dropped.
 ///
 /// Authenticated with the per-stream `stream_token` (the owner credential the
@@ -775,7 +795,7 @@ struct AddMarkerBody {
     ts: Option<u64>,
 }
 
-/// `POST /stream/:id/marker` — set a time marker. Owner (stream token) or admin.
+/// `POST /stream/:id/marker` \u{2014} set a time marker. Owner (stream token) or admin.
 async fn add_marker_handler(
     Path(stream_id): Path<String>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -811,7 +831,7 @@ async fn add_marker_handler(
     }
 }
 
-/// `DELETE /stream/:id/marker/:mid` — remove a marker. Viewer page, owner or admin.
+/// `DELETE /stream/:id/marker/:mid` \u{2014} remove a marker. Viewer page, owner or admin.
 async fn delete_marker_handler(
     Path((stream_id, marker_id)): Path<(String, i64)>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -835,7 +855,7 @@ async fn delete_marker_handler(
     }
 }
 
-/// `GET /stream/:id/markers?vtok=` — list markers. View-token auth (read-only).
+/// `GET /stream/:id/markers?vtok=` \u{2014} list markers. View-token auth (read-only).
 async fn list_markers_handler(
     Path(stream_id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
@@ -873,7 +893,7 @@ async fn list_markers_handler(
 
 // ── Sibling streams ───────────────────────────────────────────────────────────
 
-/// `GET /stream/:id/siblings?vtok=…` — the other streams sharing this
+/// `GET /stream/:id/siblings?vtok=…` \u{2014} the other streams sharing this
 /// stream's owner_key (one household's characters), each with its recent-
 /// activity state so the viewer can hint "another character is live".
 ///
@@ -954,7 +974,7 @@ struct SetMobOverrideBody {
     kind: String,
 }
 
-/// `GET /stream/:id/mob_overrides?vtok=…` — list the curated set. A valid
+/// `GET /stream/:id/mob_overrides?vtok=…` \u{2014} list the curated set. A valid
 /// view token OR a public stream reads it; the public player page needs the
 /// list to label pulls the same way the private page does.
 async fn list_mob_overrides_handler(
@@ -989,7 +1009,7 @@ async fn list_mob_overrides_handler(
     }
 }
 
-/// `GET /player/:game/:server/:name/mob_overrides` — the public page's route
+/// `GET /player/:game/:server/:name/mob_overrides` \u{2014} the public page's route
 /// to the same list; only resolves for streams marked public.
 async fn player_mob_overrides_handler(
     Path((game, server, name)): Path<(String, String, String)>,
@@ -1014,9 +1034,9 @@ async fn player_mob_overrides_handler(
     }
 }
 
-/// `POST /stream/:id/mob_override?vtok=…` with `{name, kind}` — curate one
+/// `POST /stream/:id/mob_override?vtok=…` with `{name, kind}` \u{2014} curate one
 /// NPC. Unlike markers, the write is done from the viewer page, which holds
-/// the VIEW token — so a valid view token authorizes it (as does the stream
+/// the VIEW token \u{2014} so a valid view token authorizes it (as does the stream
 /// or admin token). The public tokenless page gets no write path.
 async fn set_mob_override_handler(
     Path(stream_id): Path<String>,
@@ -1075,7 +1095,7 @@ async fn set_mob_override_handler(
     }
 }
 
-/// `GET /stream/:id/segment_members?vtok=…` — every per-segment exclusion for
+/// `GET /stream/:id/segment_members?vtok=…` \u{2014} every per-segment exclusion for
 /// this stream. Fetched once; the page applies them per segment as you scroll.
 async fn list_segment_members_handler(
     Path(stream_id): Path<String>,
@@ -1109,7 +1129,7 @@ async fn list_segment_members_handler(
     }
 }
 
-/// `GET /player/:game/:server/:name/markers` — raid boundaries for the public
+/// `GET /player/:game/:server/:name/markers` \u{2014} raid boundaries for the public
 /// page, so it segments the timeline the same way the private one does.
 async fn player_markers_handler(
     Path((game, server, name)): Path<(String, String, String)>,
@@ -1134,7 +1154,7 @@ async fn player_markers_handler(
     }
 }
 
-/// `GET /player/:game/:server/:name/segment_members` — same list for the
+/// `GET /player/:game/:server/:name/segment_members` \u{2014} same list for the
 /// public page, which needs it to aggregate a segment the same way.
 async fn player_segment_members_handler(
     Path((game, server, name)): Path<(String, String, String)>,
@@ -1168,7 +1188,7 @@ struct SegmentMemberBody {
     included: bool,
 }
 
-/// `POST /stream/:id/segment_member?vtok=…` — include or exclude one player
+/// `POST /stream/:id/segment_member?vtok=…` \u{2014} include or exclude one player
 /// from one segment's aggregate. Written from the viewer page, so a valid
 /// view token authorizes it, as does the stream or admin token.
 async fn set_segment_member_handler(
@@ -1222,11 +1242,169 @@ async fn set_segment_member_handler(
     }
 }
 
+/// Percent-encode for a URL path segment or query value. Character and
+/// server names come from the log, so they cannot be trusted to be safe.
+fn urlenc(v: &str) -> String {
+    let mut out = String::with_capacity(v.len());
+    for b in v.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+#[derive(serde::Deserialize)]
+struct HomeQuery {
+    #[serde(default)]
+    key: String,
+}
+
+/// `GET /home?key=<home_token>` \u{2014} the front door.
+///
+/// One bookmarkable page listing every character this install streams, with
+/// both links for each. This is a capability URL: holding the key is the
+/// authorization, exactly like a view token. It is a SEPARATE secret from
+/// `owner_key` on purpose \u{2014} that one is a non-secret grouping id, and giving
+/// it this power would have retroactively turned it into a password.
+///
+/// An unknown key is a plain 404: a wrong guess must not be able to tell the
+/// difference between "no such install" and "right key, no streams".
+async fn home_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<HomeQuery>,
+    State(state): State<ServerState>,
+) -> Response {
+    if q.key.is_empty() || q.key.len() > 64 {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    info!("Home page from {}", client_ip(&headers, peer));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let reg = state.registry.read().await;
+    let mut rows = Vec::new();
+    for info in reg.list_admin() {
+        let Some(entry) = reg.get(&info.stream_id) else {
+            continue;
+        };
+        if entry.home_token.is_empty()
+            || !froklog::auth::tokens_match(&entry.home_token, &q.key)
+        {
+            continue;
+        }
+        let last_wall = entry
+            .journal
+            .read()
+            .await
+            .index
+            .last()
+            .map(|e| e.wall_ts)
+            .unwrap_or(0);
+        let idle = now.saturating_sub(last_wall);
+        rows.push((
+            entry.player_name.clone(),
+            entry.server.clone(),
+            entry.game.clone(),
+            entry.stream_id.clone(),
+            entry.view_token.clone(),
+            entry.public_stream,
+            if last_wall == 0 { u64::MAX } else { idle },
+            entry.client_connected.load(std::sync::atomic::Ordering::Relaxed),
+        ));
+    }
+    drop(reg);
+    if rows.is_empty() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    // Busiest first: the character you are playing is the one you want.
+    rows.sort_by(|a, b| a.6.cmp(&b.6));
+
+    let body: String = rows
+        .iter()
+        .map(|(player, server, game, id, vtok, public, idle, connected)| {
+            let state_html = if *connected && *idle < 60 {
+                "<span class=\"live\">\u{25cf} live</span>".to_string()
+            } else if *idle == u64::MAX {
+                "<span class=\"idle\">no data yet</span>".to_string()
+            } else if *idle > 86_400 {
+                format!("<span class=\"idle\">{}d idle</span>", idle / 86_400)
+            } else if *idle > 3_600 {
+                format!("<span class=\"idle\">{}h idle</span>", idle / 3_600)
+            } else {
+                format!("<span class=\"idle\">{}m idle</span>", idle / 60)
+            };
+            let public_html = if *public {
+                format!(
+                    "<a class=\"pub\" href=\"/player/{}/{}/{}\">public link</a>",
+                    urlenc(game),
+                    urlenc(server),
+                    urlenc(player)
+                )
+            } else {
+                "<span class=\"nopub\">not published</span>".to_string()
+            };
+            format!(
+                "<a class=\"row\" href=\"/stream/{}?vtok={}\">\
+                   <span class=\"name\">{}</span>\
+                   <span class=\"server\">{}</span>\
+                   {state_html}\
+                 </a><span class=\"links\">{public_html}</span>",
+                urlenc(id),
+                urlenc(vtok),
+                admin::html_escape(player),
+                admin::html_escape(server),
+            )
+        })
+        .collect();
+
+    let html = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <meta name=\"robots\" content=\"noindex,nofollow\">\
+         <title>froklog \u{2014} characters</title><style>\
+         body{{background:#0e0e12;color:#d8d8e0;font:14px/1.5 system-ui,sans-serif;\
+              margin:0;padding:32px 16px;display:flex;justify-content:center}}\
+         .wrap{{width:min(560px,100%)}}\
+         h1{{font-size:18px;margin:0 0 4px;color:#e8c76a}}\
+         .sub{{color:#7a8494;font-size:12px;margin:0 0 20px}}\
+         .grid{{display:grid;grid-template-columns:1fr auto;gap:0 10px;align-items:center}}\
+         .row{{display:flex;align-items:center;gap:10px;padding:10px 12px;\
+               text-decoration:none;color:inherit;border-radius:6px;background:#16161c}}\
+         .row:hover{{background:#1f1f28}}\
+         .name{{font-weight:600;min-width:96px}}\
+         .server{{color:#7a8494;font-size:12px;flex:1}}\
+         .live{{color:#3cdc3c;font-size:11px}}\
+         .idle{{color:#7a8494;font-size:11px}}\
+         .links{{text-align:right}}\
+         .pub{{color:#6aa9ff;font-size:11px;text-decoration:none;border:1px solid #2a3a52;\
+               border-radius:3px;padding:2px 7px}}\
+         .pub:hover{{background:#16233a}}\
+         .nopub{{color:#5a5a66;font-size:11px;font-style:italic}}\
+         .foot{{color:#5a5a66;font-size:11px;margin-top:20px;line-height:1.6}}\
+         </style></head><body><div class=\"wrap\">\
+         <h1>Characters</h1>\
+         <p class=\"sub\">Everything this install streams. Bookmark this page.</p>\
+         <div class=\"grid\">{body}</div>\
+         <p class=\"foot\">Rows open the private view \u{2014} anyone with that link can \
+         watch and curate. <b>public link</b> is the read-only one, safe to share.<br>\
+         This page&rsquo;s address is itself a key: treat it like a password.</p>\
+         </div></body></html>"
+    );
+    Html(html).into_response()
+}
+
 /// Resolve the stream's markers handle for a write.
 ///
 /// A valid VIEW token authorizes it, as does the stream or admin token.
 /// Marking "raid start" and "raid end" is done from the viewer page, which
-/// holds only the view token — the same reasoning that already applies to
+/// holds only the view token \u{2014} the same reasoning that already applies to
 /// mob curation. The public tokenless page still gets no write path.
 /// `None` = unauthorized or unknown stream.
 async fn owner_markers(
@@ -1348,6 +1526,8 @@ struct StreamMeta {
     is_replay: bool,
     #[serde(default)]
     owner_key: String,
+    #[serde(default)]
+    home_token: String,
 }
 
 fn default_eql() -> String {
@@ -1396,6 +1576,7 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
             meta.public_stream,
             meta.is_replay,
             meta.owner_key,
+            meta.home_token,
             data_dir,
         ) {
             Ok(entry) => {
@@ -1415,4 +1596,29 @@ async fn load_persisted_streams(data_dir: &std::path::Path, registry: &SharedReg
         "Loaded {loaded} persisted stream(s) from {}",
         data_dir.display()
     );
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::urlenc;
+
+    /// Names come from the log. A character or server name carrying URL
+    /// syntax must not be able to break out of the link it is placed in.
+    #[test]
+    fn url_encoding_neutralises_names_from_the_log() {
+        assert_eq!(urlenc("Izzin"), "Izzin");
+        assert_eq!(urlenc("rivervale"), "rivervale");
+        assert_eq!(urlenc("a b"), "a%20b");
+        assert_eq!(urlenc("x?y=1&z=2"), "x%3Fy%3D1%26z%3D2");
+        assert_eq!(urlenc("../../etc"), "..%2F..%2Fetc");
+        assert_eq!(urlenc("<script>"), "%3Cscript%3E");
+    }
+
+    /// Tokens and ids are hex and must survive untouched.
+    #[test]
+    fn hex_identifiers_pass_through_unchanged() {
+        let id = "c8fde0319a7340f8";
+        assert_eq!(urlenc(id), id);
+        assert_eq!(urlenc("a-b_c.d~e"), "a-b_c.d~e");
+    }
 }

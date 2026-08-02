@@ -37,6 +37,14 @@ pub struct StreamEntry {
     /// client stamps all its registrations with one persistent key). Empty
     /// = unlinked. Powers the viewer's "another character is live" hint.
     pub owner_key: String,
+    /// Secret that unlocks this install's front door (`GET /home?key=…`).
+    ///
+    /// Deliberately NOT `owner_key`: that one is a grouping id the client
+    /// stamps on every registration and grants nothing by itself, so quietly
+    /// making it unlock a list of private links would have turned a
+    /// non-secret into a password. Same value across one install's streams,
+    /// empty for streams that predate the front door.
+    pub home_token: String,
     /// True when the stream was created by froklog-replay (never goes live).
     pub is_replay: bool,
     /// Fires `()` when `public_stream` flips to false so open public viewer
@@ -75,6 +83,7 @@ impl StreamEntry {
         public_stream: bool,
         is_replay: bool,
         owner_key: String,
+        home_token: String,
         data_dir: &std::path::Path,
     ) -> std::io::Result<Self> {
         // Open journal first so the retroactive session scan can read its index.
@@ -103,6 +112,7 @@ impl StreamEntry {
             public_stream,
             is_replay,
             owner_key,
+            home_token,
             public_revoke_tx,
             journal,
             session_index,
