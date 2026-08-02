@@ -1296,12 +1296,41 @@ fn main() {
             event_desc = format!("Resist src={src:?} spell={spell:?} tgt={tgt:?}");
             matched = true;
 
+        // ── RE_FIZZLE ─────────────────────────────────────────────────────────
+        } else if let Some(caps) = froklog::patterns::RE_FIZZLE.captures(line) {
+            t!(
+                "MATCH",
+                format!("RE_FIZZLE — spell={:?} (own fizzle)", &caps["sp"])
+            );
+
+        // ── RE_PET_BERSERK (before generic handling; mirrors parser order) ────
+        } else if let Some(caps) = froklog::patterns::RE_PET_BERSERK.captures(line) {
+            let pet = caps["name"].to_owned();
+            t!("MATCH", format!("RE_PET_BERSERK — pet={pet:?}"));
+            if froklog::patterns::is_generated_pet_name(&pet) {
+                t!(
+                    "REASON",
+                    format!("{pet:?} is a generated pet name — associates with the most recent Burnout caster (≤10s) in the real parser")
+                );
+            } else {
+                t!(
+                    "REASON",
+                    format!("{pet:?} is NOT a generated pet name — no association")
+                );
+            }
+
         // ── RE_CAST ───────────────────────────────────────────────────────────
         } else if let Some(caps) = RE_CAST.captures(line) {
             let src = norm(&caps["src"], &args.player);
             let spell = caps["spell"].to_owned();
 
             t!("MATCH", format!("RE_CAST — src={src:?} spell={spell:?}"));
+            if froklog::patterns::is_pet_buff_spell(&spell) {
+                t!(
+                    "NOTE",
+                    format!("pet-buff cast — {src:?} owns whichever pet goes berserk within 10s")
+                );
+            }
 
             let prev = state.spell_caster.insert(spell.clone(), src.clone());
             if let Some(old) = &prev {

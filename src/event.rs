@@ -141,9 +141,32 @@ pub enum CombatEvent {
         #[serde(default)]
         level: u8,
     },
+    /// A spell fizzle. Only the streamer's own fizzles appear in the log,
+    /// so `src` is always the streaming player — kept explicit anyway for
+    /// servers that might log others'.
+    Fizzle { ts: u32, src: String, sp: String },
+    /// A pet's owner became known — warder possessive names, or a
+    /// pet-buff cast (Burnout) landing on a generated-name pet. Summoned
+    /// pets get a fresh random name every summon, so associations are
+    /// re-learned and overwritten as they happen.
+    Pet {
+        ts: u32,
+        name: String,
+        owner: String,
+    },
     /// Player logged in — emitted when "Welcome to EverQuest Legends!" is seen in the log.
     /// Used by the server to cut a new session boundary in the archive.
     Login { ts: u32 },
+    /// Somebody said "raid start" or "raid end" in chat. The server turns it
+    /// into a timeline marker, so a raid can be bracketed from inside the
+    /// game — hands on the keyboard, not on the web page.
+    /// `kind` is "raid_start" or "raid_end"; `label` is the optional
+    /// description after a separator ("raid start -- Vox D3").
+    RaidMark {
+        ts: u32,
+        kind: String,
+        label: String,
+    },
     /// Currency looted from a corpse.  `mob` = mob-instance ID (0 if unattributed).
     /// Amount is the total in copper (pp×1000 + gp×100 + sp×10 + cp).
     CurrencyLoot { ts: u32, mob: u32, copper: u32 },
@@ -212,7 +235,10 @@ impl CombatEvent {
             | Self::Absorb { ts, .. }
             | Self::Resist { ts, .. }
             | Self::Who { ts, .. }
+            | Self::Fizzle { ts, .. }
+            | Self::Pet { ts, .. }
             | Self::Login { ts }
+            | Self::RaidMark { ts, .. }
             | Self::CurrencyLoot { ts, .. }
             | Self::ItemLoot { ts, .. }
             | Self::ItemSell { ts, .. }
@@ -420,5 +446,26 @@ impl EventBatch {
     /// Maximum EQ log timestamp across all events in this batch, or `None` if empty.
     pub fn max_log_ts(&self) -> Option<u64> {
         self.events.iter().map(|e| e.ts() as u64).max()
+    }
+}
+
+#[cfg(test)]
+mod raid_tag_tests {
+    use super::*;
+
+    /// The viewer watches the live batch stream for this exact tag to know a
+    /// raid boundary was just called. A rename here silently stops the page
+    /// noticing, which is indistinguishable from the feature not working.
+    #[test]
+    fn raid_mark_serialises_as_raid_mark() {
+        let json = serde_json::to_string(&CombatEvent::RaidMark {
+            ts: 1785666788,
+            kind: "raid_start".into(),
+            label: "Vox D3".into(),
+        })
+        .unwrap();
+        assert!(json.contains(r#""k":"raid_mark""#), "{json}");
+        assert!(json.contains(r#""kind":"raid_start""#), "{json}");
+        assert!(json.contains(r#""label":"Vox D3""#), "{json}");
     }
 }

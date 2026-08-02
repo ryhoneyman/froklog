@@ -110,6 +110,13 @@ pub fn run(
     // Last log-second a combat heartbeat was emitted (throttle: stun spam
     // can produce many lines per second).
     let mut last_heartbeat_ts: u32 = 0;
+    // Most recent Burnout-family cast: (caster, log-ts). The pet that "goes
+    // berserk" within the correlation window belongs to this caster.
+    let mut pending_pet_buff: Option<(String, u32)> = None;
+    // Most recent pet-summon cast: the never-before-seen generated-name pet
+    // whose first attack lands within the window belongs to this caster.
+    // Covers classes without a Burnout tell (enchanter, necro).
+    let mut pending_pet_summon: Option<(String, u32)> = None;
 
     for raw_line in &rx {
         if reset_flag.swap(false, Ordering::Relaxed) {
@@ -160,6 +167,23 @@ pub fn run(
             emit(&event_tx, CombatEvent::Login { ts: current_ts });
         }
 
+        // Raid boundary called in chat. Checked before the combat patterns
+        // because a chat line can quote anything, including something that
+        // looks like a hit ("Zyro says, 'you slash it for 90'").
+        if let Some(caps) = crate::patterns::RE_CHAT.captures(line) {
+            if let Some((kind, label)) = crate::patterns::raid_mark(&caps[1]) {
+                emit(
+                    &event_tx,
+                    CombatEvent::RaidMark {
+                        ts: current_ts,
+                        kind: kind.to_string(),
+                        label,
+                    },
+                );
+            }
+            continue;
+        }
+
         // Strip trailing `(Lucky Critical Twincast)` modifier blocks before matching.
         let (line, mods) = strip_mods(line);
 
@@ -175,11 +199,8 @@ pub fn run(
 
             // Register Beastlord warders as pets before mob/player classification.
             if let Some(owner) = parse_warder_owner(&src) {
-                state
-                    .known_pets
-                    .entry(src.clone())
-                    .or_insert_with(|| owner.to_owned());
-                state.known_players.insert(src.clone());
+                let owner = owner.to_owned();
+                register_warder(&mut state, &event_tx, &src, &owner, current_ts);
             }
 
             // Determine direction: mob→player or player→mob.
@@ -271,13 +292,18 @@ pub fn run(
             let dmg: u64 = caps["dmg"].parse().unwrap_or(0);
             let typ = normalize_verb(verb).to_owned();
 
+            maybe_associate_summoned_pet(
+                &mut state,
+                &event_tx,
+                &mut pending_pet_summon,
+                &src,
+                current_ts,
+            );
+
             // Register Beastlord warders as pets before mob/player classification.
             if let Some(owner) = parse_warder_owner(&src) {
-                state
-                    .known_pets
-                    .entry(src.clone())
-                    .or_insert_with(|| owner.to_owned());
-                state.known_players.insert(src.clone());
+                let owner = owner.to_owned();
+                register_warder(&mut state, &event_tx, &src, &owner, current_ts);
             }
 
             // "hits"/"hit" is an exclusively mob verb in EQ.
@@ -547,11 +573,8 @@ pub fn run(
 
             // Register Beastlord warders as pets before mob/player classification.
             if let Some(owner) = parse_warder_owner(&src) {
-                state
-                    .known_pets
-                    .entry(src.clone())
-                    .or_insert_with(|| owner.to_owned());
-                state.known_players.insert(src.clone());
+                let owner = owner.to_owned();
+                register_warder(&mut state, &event_tx, &src, &owner, current_ts);
             }
 
             // A mob can riposte a player: "Player was injured by Mob's riposte for N"
@@ -640,11 +663,8 @@ pub fn run(
 
             // Register Beastlord warders as pets before mob/player classification.
             if let Some(owner) = parse_warder_owner(&src) {
-                state
-                    .known_pets
-                    .entry(src.clone())
-                    .or_insert_with(|| owner.to_owned());
-                state.known_players.insert(src.clone());
+                let owner = owner.to_owned();
+                register_warder(&mut state, &event_tx, &src, &owner, current_ts);
             }
 
             // A mob can have a damage shield: "Player was struck by Mob's damage shield for N"
@@ -843,6 +863,15 @@ pub fn run(
         } else if let Some(caps) = RE_CAST.captures(line) {
             let src = norm(&caps["src"], &player_name);
             let spell = caps["spell"].to_owned();
+            // Burnout can only target the caster's own pet — remember the
+            // caster so the "goes berserk" landing can attribute the pet.
+            // Single-token gate: player names have no spaces, NPCs do.
+            if crate::patterns::is_pet_buff_spell(&spell) && !src.contains(' ') {
+                pending_pet_buff = Some((src.clone(), current_ts));
+            }
+            if crate::patterns::is_pet_summon_spell(&spell) && !src.contains(' ') {
+                pending_pet_summon = Some((src.clone(), current_ts));
+            }
             spell_caster.insert(spell.clone(), src.clone());
             state
                 .active_casts
@@ -855,6 +884,42 @@ pub fn run(
                     sp: spell,
                 },
             );
+
+        // ── Fizzles (own only — EQ doesn't log other players') ─────────────────
+        } else if let Some(caps) = crate::patterns::RE_FIZZLE.captures(line) {
+            emit(
+                &event_tx,
+                CombatEvent::Fizzle {
+                    ts: current_ts,
+                    src: player_name.clone(),
+                    sp: caps["sp"].to_owned(),
+                },
+            );
+
+        // ── Pet ownership: Burnout landing ─────────────────────────────────────
+        // "<Pet> goes berserk." right after "<Player> begins casting Burnout"
+        // → that generated-name pet belongs to that player. Re-learned on
+        // every rebuff, so per-summon name changes take care of themselves.
+        } else if let Some(caps) = crate::patterns::RE_PET_BERSERK.captures(line) {
+            let pet = caps["name"].to_owned();
+            if let Some((owner, cast_ts)) = pending_pet_buff.clone() {
+                if current_ts.saturating_sub(cast_ts) <= 10
+                    && owner != pet
+                    && crate::patterns::is_generated_pet_name(&pet)
+                {
+                    state.known_pets.insert(pet.clone(), owner.clone());
+                    state.known_players.insert(pet.clone());
+                    emit(
+                        &event_tx,
+                        CombatEvent::Pet {
+                            ts: current_ts,
+                            name: pet,
+                            owner,
+                        },
+                    );
+                    pending_pet_buff = None;
+                }
+            }
 
         // ── Kill messages ──────────────────────────────────────────────────────
 
@@ -1158,6 +1223,14 @@ pub fn run(
             let tgt = norm(caps["tgt"].trim(), &player_name);
             let miss_type = normalize_miss(&caps["miss"]).to_owned();
 
+            maybe_associate_summoned_pet(
+                &mut state,
+                &event_tx,
+                &mut pending_pet_summon,
+                &src,
+                current_ts,
+            );
+
             // Track avoidance on the defender (tgt).
             let def_stats = entity_stats(&mut state, &tgt);
             *def_stats
@@ -1167,11 +1240,8 @@ pub fn run(
 
             // Register Beastlord warders as pets before mob/player classification.
             if let Some(owner) = parse_warder_owner(&src) {
-                state
-                    .known_pets
-                    .entry(src.clone())
-                    .or_insert_with(|| owner.to_owned());
-                state.known_players.insert(src.clone());
+                let owner = owner.to_owned();
+                register_warder(&mut state, &event_tx, &src, &owner, current_ts);
             }
 
             // If src is a mob, also record on mob_tanking avoidance.
@@ -1388,6 +1458,62 @@ pub fn run(
 
 /// Record a mob death, freeze the fight timer if all confirmed mobs are down,
 /// and emit a Slay event.  `killer` is empty string when unknown.
+/// A never-before-associated generated-name pet showing up as an attacker
+/// shortly after a player's summon cast belongs to that caster. Secondary
+/// to the Burnout correlation — this is the net for classes whose pets get
+/// no visible buff landing.
+fn maybe_associate_summoned_pet(
+    state: &mut CombatState,
+    event_tx: &mpsc::UnboundedSender<CombatEvent>,
+    pending: &mut Option<(String, u32)>,
+    src: &str,
+    ts: u32,
+) {
+    let Some((owner, cast_ts)) = pending.clone() else {
+        return;
+    };
+    if ts.saturating_sub(cast_ts) <= 60
+        && owner != src
+        && !state.known_pets.contains_key(src)
+        && crate::patterns::is_generated_pet_name(src)
+    {
+        state.known_pets.insert(src.to_owned(), owner.clone());
+        state.known_players.insert(src.to_owned());
+        emit(
+            event_tx,
+            CombatEvent::Pet {
+                ts,
+                name: src.to_owned(),
+                owner,
+            },
+        );
+        *pending = None;
+    }
+}
+
+/// Register a possessively-named pet ("X`s warder") as owned, and — the
+/// first time this pet is seen — tell downstream viewers who owns it.
+fn register_warder(
+    state: &mut CombatState,
+    event_tx: &mpsc::UnboundedSender<CombatEvent>,
+    src: &str,
+    owner: &str,
+    ts: u32,
+) {
+    if !state.known_pets.contains_key(src) {
+        state.known_pets.insert(src.to_owned(), owner.to_owned());
+        emit(
+            event_tx,
+            CombatEvent::Pet {
+                ts,
+                name: src.to_owned(),
+                owner: owner.to_owned(),
+            },
+        );
+    }
+    state.known_players.insert(src.to_owned());
+}
+
 fn handle_slay(
     state: &mut CombatState,
     event_tx: &mpsc::UnboundedSender<CombatEvent>,
@@ -1805,6 +1931,129 @@ mod tests {
             player.to_owned(),
         );
         shared.load_full()
+    }
+
+    /// Collect the events a set of lines produces, so a non-combat emission
+    /// can be asserted on directly.
+    fn run_events(lines: &[&str], player: &str) -> Vec<CombatEvent> {
+        let (tx, rx) = crossbeam_channel::unbounded::<String>();
+        let shared = Arc::new(ArcSwap::from_pointee(CombatState::default()));
+        let reset_flag = Arc::new(AtomicBool::new(false));
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        for &line in lines {
+            tx.send(line.to_owned()).unwrap();
+        }
+        drop(tx);
+        run(
+            rx,
+            shared,
+            reset_flag,
+            broadcast_tx,
+            event_tx,
+            player.to_owned(),
+        );
+        let mut out = Vec::new();
+        while let Ok(e) = event_rx.try_recv() {
+            out.push(e);
+        }
+        out
+    }
+
+    /// The whole path a raid macro takes: a line you could actually type in
+    /// game becomes the event the server turns into a marker — and a
+    /// guildmate wondering aloud when the raid starts does not.
+    #[test]
+    fn integration_chat_macro_marks_a_raid() {
+        let marks: Vec<(u32, String)> = run_events(
+            &[
+                "[Sun Aug 02 20:00:00 2026] You say to your guild, 'raid start'",
+                "[Sun Aug 02 20:00:05 2026] Zyro tells General:1, 'when does the raid start?'",
+                "[Sun Aug 02 22:30:00 2026] Kermitzalot tells the raid, 'raid end'",
+            ],
+            "Izzin",
+        )
+        .into_iter()
+        .filter_map(|e| match e {
+            CombatEvent::RaidMark { ts, kind, .. } => Some((ts, kind)),
+            _ => None,
+        })
+        .collect();
+        assert_eq!(marks.len(), 2, "the question is not a marker: {marks:?}");
+        assert_eq!(marks[0].1, "raid_start");
+        assert_eq!(marks[1].1, "raid_end");
+        assert!(marks[1].0 > marks[0].0, "end comes after start");
+    }
+
+    #[test]
+    fn integration_pet_owner_from_burnout() {
+        // Burnout cast + generated-name pet going berserk within the window
+        // → ownership learned. (Real pair observed live: Ruin / Labarer.)
+        let state = run_lines(
+            &[
+                "[Fri Feb 27 20:00:01 2026] Ruin begins casting Burnout.",
+                "[Fri Feb 27 20:00:05 2026] Labarer goes berserk.",
+            ],
+            "Izzin",
+        );
+        assert_eq!(
+            state.known_pets.get("Labarer").map(String::as_str),
+            Some("Ruin")
+        );
+        assert!(state.known_players.contains("Labarer"));
+    }
+
+    #[test]
+    fn integration_pet_owner_window_and_name_gates() {
+        // Too late after the cast → no association.
+        let late = run_lines(
+            &[
+                "[Fri Feb 27 20:00:01 2026] Ruin begins casting Burnout.",
+                "[Fri Feb 27 20:00:30 2026] Labarer goes berserk.",
+            ],
+            "Izzin",
+        );
+        assert!(!late.known_pets.contains_key("Labarer"));
+        // Non-generated name (a player named who-knows-what) → no association.
+        let notpet = run_lines(
+            &[
+                "[Fri Feb 27 20:00:01 2026] Ruin begins casting Burnout.",
+                "[Fri Feb 27 20:00:03 2026] Steve goes berserk.",
+            ],
+            "Izzin",
+        );
+        assert!(!notpet.known_pets.contains_key("Steve"));
+    }
+
+    #[test]
+    fn integration_pet_owner_from_summon() {
+        // "Lesser Summoning: Water" then a brand-new generated-name pet's
+        // first swing → owned by the summoner (no Burnout needed).
+        let state = run_lines(
+            &[
+                "[Fri Feb 27 20:00:01 2026] Marrowbane begins casting Lesser Summoning: Water.",
+                "[Fri Feb 27 20:00:20 2026] Gobaner slashes a gnoll for 12 points of damage.",
+            ],
+            "Izzin",
+        );
+        assert_eq!(
+            state.known_pets.get("Gobaner").map(String::as_str),
+            Some("Marrowbane")
+        );
+        // An already-associated pet is NOT re-owned by someone else's summon.
+        let state2 = run_lines(
+            &[
+                "[Fri Feb 27 20:00:01 2026] Ruin begins casting Burnout.",
+                "[Fri Feb 27 20:00:03 2026] Labarer goes berserk.",
+                "[Fri Feb 27 20:00:10 2026] Marrowbane begins casting Lesser Summoning: Water.",
+                "[Fri Feb 27 20:00:15 2026] Labarer slashes a gnoll for 12 points of damage.",
+            ],
+            "Izzin",
+        );
+        assert_eq!(
+            state2.known_pets.get("Labarer").map(String::as_str),
+            Some("Ruin")
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use tracing::{info, warn};
 
-use crate::session_index::{SessionEntry, SharedSessionIndex, RECONNECT_GAP_SECS};
+use crate::session_index::{SessionEntry, SharedSessionIndex};
 use crate::ServerState;
 
 /// Maximum EQ log-time span (seconds) allowed per journal entry.
@@ -122,33 +122,6 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
     };
     connected_flag.store(true, std::sync::atomic::Ordering::Relaxed);
 
-    // WS reconnect trigger: cut a session if the journal has content and the
-    // last batch arrived more than RECONNECT_GAP_SECS ago (player was gone).
-    // Skip when the last batch was historical replay data (wall_ts >> log_ts):
-    // in that case the gap is between replay uploads, not actual gameplay breaks.
-    {
-        let (journal_len, next_id, last_wall_ts, last_log_ts) = {
-            let j = journal.read().await;
-            (j.len(), j.next_batch_id(), j.last_ts(), j.log_last_ts())
-        };
-        if journal_len > 0 {
-            let gap = last_wall_ts
-                .map(|t| now_secs().saturating_sub(t))
-                .unwrap_or(0);
-            // Skew between server-receipt time and EQ log time: near-zero for live
-            // content, hours/days for historical replays.
-            let skew = last_wall_ts
-                .zip(last_log_ts)
-                .map(|(w, l)| w.saturating_sub(l))
-                .unwrap_or(0);
-            if gap >= RECONNECT_GAP_SECS && skew < RECONNECT_GAP_SECS {
-                let wall_ts = now_secs();
-                let off = utc_offset.load(std::sync::atomic::Ordering::Relaxed);
-                cut_session(&session_index, next_id, wall_ts, wall_ts, off, &stream_id).await;
-            }
-        }
-    }
-
     while let Some(result) = socket.recv().await {
         match result {
             Ok(Message::Text(json)) => {
@@ -193,6 +166,34 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                     }
                 });
 
+                // Raid boundaries called in chat: turn them into markers, so a
+                // raid can be bracketed from inside the game. Deduplicated
+                // against markers already at that second, because a replay or
+                // a re-import would otherwise stack them up.
+                for e in &batch.events {
+                    if let froklog::event::CombatEvent::RaidMark { ts, kind, label } = e {
+                        let markers = {
+                            let reg = state.registry.read().await;
+                            reg.get(&stream_id).map(|en| Arc::clone(&en.markers))
+                        };
+                        if let Some(markers) = markers {
+                            let ts = *ts as u64;
+                            let already = markers
+                                .list()
+                                .map(|ms| ms.iter().any(|m| m.ts == ts && &m.kind == kind))
+                                .unwrap_or(false);
+                            if !already {
+                                match markers.add(ts, kind, label) {
+                                    Ok(_) => info!("Marker [{stream_id}]: {kind} @ {ts} (chat)"),
+                                    Err(e) => {
+                                        warn!("Marker [{stream_id}]: chat marker failed: {e}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Split oversized batches (e.g. from dump mode) into per-minute
                 // sub-batches so the seek index has sufficient granularity.
                 let sub_batches = split_by_log_time(batch);
@@ -213,6 +214,22 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
 
                 for sub in sub_batches {
                     let log_ts = sub.max_log_ts();
+                    // A real break in play: the game's own clock jumped more
+                    // than a session gap since the last thing we stored. This
+                    // is the only automatic boundary — see session_index's
+                    // module docs for why a reconnect is not one.
+                    if let Some(ts) = log_ts {
+                        let (prev_log_ts, next_id) = {
+                            let j = journal.read().await;
+                            (j.log_last_ts(), j.next_batch_id())
+                        };
+                        let away = crate::session_index::is_session_gap(prev_log_ts, ts);
+                        if away && session_index.read().await.last_start_id() != Some(next_id) {
+                            let off = utc_offset.load(std::sync::atomic::Ordering::Relaxed);
+                            cut_session(&session_index, next_id, ts, wall_ts, off, &stream_id)
+                                .await;
+                        }
+                    }
                     match serde_json::to_string(&sub) {
                         Ok(sub_json) => {
                             let arc_json = Arc::new(sub_json);

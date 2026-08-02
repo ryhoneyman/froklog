@@ -118,9 +118,12 @@ pub static RE_HEARTBEAT: Lazy<Regex> = Lazy::new(|| {
 });
 
 // "Player begins casting SpellName."
+// Spell charset includes ':' and '-': "Lesser Summoning: Water" style names
+// silently failed the whole match before, so colon-spells never produced
+// Cast events at all.
 pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"^(?P<src>[A-Za-z][A-Za-z`', ]*) begins? casting (?P<spell>[A-Za-z][A-Za-z `']+?)\.",
+        r"^(?P<src>[A-Za-z][A-Za-z`', ]*) begins? casting (?P<spell>[A-Za-z][A-Za-z `':-]+?)\.",
     )
     .unwrap()
 });
@@ -305,6 +308,65 @@ pub fn parse_warder_owner(name: &str) -> Option<&str> {
         .filter(|owner| !owner.is_empty() && !owner.contains(' '))
 }
 
+/// "<Pet> goes berserk." — the visible landing of a Burnout-family pet haste.
+/// Paired with the preceding "begins casting Burnout" this reveals which
+/// player owns which summoned pet: Burnout is only castable on the caster's
+/// OWN pet, and generated pet names carry no owner of their own.
+pub static RE_PET_BERSERK: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(?P<name>[A-Z][a-z]+) goes berserk\.$").unwrap());
+
+/// Spells castable only on the caster's own pet whose landing is visible in
+/// the log. Prefix-matched so ranks ("Burnout II") count.
+pub fn is_pet_buff_spell(spell: &str) -> bool {
+    spell.starts_with("Burnout")
+}
+
+// "Your Light Healing spell fizzles!" — own fizzles only (EQ does not log
+// other players' fizzles), with the spell name.
+pub static RE_FIZZLE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^Your (?P<sp>[A-Za-z][A-Za-z `':-]+?) spell fizzles!$").unwrap());
+
+/// Pet-summoning spells, by the shapes seen on the server: mage
+/// "Lesser Summoning: Water" (any rank/element), enchanter animations
+/// ("Sisna's Animation"). The generated-name pet that first appears in
+/// combat after one of these belongs to the caster.
+pub fn is_pet_summon_spell(spell: &str) -> bool {
+    spell.contains("Summoning:") || spell.ends_with(" Animation")
+}
+
+/// The classic EQ summoned-pet name generator (Gabann, Labarer, Xobtik…) —
+/// the same syllable table the web viewer uses for its Pet badge. Summoned
+/// pets draw a random name from this fixed space on every summon.
+pub fn is_generated_pet_name(name: &str) -> bool {
+    use std::collections::HashSet;
+    static NAMES: Lazy<HashSet<String>> = Lazy::new(|| {
+        let p1 = ["G", "J", "K", "L", "V", "X", "Z"];
+        let p2 = ["", "ab", "ar", "as", "eb", "en", "ib", "ob", "on"];
+        let p3 = ["", "an", "ar", "ek", "ob"];
+        let p4 = ["er", "ab", "n", "tik"];
+        // Real-word collisions excluded, mirroring the viewer.
+        let blocked = ["Laser", "Ektik"];
+        let mut s = HashSet::new();
+        for a in p1 {
+            for b in p2 {
+                for c in p3 {
+                    if b.is_empty() && c.is_empty() {
+                        continue;
+                    }
+                    for d in p4 {
+                        let name = format!("{a}{b}{c}{d}");
+                        if !blocked.contains(&name.as_str()) {
+                            s.insert(name);
+                        }
+                    }
+                }
+            }
+        }
+        s
+    });
+    NAMES.contains(name)
+}
+
 pub fn normalize_article_case(name: &str) -> String {
     if let Some(rest) = name.strip_prefix("A ") {
         format!("a {rest}")
@@ -416,6 +478,69 @@ pub fn normalize_miss(word: &str) -> &'static str {
         w if w.starts_with("absorb") => "absorb",
         _ => "miss",
     }
+}
+
+/// Any chat line, capturing just what was said.
+///
+/// Covers both directions, because a macro you type and a raid leader's call
+/// land in the log completely differently:
+///   You say to your guild, 'raid start'      <- your own /gu
+///   You tell your party, 'raid start'        <- your own /g
+///   Kermitzalot tells the raid, 'raid start' <- someone else's
+///   Zyro tells General:1, 'raid start'       <- a custom channel
+///
+/// The channel is matched loosely (`[^,]*`) on purpose: EQ Legends words
+/// these differently from classic EQ — it says "You say to your guild" where
+/// classic says "You tell your guild" — and custom channels carry arbitrary
+/// names. What matters is the message, not which pipe carried it.
+pub static RE_CHAT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(?:You (?:say|tell|told)|[A-Za-z`'-]+ (?:says?|tells?|told))[^,]*, '(.*)'$")
+        .expect("valid regex")
+});
+
+/// A chat message that marks a raid boundary: `(kind, label)`, or None.
+///
+/// Accepts an optional description after a separator, so a night of raiding
+/// reads as itself rather than as "Raid, Raid, Raid":
+///
+///   raid start                 -> ("raid_start", "")
+///   raid start -- Vox D3       -> ("raid_start", "Vox D3")
+///   raid start: Nagafen        -> ("raid_start", "Nagafen")
+///   raid end -- wiped          -> ("raid_end", "wiped")
+///
+/// A separator is REQUIRED before a description. Without that rule the
+/// phrase would only have to be a prefix, and "raid start now?" — or any of
+/// the forty-odd messages in one real log that merely mention a raid — would
+/// start marking up the timeline.
+pub fn raid_mark(message: &str) -> Option<(&'static str, String)> {
+    let m = message.trim();
+    let lower = m.to_ascii_lowercase();
+    for (phrase, kind) in [
+        ("raid start", "raid_start"),
+        ("raidstart", "raid_start"),
+        ("raid end", "raid_end"),
+        ("raidend", "raid_end"),
+    ] {
+        let Some(rest) = lower.strip_prefix(phrase) else {
+            continue;
+        };
+        let rest_raw = &m[phrase.len()..];
+        if rest.trim().is_empty() {
+            return Some((kind, String::new()));
+        }
+        let trimmed = rest_raw.trim_start();
+        // A RUN of separator characters, not a fixed one: people type
+        // "-", "--" and "---" interchangeably (all three appear in one real
+        // log), and matching a fixed "--" left the third dash stuck to the
+        // front of the description.
+        let is_sep = |c: char| c == '-' || c == '\u{2014}' || c == ':';
+        if trimmed.starts_with(is_sep) {
+            let label = trimmed.trim_start_matches(is_sep).trim();
+            return Some((kind, label.to_string()));
+        }
+        return None; // trailing words with no separator: not a marker
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1212,5 +1337,110 @@ mod who_tests {
     #[test]
     fn re_who_no_match_players_header() {
         assert!(RE_WHO.captures("Players in EverQuest:").is_none());
+    }
+}
+
+#[cfg(test)]
+mod raid_mark_tests {
+    use super::*;
+
+    #[test]
+    fn re_chat_matches_both_directions() {
+        let cases = [
+            ("You say to your guild, 'raid start'", "raid start"),
+            ("You say, 'raid start'", "raid start"),
+            ("You tell your party, 'raid start'", "raid start"),
+            ("You say to your raid, 'raid end'", "raid end"),
+            ("Kermitzalot tells the raid, 'raid start'", "raid start"),
+            ("Zyro tells General:1, 'raid start'", "raid start"),
+            ("Gnominated tells the guild, 'hello there'", "hello there"),
+            ("Raimier says, 'hi'", "hi"),
+        ];
+        for (line, want) in cases {
+            let caps = RE_CHAT
+                .captures(line)
+                .unwrap_or_else(|| panic!("no match: {line}"));
+            assert_eq!(&caps[1], want, "{line}");
+        }
+    }
+
+    #[test]
+    fn re_chat_ignores_combat_lines() {
+        for line in [
+            "You slash a greater skeleton for 96 points of damage. (Critical)",
+            "Welcome to EverQuest Legends!",
+            "[45 CLR/SHD/BER] Zyro (Human) <Ancient Artifacts>",
+        ] {
+            assert!(RE_CHAT.captures(line).is_none(), "should not match: {line}");
+        }
+    }
+
+    /// The whole message must be the phrase: guild chat is full of people
+    /// asking when the raid starts, and none of that should move a marker.
+    #[test]
+    fn raid_mark_needs_the_whole_message() {
+        let kind = |m| raid_mark(m).map(|(k, _)| k);
+        assert_eq!(kind("raid start"), Some("raid_start"));
+        assert_eq!(kind("  Raid Start  "), Some("raid_start"));
+        assert_eq!(kind("RAIDSTART"), Some("raid_start"));
+        assert_eq!(kind("raid end"), Some("raid_end"));
+
+        assert_eq!(kind("when does the raid start?"), None);
+        assert_eq!(kind("raid starts in 10"), None);
+        assert_eq!(kind("is the raid ending soon"), None);
+        assert_eq!(kind(""), None);
+    }
+
+    /// A description after a separator names the raid.
+    #[test]
+    fn raid_mark_takes_a_description() {
+        assert_eq!(
+            raid_mark("raid start -- Vox D3"),
+            Some(("raid_start", "Vox D3".to_string()))
+        );
+        assert_eq!(
+            raid_mark("Raid Start: Nagafen"),
+            Some(("raid_start", "Nagafen".to_string()))
+        );
+        assert_eq!(
+            raid_mark("raid start - Plane of Fear"),
+            Some(("raid_start", "Plane of Fear".to_string()))
+        );
+        assert_eq!(
+            raid_mark("raid end -- wiped on trash"),
+            Some(("raid_end", "wiped on trash".to_string()))
+        );
+    }
+
+    /// Separator runs vary by typist. All of these appeared in one real log.
+    #[test]
+    fn any_run_of_separators_works() {
+        for line in [
+            "Raid Start - Naggy D2 ",
+            "Raid Start -- Naggy D2",
+            "Raid Start --- Naggy D2",
+            "Raid Start: Naggy D2",
+            "Raid Start :- Naggy D2",
+        ] {
+            assert_eq!(
+                raid_mark(line),
+                Some(("raid_start", "Naggy D2".to_string())),
+                "{line}"
+            );
+        }
+        // A bare phrase with trailing whitespace is still a plain marker.
+        assert_eq!(
+            raid_mark("Raid Start "),
+            Some(("raid_start", String::new()))
+        );
+    }
+
+    /// Without a separator the phrase would only need to be a PREFIX, which
+    /// is how ordinary chat starts marking up the timeline.
+    #[test]
+    fn a_description_needs_a_separator() {
+        assert_eq!(raid_mark("raid start now?"), None);
+        assert_eq!(raid_mark("raid start in 5 minutes"), None);
+        assert_eq!(raid_mark("raid ending soon folks"), None);
     }
 }

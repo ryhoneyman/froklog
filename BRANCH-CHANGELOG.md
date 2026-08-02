@@ -528,6 +528,262 @@ controls read as a glitch. The bar button (and its orphaned CSS/handle) are
 removed; the pill is the single Go Live control, visible exactly when going
 live is possible and you aren't already there.
 
+## 29. Heal traffic is not playerhood evidence
+
+Bug resolved: Emperor Crush vanished from the parse — classified as a
+*player*. His priest adds healed him, and the heal-ghost rule from entry 27
+treated received-heals as proof of playerhood, so the ghost survived and
+every mob event for him was discarded. Mobs heal each other constantly;
+heals in either direction prove nothing. The corrected rule: only damage
+dealt from a player position or /who class data makes a name a player.
+Verified live: the session rebuilt with 62 encounters including two
+★ Emperor Crush pulls that previously didn't exist.
+
+## 30. Owner-curated named NPCs
+
+The named/trash heuristic (capitalization + corpse-count demotion) is
+game-derived but not infallible, and the game offers no authoritative list —
+so the stream owner's judgment now layers on top. Click the ☆/★ on any mob
+row and choose: Always named, Never named, or Automatic. Overrides live in
+the stream's SQLite database (`mob_overrides` table, name-keyed), so they
+apply to every viewer of the stream and survive reloads.
+
+Design choices: writes accept the VIEW token (curation happens on the viewer
+page, which never holds the stream token) as well as stream/admin tokens;
+the public tokenless page reads overrides (labels must match everywhere) but
+gets no toggle. Deleting the row — not a third stored state — is
+"automatic", so the table only ever holds actual decisions.
+
+## 31. Pulls with more than one named
+
+A pull holding two nameds (Ambassador D`Vinn + Emperor Crush pulled
+together) was labeled with whichever engaged first, hiding the second.
+Encounters now collect every named member; headers, pull rows, and the
+playback dropdown show "★ A + B" (two spelled out, "+N" beyond). The
+first-engaged named still anchors anything keyed on a single name.
+
+## 32. Pet ownership
+
+Summoned pets draw a random generated name on every summon (Labarer,
+Gabann, Xobtik — a fixed syllable space both viewer and parser now share),
+so a pet was recognizable as *a* pet but never as *someone's* pet; only
+Beastlord warders ("X`s warder") carried their owner in the name.
+
+The log offers a clean recurring signature: Burnout-family pet hastes are
+castable only on the caster's own pet, and their landing is the visible
+"<Pet> goes berserk." line. "Ruin begins casting Burnout" followed within
+10 s by "Labarer goes berserk" proves Labarer is Ruin's — re-proven on
+every rebuff, which is exactly what per-summon renaming needs. The parser
+records the association (known_pets) and emits a new `pet {name, owner}`
+event; warder detection now emits it too. Verified on a real session:
+three independent Burnout pairs, all agreeing.
+
+Display is association-first, attribution-unchanged: the viewer's Pet
+badge becomes "Pet · Ruin" (tooltip "Pet of Ruin"), and damage rows stay
+per-entity — folding pet damage into the owner's row is deliberately left
+as a future option rather than assumed.
+
+Second correlation for classes without a Burnout tell (enchanter, necro):
+a player's pet-summon cast ("Lesser Summoning: Water", "Sisna's
+Animation") followed within 60 s by the first attack of a
+never-before-associated generated-name pet. Already-owned pets are never
+re-owned by someone else's summon. Bug found en route: RE_CAST's spell
+charset had no ':' — colon-named spells ("Lesser Summoning: Water") never
+matched, so those casts produced no Cast events at all.
+
+## 33. Player-card deep stats (collapsed by default)
+
+Every damage card gains a "▸ more stats" toggle. Expanded, it shows what
+the totals hide:
+
+- **Per type/spell hit ranges** — hits, low / avg / high, and crit rate,
+  from per-event aggregation (count, min, max, crit-flag) tracked on both
+  the global and per-mob buckets, so the section obeys the same scope as
+  the rest of the card (pull-merged stats widen ranges and sum counts).
+- **Melee accuracy** — landed swings vs mob-avoided attempts with the
+  avoidance breakdown ("Accuracy 78.4% — 156 landed / 43 avoided (dodge
+  21, parry 12, miss 10)"). The attacker-side Miss events were already in
+  the stream; the viewer just discarded them.
+- **Fizzles** — new `fizzle {src, sp}` event (the parser deliberately
+  skipped these before). EQ only logs your own fizzles, so the count
+  appears on the streamer's card, with a per-spell breakdown.
+
+Tanked cards get the same ranges for incoming hits. Expansion state
+sticks per entity across the continuous re-render.
+
+## 34. Sibling streams — "another character is live"
+
+One person plays many characters, each its own stream — and a viewer tab
+left on the idle one looks broken ("why is the web not up to date?" when
+the answer was "you switched characters"). Streams now carry an optional
+`owner_key`: an opaque random key the multi-character client mints once
+and stamps on every registration (and backfills onto older streams via
+PATCH). `GET /stream/:id/siblings` lists the household's other streams
+with recent-activity state, and the viewer polls it: when a sibling saw
+combat within 30 s while the watched stream has gone quiet, a green
+"⚡ Izzin is live — switch" pill appears next to the status badge.
+
+Trust model: the endpoint needs the stream's view or stream token, and
+sibling private links are included — whoever holds one of a household's
+links was given it by the person who registered all of them. Public
+tokenless pages get no sibling access. Streams without a key have no
+siblings.
+
+## 35. Stream deletion from the owning client
+
+Old characters accumulate dead streams that never go away. The purge
+endpoint (`DELETE /stream/:id/purge` — registry removal plus the whole
+on-disk directory, journal database included) previously required the
+admin token; the stream's OWN token now qualifies, so the client that
+created a stream can retire it. The view token still cannot: watchers
+must never be able to destroy history.
+
+---
+
+## 36. Viewer self-heal actually heals
+
+The self-heal in 35's neighbourhood keyed the client-returned
+announcement off `paused_by_disconnect`, which any control message
+clears — and the page sends one AS A REACTION to the disconnect
+(`snapSessionToStart` repositions on `stream_done`). The event that
+should have armed the heal disarmed it, and a live viewer sat an hour
+behind while reporting the stream connected. `ingest_was_down` now
+survives control messages and decides whether to ANNOUNCE the return;
+`paused_by_disconnect` still decides whether the server resumes
+delivery, so a user-paused viewer gets its Go Live pill back without
+being dragged to live. The decision is a pure function with the
+failing case pinned as a test.
+
+## 37. Session-scoped preload
+
+Every page load re-streamed the whole journal: the page pins itself to
+the latest session and discards pre-session batches on arrival, but
+asked the server for a preload from position 0. Two days of play made
+that 66,000 batches / 39 MB / a minute of "Loading data…" per load.
+New `preload_range` control message streams a bounded window instead —
+measured on the same journal: 9,409 batches in 0.6 s. The range is
+clamped (`preload_bounds`) because `seek_index_by_log_ts` returns the
+journal length for a timestamp past the end, and an empty session must
+not stream backwards. `seek_full_paused_log` is untouched for seeks
+that genuinely want full accumulated history.
+
+## 38. Symbolic `session=latest`, and dead-session escape hatches
+
+The page auto-selects the newest session on load and writes the choice
+into the URL — as a NUMBER, which froze. Once the next session began,
+the tab was pinned to a session that had ended: stale data, every new
+batch discarded, and refresh could not escape because the auto-select
+only runs when the parameter is absent. `?session=latest` re-resolves
+on every load (`resolve_session_window`, either page). Deliberately
+numbered links still pin; a page pinned to a finished session says so
+in a banner with a one-click way out, and Go Live navigates to the
+latest session instead of following a live feed the window filter
+silently discards.
+
+## 39. Socket liveness
+
+No keepalive, no staleness detection: a viewer socket killed by laptop
+sleep or a proxy idle-reap left the page showing "client connected"
+over data that stopped arriving, indefinitely. The server now sends a
+`heartbeat` frame every 25 s from the Live and Paused arms (quiet
+streams only — arriving batches already prove liveness), and the page
+force-closes after 70 s of total silence, which lands it on the
+reconnect path that already existed.
+
+## 40. Sessions cut on the game's clock
+
+A client reconnect said nothing about whether the player took a break,
+yet it cut a session — so restarts, crashes and game disconnects
+fragmented one evening into many sessions (twelve in two days
+observed), each a chance to strand a pinned viewer. The only automatic
+boundary is now a ≥1 h gap between consecutive batches' LOG timestamps
+(`is_session_gap`, one definition shared by live ingest and
+`retroactive_scan` — they previously had different thresholds AND
+different comparisons). Login events still cut, unchanged.
+
+## 41. Segments: sessions and raids as first-class scopes
+
+The pull list is cut into segments — the session, plus any raid marked
+inside it — each with a clickable header and pull numbers restarting
+under it. A segment is built with an encounter's shape (key, members,
+start_ts, end_ts) and one resolver (`scopeByKey`) answers for either,
+so every existing aggregate path (cards, summary rows, header, chart)
+works on a segment unchanged; there is no second aggregation
+implementation to drift. Raid boundaries are `raid_start`/`raid_end`
+markers; marking from the page lands at the position being VIEWED, not
+wall-clock, so last night's raid can be marked up while reviewing it.
+
+## 42. Per-segment rosters (exclusions, not whitelists)
+
+Who counts toward a segment's aggregate is a stored, per-segment
+choice (`segment_members`), edited in a modal on the header. Everyone
+recorded starts included, and the roster is the UNION of damage,
+tanking, healing and heals-received — a healer never appears in the
+damage map, and a damage-derived list would make them impossible to
+exclude and invisible in their own raid. Exclusions rather than a
+whitelist because membership cannot be derived: `/who` returns the
+whole ZONE (1–14 people observed per block), and silence proves
+nothing. The failure mode is one row too many, never a silently
+dropped player. Markers became writable with the view token (same
+precedent as mob curation) so the page can set them at all.
+
+## 43. Raid boundaries called from inside the game
+
+`RE_CHAT` + `raid_mark()`: a chat message that IS the phrase
+("raid start", "raid end", optional description after a separator —
+"raid start -- Vox D3" names the raid on its header) emits a new
+`RaidMark` event, which ingest turns into a marker, deduplicated on
+(ts, kind) so replays don't stack them. The whole-message rule and the
+required separator exist because guild chat is full of "when does the
+raid start?" — validated against 9,449 real chat lines: zero false
+positives, 41 raid-mentioning messages correctly ignored. The chat
+pattern covers both directions (EQ Legends writes your own guild chat
+as "You say to your guild," not classic "You tell your guild,") and
+the separator is a run of `-—:` because one log had "-", "--" and
+"---" from the same person within minutes. The page refetches markers
+when a `raid_mark` event passes through the live feed, so a raid
+called mid-session appears without a reload.
+
+## 44. Marker feedback
+
+Setting a marker changed stored state and showed nothing — observed
+consequence: two identical raid_end markers one click apart. Now a
+toast names the time it landed on ("Raid ended at 8:42 PM"), failures
+say so, a trailing raid_end with no pulls after it stays visible as
+"raid ended here" instead of being filtered as an empty segment, and
+Raid end is disabled unless a raid is actually open.
+
+## 45. Character picker and the front door
+
+`/stream` pages get a "Characters (N)" picker built from the siblings
+list the page already fetched (it previously kept only the most-active
+entry to drive the switch pill). `GET /home?key=<home_token>` is the
+bookmarkable version: every character an install streams, live/idle
+state, private and public links. The key is a NEW secret minted by the
+client — deliberately not `owner_key`, which is documented as a
+non-secret grouping id; giving it this power would have silently
+turned it into a password for every existing install. Unknown key =
+plain 404. Player/server names come from the log, so they are
+percent-encoded into URLs and HTML-escaped into text, with tests
+including traversal and query injection through a name.
+
+## 46. Liveness measured on the game's clock, everywhere
+
+The front door and the sibling hint computed idle from batch ARRIVAL
+time — and the multi-character client seeds a `/who` scan for every
+watched character on startup, so a client restart made characters
+unplayed for days light up as live. Idle now derives from the log's
+own timestamps (`last_log_ts`), matching 40's principle: liveness is a
+question about the game, not the network.
+
+## 47. Viewer DOM leak
+
+The mob-list's row-reuse map collected only `.mob-row`, and the same
+map drives the cleanup pass — so pull headers were rebuilt every frame
+AND never removed. A live page reached 559,647 DOM nodes (184,331
+children in a list showing ~155 rows) in a quarter hour of combat.
+The map now collects every row type; measured after: 1,011 nodes.
+
 ---
 
 *(subsequent changes appended as they land)*

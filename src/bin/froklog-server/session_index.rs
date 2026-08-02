@@ -5,15 +5,22 @@
 ///
 /// Sessions are cut by two mechanisms (in priority order):
 ///   1. A `Login` event received in an ingest batch ("Welcome to EverQuest Legends!").
-///   2. WS client reconnect after a gap of ≥ RECONNECT_GAP_SECS with no pushes.
+///   2. A gap of ≥ SESSION_GAP_SECS between consecutive batch LOG timestamps —
+///      i.e. the player actually stopped playing.
+///
+/// Deliberately NOT by client reconnect. A reconnect says the watcher process
+/// or the network hiccuped, not that anyone took a break: restarting the
+/// client, a crash, or a game disconnect would each mint a spurious session,
+/// fragmenting one evening's play into several. Log timestamps come from the
+/// game itself and are the honest signal for "was the player away".
 ///
 /// A session anchors to the permanent row id of its first batch
 /// (`start_batch_id`), NOT a positional index: pruning old batches never shifts
 /// a session boundary. Positions are derived on demand via
 /// `Journal::pos_of_id`.
 ///
-/// For journals that predate session tracking, `retroactive_scan` detects
-/// boundaries from gaps of ≥ GAP_SECS between consecutive batch log timestamps.
+/// `retroactive_scan` applies the same gap rule to journals that predate
+/// session tracking, so historical and live boundaries agree.
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Utc};
@@ -23,13 +30,30 @@ use tokio::sync::RwLock;
 
 use crate::journal::IndexEntry;
 
-/// Minimum gap (seconds) between consecutive combat log timestamps that triggers
-/// a retroactive session boundary during historical journal scanning.
-pub const GAP_SECS: u64 = 1800; // 30 minutes
+/// Minimum gap (seconds) between consecutive combat log timestamps that starts
+/// a new session — live and when scanning history, so the two agree.
+///
+/// An hour: long enough that a corpse run, a bio break or waiting on a port
+/// stays one session, short enough that coming back after dinner reads as a
+/// fresh one.
+pub const SESSION_GAP_SECS: u64 = 3600;
 
-/// Minimum inactivity gap (seconds) since the last received journal batch before
-/// a WS client reconnect is treated as a new session.
-pub const RECONNECT_GAP_SECS: u64 = 600; // 10 minutes
+/// Does a batch at `log_ts` begin a new play session, given the log timestamp
+/// of the last thing stored?
+///
+/// The single definition of a session boundary, used by live ingest and by
+/// `retroactive_scan`, so a journal rebuilt from history gets the same
+/// boundaries it would have got live.
+///
+/// `None` means an empty journal: the first batch continues session 1 rather
+/// than cutting a second one. Timestamps that go backwards (an out-of-order
+/// or replayed batch) saturate to zero and never cut.
+pub fn is_session_gap(prev_log_ts: Option<u64>, log_ts: u64) -> bool {
+    match prev_log_ts {
+        None => false,
+        Some(prev) => log_ts.saturating_sub(prev) >= SESSION_GAP_SECS,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
@@ -202,7 +226,7 @@ impl SessionIndex {
             let curr = &journal_index[i];
             let prev_ts = prev.log_ts.unwrap_or(prev.wall_ts);
             let curr_ts = curr.log_ts.unwrap_or(curr.wall_ts);
-            if curr_ts.saturating_sub(prev_ts) > GAP_SECS {
+            if is_session_gap(Some(prev_ts), curr_ts) {
                 num += 1;
                 self.append(SessionEntry {
                     num,
@@ -384,5 +408,44 @@ mod tests {
         let removed = si.prune(None).unwrap();
         assert_eq!(removed, 1);
         assert!(si.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod gap_tests {
+    use super::*;
+
+    /// The rule the user asked for: an hour away starts a new session.
+    #[test]
+    fn an_hour_away_starts_a_new_session() {
+        assert!(!is_session_gap(Some(1000), 1000 + SESSION_GAP_SECS - 1));
+        assert!(is_session_gap(Some(1000), 1000 + SESSION_GAP_SECS));
+        assert!(is_session_gap(Some(1000), 1000 + 4 * SESSION_GAP_SECS));
+    }
+
+    /// Ordinary play — corpse runs, ports, waiting on a group — is one
+    /// session, not several.
+    #[test]
+    fn ordinary_downtime_stays_one_session() {
+        for gap in [0, 30, 300, 900, 1800, 3000] {
+            assert!(
+                !is_session_gap(Some(10_000), 10_000 + gap),
+                "a {gap}s pause must not cut a session"
+            );
+        }
+    }
+
+    /// An empty journal has nothing to be away from.
+    #[test]
+    fn the_first_batch_does_not_cut() {
+        assert!(!is_session_gap(None, 999_999));
+    }
+
+    /// A batch whose timestamp predates the last stored one (out-of-order or
+    /// replayed) must not be read as a gap.
+    #[test]
+    fn timestamps_going_backwards_never_cut() {
+        assert!(!is_session_gap(Some(50_000), 10_000));
+        assert!(!is_session_gap(Some(50_000), 0));
     }
 }
