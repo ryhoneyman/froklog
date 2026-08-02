@@ -69,7 +69,7 @@ pub async fn stream_page_handler(
             (params.from_ts.unwrap_or(0), params.to_ts.unwrap_or(0))
         } else if let (Some(param), Some(si_arc)) = (params.session.as_deref(), session_index) {
             let si = si_arc.read().await;
-            resolve_session_window(param, &si.list())
+            resolve_session_window(param, si.list())
         } else {
             (0, 0)
         };
@@ -891,7 +891,7 @@ pub async fn player_page_handler(
                 (params.from_ts.unwrap_or(0), params.to_ts.unwrap_or(0))
             } else if let Some(param) = params.session.as_deref() {
                 let si = session_index.read().await;
-                resolve_session_window(param, &si.list())
+                resolve_session_window(param, si.list())
             } else {
                 (0, 0)
             };
