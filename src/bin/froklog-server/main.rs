@@ -5,6 +5,7 @@ mod journal;
 mod markers;
 mod mob_overrides;
 mod ratelimit;
+mod segment_roster;
 mod session_index;
 mod streams;
 mod viewer;
@@ -264,6 +265,14 @@ async fn main() {
             "/stream/{id}/mob_overrides",
             get(list_mob_overrides_handler),
         )
+        .route(
+            "/stream/{id}/segment_members",
+            get(list_segment_members_handler),
+        )
+        .route(
+            "/stream/{id}/segment_member",
+            post(set_segment_member_handler),
+        )
         .route("/stream/{id}/mob_override", post(set_mob_override_handler))
         // Viewer routes (private, token-gated)
         .route("/stream/{id}", get(viewer::stream_page_handler))
@@ -289,6 +298,10 @@ async fn main() {
         .route(
             "/player/{game}/{server}/{name}/mob_overrides",
             get(player_mob_overrides_handler),
+        )
+        .route(
+            "/player/{game}/{server}/{name}/segment_members",
+            get(player_segment_members_handler),
         )
         // Ingest route (Windows clients push here)
         .route("/ingest/{id}", get(ingest::ingest_ws_handler))
@@ -763,11 +776,13 @@ async fn add_marker_handler(
     Path(stream_id): Path<String>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
     State(state): State<ServerState>,
     Json(body): Json<AddMarkerBody>,
 ) -> Response {
     let ip = client_ip(&headers, peer);
-    let Some(markers) = owner_markers(&state, &stream_id, &headers).await else {
+    let Some(markers) = owner_markers(&state, &stream_id, &headers, params.vtok.as_deref()).await
+    else {
         warn!("Marker [{stream_id}] [{ip}]: bad or missing token");
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -792,15 +807,17 @@ async fn add_marker_handler(
     }
 }
 
-/// `DELETE /stream/:id/marker/:mid` — remove a marker. Owner or admin.
+/// `DELETE /stream/:id/marker/:mid` — remove a marker. Viewer page, owner or admin.
 async fn delete_marker_handler(
     Path((stream_id, marker_id)): Path<(String, i64)>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
     State(state): State<ServerState>,
 ) -> Response {
     let ip = client_ip(&headers, peer);
-    let Some(markers) = owner_markers(&state, &stream_id, &headers).await else {
+    let Some(markers) = owner_markers(&state, &stream_id, &headers, params.vtok.as_deref()).await
+    else {
         warn!("Marker delete [{stream_id}] [{ip}]: bad or missing token");
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -1050,19 +1067,150 @@ async fn set_mob_override_handler(
     }
 }
 
-/// Resolve the stream's markers handle when the request carries the stream
-/// token or the admin token. `None` = unauthorized or unknown stream.
+/// `GET /stream/:id/segment_members?vtok=…` — every per-segment exclusion for
+/// this stream. Fetched once; the page applies them per segment as you scroll.
+async fn list_segment_members_handler(
+    Path(stream_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
+    State(state): State<ServerState>,
+) -> Response {
+    let roster = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(entry) => {
+                let valid = entry.public_stream
+                    || params
+                        .vtok
+                        .as_deref()
+                        .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
+                        .unwrap_or(false);
+                if !valid {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                Arc::clone(&entry.segment_roster)
+            }
+        }
+    };
+    match roster.list() {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            warn!("SegmentRoster [{stream_id}]: list failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `GET /player/:game/:server/:name/segment_members` — same list for the
+/// public page, which needs it to aggregate a segment the same way.
+async fn player_segment_members_handler(
+    Path((game, server, name)): Path<(String, String, String)>,
+    State(state): State<ServerState>,
+) -> Response {
+    let roster = {
+        let reg = state.registry.read().await;
+        let Some(id) = reg.find_id_by_player(&game, &server, &name) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        match reg.get(&id) {
+            Some(entry) if entry.public_stream => Arc::clone(&entry.segment_roster),
+            _ => return StatusCode::NOT_FOUND.into_response(),
+        }
+    };
+    match roster.list() {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => {
+            warn!("SegmentRoster [{game}/{server}/{name}]: list failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SegmentMemberBody {
+    /// Log timestamp the segment starts at.
+    seg_ts: u64,
+    name: String,
+    /// true = counts toward the aggregate (removes any exclusion row).
+    included: bool,
+}
+
+/// `POST /stream/:id/segment_member?vtok=…` — include or exclude one player
+/// from one segment's aggregate. Written from the viewer page, so a valid
+/// view token authorizes it, as does the stream or admin token.
+async fn set_segment_member_handler(
+    Path(stream_id): Path<String>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    axum::extract::Query(params): axum::extract::Query<viewer::ViewQuery>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+    Json(body): Json<SegmentMemberBody>,
+) -> Response {
+    let ip = client_ip(&headers, peer);
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 64 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let roster = {
+        let reg = state.registry.read().await;
+        match reg.get(&stream_id) {
+            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(entry) => {
+                let by_vtok = params
+                    .vtok
+                    .as_deref()
+                    .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
+                    .unwrap_or(false);
+                let by_bearer = ingest::extract_bearer(&headers)
+                    .map(|t| {
+                        froklog::auth::tokens_match(&entry.stream_token, &t)
+                            || state.is_admin_token(&t)
+                    })
+                    .unwrap_or(false);
+                if !by_vtok && !by_bearer {
+                    warn!("SegmentMember [{stream_id}] [{ip}]: bad or missing token");
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                Arc::clone(&entry.segment_roster)
+            }
+        }
+    };
+    let result = if body.included {
+        roster.include(body.seg_ts, name).map(|_| ())
+    } else {
+        roster.exclude(body.seg_ts, name)
+    };
+    match result {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            warn!("SegmentMember [{stream_id}]: write failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// Resolve the stream's markers handle for a write.
+///
+/// A valid VIEW token authorizes it, as does the stream or admin token.
+/// Marking "raid start" and "raid end" is done from the viewer page, which
+/// holds only the view token — the same reasoning that already applies to
+/// mob curation. The public tokenless page still gets no write path.
+/// `None` = unauthorized or unknown stream.
 async fn owner_markers(
     state: &ServerState,
     stream_id: &str,
     headers: &HeaderMap,
+    vtok: Option<&str>,
 ) -> Option<markers::SharedMarkers> {
-    let token = ingest::extract_bearer(headers)?;
     let reg = state.registry.read().await;
     let entry = reg.get(stream_id)?;
-    let authorized =
-        froklog::auth::tokens_match(&entry.stream_token, &token) || state.is_admin_token(&token);
-    if authorized {
+    let by_vtok = vtok
+        .map(|t| froklog::auth::tokens_match(&entry.view_token, t))
+        .unwrap_or(false);
+    let by_bearer = ingest::extract_bearer(headers)
+        .map(|t| froklog::auth::tokens_match(&entry.stream_token, &t) || state.is_admin_token(&t))
+        .unwrap_or(false);
+    if by_vtok || by_bearer {
         Some(Arc::clone(&entry.markers))
     } else {
         None

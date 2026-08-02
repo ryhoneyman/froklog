@@ -6,6 +6,9 @@
 ///   batches  (id INTEGER PRIMARY KEY AUTOINCREMENT, wall_ts, log_ts, seq, batch BLOB)
 ///   sessions (num INTEGER PRIMARY KEY, start_batch_id, start_log_ts, start_wall_ts, label)
 ///   markers  (id INTEGER PRIMARY KEY AUTOINCREMENT, ts, kind, label)
+///   mob_overrides   (name PRIMARY KEY, kind)
+///   segment_members (seg_ts, name PRIMARY KEY pair, display) — per-segment
+///                   aggregate exclusions, see `segment_roster.rs`
 ///
 /// Batch JSON is zlib-compressed in the BLOB, same compression as the old
 /// binary journal format. The in-memory seek index (`Vec<IndexEntry>`, ordered
@@ -98,6 +101,12 @@ pub(crate) fn open_db(data_dir: &std::path::Path, stream_id: &str) -> std::io::R
         CREATE TABLE IF NOT EXISTS mob_overrides (
             name  TEXT PRIMARY KEY,
             kind  TEXT NOT NULL CHECK (kind IN ('named', 'trash'))
+        );
+        CREATE TABLE IF NOT EXISTS segment_members (
+            seg_ts  INTEGER NOT NULL,
+            name    TEXT NOT NULL,
+            display TEXT NOT NULL,
+            PRIMARY KEY (seg_ts, name)
         );",
     )
     .map_err(sql_err)?;

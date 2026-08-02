@@ -8,6 +8,7 @@ use tokio::sync::{broadcast, watch, RwLock};
 use crate::journal::{Journal, SharedJournal};
 use crate::markers::{Markers, SharedMarkers};
 use crate::mob_overrides::{MobOverrides, SharedMobOverrides};
+use crate::segment_roster::{SegmentRoster, SharedSegmentRoster};
 use crate::session_index::{SessionIndex, SharedSessionIndex};
 
 // Sized so a viewer parked in replay/pause for a few minutes can still drain
@@ -49,6 +50,7 @@ pub struct StreamEntry {
     pub markers: SharedMarkers,
     /// Owner-curated named/trash NPC overrides for the viewer's ★ grouping.
     pub mob_overrides: SharedMobOverrides,
+    pub segment_roster: SharedSegmentRoster,
     /// Fan-out channel: every viewer WebSocket subscribes to this.
     /// Carries raw EventBatch JSON strings (the same content written to disk).
     pub broadcast_tx: broadcast::Sender<Arc<String>>,
@@ -87,6 +89,7 @@ impl StreamEntry {
         let session_index = Arc::new(tokio::sync::RwLock::new(si_inner));
         let markers = Arc::new(Markers::open(data_dir, &stream_id)?);
         let mob_overrides = Arc::new(MobOverrides::open(data_dir, &stream_id)?);
+        let segment_roster = Arc::new(SegmentRoster::open(data_dir, &stream_id)?);
 
         let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (public_revoke_tx, _) = watch::channel(());
@@ -105,6 +108,7 @@ impl StreamEntry {
             session_index,
             markers,
             mob_overrides,
+            segment_roster,
             broadcast_tx,
             client_connected: Arc::new(AtomicBool::new(false)),
             utc_offset_secs: Arc::new(AtomicI64::new(0)),
