@@ -1797,7 +1797,12 @@ function buildSegments(encounters) {
   const bounds = [{ ts: SESSION_LOG_TS > 0 ? Math.min(SESSION_LOG_TS, first) : first, kind: 'session' }];
   for (const m of raidMarkers) {
     if (!inWindow(m.ts)) continue;
-    if (m.kind === 'raid_start') bounds.push({ ts: m.ts, kind: 'raid', id: m.id, label: m.label });
+    // 'from chat' was a placeholder the server used to stamp before raids
+    // could be named; it is not a name anyone chose, so do not show it as one.
+    if (m.kind === 'raid_start') {
+      const label = m.label === 'from chat' ? '' : (m.label || '');
+      bounds.push({ ts: m.ts, kind: 'raid', id: m.id, label });
+    }
     else if (m.kind === 'raid_end') bounds.push({ ts: m.ts, kind: 'session', id: m.id, closes: true });
   }
   bounds.sort((a, b) => a.ts - b.ts);
