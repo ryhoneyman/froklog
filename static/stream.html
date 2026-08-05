@@ -1851,6 +1851,11 @@ function buildSegments(encounters) {
       const label = m.label === 'from chat' ? '' : (m.label || '');
       bounds.push({ ts: m.ts, kind: 'raid', id: m.id, label });
     }
+    // Entering an instance divides the list like a called raid start — the
+    // client only emits one per DISTINCT instance, so corpse runs are quiet.
+    else if (m.kind === 'instance') {
+      bounds.push({ ts: m.ts, kind: 'instance', id: m.id, label: m.label || '' });
+    }
     else if (m.kind === 'raid_end') bounds.push({ ts: m.ts, kind: 'session', id: m.id, closes: true });
   }
   bounds.sort((a, b) => a.ts - b.ts);
@@ -2083,7 +2088,9 @@ function buildFightLabel(d) {
       // Title matches the pull list — the named (true casing) or "Pull #N";
       // the composition rides along as a small subtitle.
       const title = enc.seg_ts !== undefined
-        ? (enc.kind === 'raid' ? '\u2694 ' + (enc.label || 'Raid') : '\u25c6 Session')
+        ? (enc.kind === 'raid' ? '\u2694 ' + (enc.label || 'Raid')
+          : enc.kind === 'instance' ? '\u25c8 ' + (enc.label || 'Instance')
+          : '\u25c6 Session')
         : enc.named ? `★ ${encNamedLabel(enc)}` : `Pull #${enc.num}`;
       const comp = Object.entries(enc.names)
         .sort((a, b) => b[1] - a[1])
@@ -2334,10 +2341,10 @@ function renderMobList(d) {
       const clock = new Date(sg.start_ts * 1000)
         .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       const excl = (segExclusions.get(String(sg.seg_ts)) || new Set()).size;
-      const label = (sg.kind === 'raid'
-          ? '\u2694 ' + (sg.label || 'Raid')
+      const label = (sg.kind === 'raid' ? '\u2694 ' + (sg.label || 'Raid')
+          : sg.kind === 'instance' ? '\u25c8 ' + (sg.label || 'Instance')
           : '\u25c6 Session') + ' \u00b7 ' + clock;
-      const cls = 'seg-row' + (sg.kind === 'raid' ? ' seg-raid' : '')
+      const cls = 'seg-row' + (sg.kind !== 'session' ? ' seg-raid' : '')
         + (selectedEnc === sg.key ? ' selected' : '');
       let row = existing[idStr];
       if (!row) {

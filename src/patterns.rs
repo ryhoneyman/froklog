@@ -498,6 +498,26 @@ pub static RE_CHAT: Lazy<Regex> = Lazy::new(|| {
         .expect("valid regex")
 });
 
+/// Entry into an INSTANCED zone — the game suffixes these with "(Refined)",
+/// which plain zone entries never carry:
+///
+///   You have entered The City of Guk 4 (Refined).
+///   You have entered Nagafen's Lair - Group 4 (Refined).
+///   You have entered Nagafen's Lair.                    <- NOT an instance
+///
+/// The capture is the full instance name; strip_instance_label tidies it for
+/// display. Creation/invite chatter ("has asked you to join the instance:")
+/// deliberately does not match — those fire before the player is actually
+/// inside, and sometimes before the attempt even succeeds.
+pub static RE_INSTANCE_ENTER: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^You have entered (.+ \(Refined\))\.\s*$").expect("valid regex"));
+
+/// Display label for an instance: the zone text without the "(Refined)"
+/// marker the game appends to every instanced entry.
+pub fn instance_label(zone: &str) -> String {
+    zone.trim_end_matches("(Refined)").trim_end().to_string()
+}
+
 /// A chat message that marks a raid boundary: `(kind, label)`, or None.
 ///
 /// Accepts an optional description after a separator, so a night of raiding
@@ -1494,5 +1514,54 @@ mod hyphenated_name_tests {
             .captures("Zyro has slain Cazic-Thule!")
             .expect("player slays mob");
         assert_eq!(&caps["tgt"], "Cazic-Thule");
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::*;
+
+    /// Every instanced-entry shape from a real log matches; plain zones and
+    /// the invite line (fires before you are inside) do not.
+    #[test]
+    fn instanced_entries_match_and_plain_zones_do_not() {
+        for (line, want) in [
+            (
+                "You have entered The City of Guk 4 (Refined).",
+                "The City of Guk 4 (Refined)",
+            ),
+            (
+                "You have entered Befallen 4 (Refined).",
+                "Befallen 4 (Refined)",
+            ),
+            (
+                "You have entered Nagafen's Lair - Group 4 (Refined).",
+                "Nagafen's Lair - Group 4 (Refined)",
+            ),
+        ] {
+            let caps = RE_INSTANCE_ENTER
+                .captures(line)
+                .unwrap_or_else(|| panic!("no match: {line}"));
+            assert_eq!(&caps[1], want);
+        }
+        for line in [
+            "You have entered Nagafen's Lair.",
+            "You have entered East Freeport.",
+            "Raimier has asked you to join the instance: The Ruins of Old Paineel - Group 4 (Refined).",
+        ] {
+            assert!(RE_INSTANCE_ENTER.captures(line).is_none(), "{line}");
+        }
+    }
+
+    #[test]
+    fn labels_drop_the_refined_marker() {
+        assert_eq!(
+            instance_label("The City of Guk 4 (Refined)"),
+            "The City of Guk 4"
+        );
+        assert_eq!(
+            instance_label("Nagafen's Lair - Group 4 (Refined)"),
+            "Nagafen's Lair - Group 4"
+        );
     }
 }
