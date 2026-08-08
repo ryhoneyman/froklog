@@ -205,7 +205,25 @@ fn epoch_ms() -> u64 {
 /// reply: `{"time":{"t0":<echoed client ms>,"t1":<server ms>}}`.
 /// Standard NTP-style offset estimate over one round trip:
 /// skew = t1 − (t0 + t2)/2, where t2 is our receive time.
+/// Batches the server has refused this session. Nonzero means data is being
+/// LOST — the one thing a green tray must never hide. Process-wide like the
+/// clock skew: one process talks to one server.
+pub static BATCH_REJECTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 fn handle_server_msg(txt: &str) {
+    #[derive(serde::Deserialize)]
+    struct ErrReply {
+        error: String,
+        #[serde(default)]
+        hint: String,
+    }
+    if let Ok(e) = serde_json::from_str::<ErrReply>(txt) {
+        if e.error == "bad_batch" {
+            let n = BATCH_REJECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            warn!("Pusher: server REJECTED a batch ({n} total). {}", e.hint);
+        }
+        return;
+    }
     #[derive(serde::Deserialize)]
     struct TimeReply {
         time: TimeBody,

@@ -148,7 +148,18 @@ async fn handle_ingest(mut socket: WebSocket, stream_id: String, state: ServerSt
                 let batch = match serde_json::from_str::<froklog::event::EventBatch>(&json) {
                     Ok(b) => b,
                     Err(_) => {
+                        // Tell the CLIENT, not just our own log. A dropped
+                        // batch used to be invisible from the client's side —
+                        // its counters kept climbing while data vanished. With
+                        // the Unknown fallback this now only fires on genuine
+                        // corruption or a truly incompatible peer, which is
+                        // exactly when someone is troubleshooting.
                         warn!("Ingest [{stream_id}]: received invalid EventBatch — skipping");
+                        let _ = socket
+                            .send(Message::Text(
+                                r#"{"error":"bad_batch","hint":"batch rejected: this server may be older than the client — update the server first"}"#.into(),
+                            ))
+                            .await;
                         continue;
                     }
                 };
