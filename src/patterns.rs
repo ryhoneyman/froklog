@@ -509,13 +509,22 @@ pub static RE_CHAT: Lazy<Regex> = Lazy::new(|| {
 /// display. Creation/invite chatter ("has asked you to join the instance:")
 /// deliberately does not match — those fire before the player is actually
 /// inside, and sometimes before the attempt even succeeds.
-pub static RE_INSTANCE_ENTER: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^You have entered (.+ \(Refined\))\.\s*$").expect("valid regex"));
+pub static RE_INSTANCE_ENTER: Lazy<Regex> = Lazy::new(|| {
+    // `<zone>[ - Group] <tier digit> (<Tier name>).` — the tier NAME is an
+    // open set (Awakened/Adaptive/Fused/Refined observed, one per tier
+    // digit), so match the shape, not a word list: anchoring on the literal
+    // "(Refined)" made every other difficulty invisible, discovered when a
+    // tier-2 Plane of Hate produced no segment.
+    Regex::new(r"^You have entered (.+ \d+ \([A-Za-z ]+\))\.\s*$").expect("valid regex")
+});
 
 /// Display label for an instance: the zone text without the "(Refined)"
 /// marker the game appends to every instanced entry.
 pub fn instance_label(zone: &str) -> String {
-    zone.trim_end_matches("(Refined)").trim_end().to_string()
+    match zone.rfind(" (") {
+        Some(i) if zone.ends_with(')') => zone[..i].to_string(),
+        _ => zone.to_string(),
+    }
 }
 
 /// A chat message that marks a raid boundary: `(kind, label)`, or None.
@@ -1538,6 +1547,20 @@ mod instance_tests {
                 "You have entered Nagafen's Lair - Group 4 (Refined).",
                 "Nagafen's Lair - Group 4 (Refined)",
             ),
+            // The other three tiers of the same ladder — anchoring on
+            // "(Refined)" alone made these invisible.
+            (
+                "You have entered The Plane of Hate 2 (Adaptive).",
+                "The Plane of Hate 2 (Adaptive)",
+            ),
+            (
+                "You have entered The Ruins of Old Guk 3 (Fused).",
+                "The Ruins of Old Guk 3 (Fused)",
+            ),
+            (
+                "You have entered The Ruins of Old Paineel 1 (Awakened).",
+                "The Ruins of Old Paineel 1 (Awakened)",
+            ),
         ] {
             let caps = RE_INSTANCE_ENTER
                 .captures(line)
@@ -1558,6 +1581,10 @@ mod instance_tests {
         assert_eq!(
             instance_label("The City of Guk 4 (Refined)"),
             "The City of Guk 4"
+        );
+        assert_eq!(
+            instance_label("The Plane of Hate 2 (Adaptive)"),
+            "The Plane of Hate 2"
         );
         assert_eq!(
             instance_label("Nagafen's Lair - Group 4 (Refined)"),
