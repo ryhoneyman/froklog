@@ -845,4 +845,24 @@ tiers match, 504 plain entries ignored, none ambiguous.
 
 ---
 
+## 53. Instance ids, and markers bound to the log owner
+
+Two gaps live raiding found in 50/52 within the day. A fresh instance
+of the same zone and tier has an IDENTICAL entry line, so respawning
+the zone an hour later deduped into the first run; and Plane of Sky
+never segmented at all — its entry line carries no tier suffix. The
+creation line ("Player Izzin creating instance The Plane of Sky
+8546.") is the only place the instance NUMBER exists and the only
+signal for suffix-less zones: the owner's creation arms a pending
+instance, and the entry that follows within ten minutes cuts the
+segment labelled with the id. A creation never entered marks nothing;
+other players' creations are ignored.
+
+And the called raid markers are now owner-only — outgoing chat all
+starts with "You ", and only those lines cut this timeline. Anyone in
+guild chat typing the magic words previously divided every listener's
+parse.
+
+---
+
 *(subsequent changes appended as they land)*
