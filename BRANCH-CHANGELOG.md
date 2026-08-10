@@ -786,4 +786,63 @@ The map now collects every row type; measured after: 1,011 nodes.
 
 ---
 
+## 48. Hyphenated mob names
+
+Every name character class matched letters, backticks, apostrophes and
+spaces — no hyphen — so the first hyphenated mob anyone fought did not
+exist: no melee either direction, no misses, no casts, no death. An
+entire Cazic-Thule kill produced no meter, no viewer rows and no
+stream events, discovered live. Hyphen added to every name class;
+player names cannot contain hyphens, so the widened classes cost
+nothing on the player side. Regression test uses the verbatim lines
+from that night's log.
+
+## 49. Front-door navigation, and archives join the household
+
+The recovered-fight page was a dead end: no picker (replay streams
+carry no owner_key), no link home. Stream pages now offer a home
+button — without ever embedding the home key in a served page: /home
+plants its own URL in the visiting browser's localStorage, and pages
+offer the door only when it is there. A shared view link has never
+visited /home and shows nothing. Replay/recovery streams join the
+household by PATCHing owner_key/home_token after creation, which
+lists them on the front door and gives their pages the character
+picker.
+
+## 50. Instances divide the pull list automatically
+
+Raids here happen inside instances, and the game announces every
+instanced entry distinctly, so the boundary the raid-start macro marks
+by hand is usually cuttable with nobody typing anything. Entry is the
+signal — creation/invite lines fire before the player is inside, and
+one real log holds a failed creation attempt. One marker per DISTINCT
+instance (the parser tracks the current one; corpse runs and sell
+trips do not split a raid). Rides the existing RaidMark event with
+kind "instance": no new wire format. The viewer renders a gold ◈
+segment labelled with the zone, with the full segment feature set.
+
+## 51. Unknown event kinds degrade; rejections are told to the client
+
+CombatEvent gains a serde(other) fallback, so a peer one version
+behind no longer rejects a WHOLE batch over one unfamiliar kind — the
+unknown event is carried inert and everything else survives. This
+retires the deploy-ordering hazard for future event kinds. And when a
+batch IS rejected (corruption, or a peer too old to parse the
+envelope), the server now says so down the ingest socket instead of
+only into its own log; the shared pusher counts rejections in
+BATCH_REJECTS and warns, so a client can surface "the server is older
+than you" instead of climbing counters over vanishing data.
+
+## 52. Instance tiers
+
+The instance suffix is a difficulty ladder — 1 (Awakened),
+2 (Adaptive), 3 (Fused), 4 (Refined) — and 50's pattern anchored on
+the literal "(Refined)", the only tier in the log when it was written.
+A tier-2 raid then produced no segment. The pattern now matches the
+shape (zone, tier digit, any parenthesized tier name); swept against
+every zone entry in a real log: 89 instanced entries across all four
+tiers match, 504 plain entries ignored, none ambiguous.
+
+---
+
 *(subsequent changes appended as they land)*
