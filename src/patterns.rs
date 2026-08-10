@@ -527,6 +527,18 @@ pub fn instance_label(zone: &str) -> String {
     }
 }
 
+/// The log owner creating an instance — the only line that carries the
+/// instance NUMBER, and the only signal at all for zones whose entry line
+/// has no tier suffix (Plane of Sky enters as plain "You have entered The
+/// Plane of Sky."). Captures (creator, zone, number).
+pub static RE_INSTANCE_CREATE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^Player ([A-Za-z]+) creating instance (.+?) (\d+)\.\s*$").expect("valid regex")
+});
+
+/// Any zone entry at all, for confirming a pending instance creation.
+pub static RE_ZONE_ANY: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^You have entered (.+?)\.\s*$").expect("valid regex"));
+
 /// A chat message that marks a raid boundary: `(kind, label)`, or None.
 ///
 /// Accepts an optional description after a separator, so a night of raiding
