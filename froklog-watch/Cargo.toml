@@ -1,0 +1,48 @@
+[package]
+name = "froklog-watch"
+version = "0.1.0"
+edition = "2021"
+description = "Tray service that watches an EverQuest install for character logs and streams each one to froklog"
+
+[dependencies]
+# the parsing/tailing/pushing engine is the dev's — we only orchestrate it
+# "triggers" pulls in his trigger engine and sound packages, but not the
+# Windows tray/overlay that normally gates them
+froklog = { path = "../eqlogweb/reference/froklog", features = ["triggers"] }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+arc-swap = "1"
+crossbeam-channel = "0.5"
+
+# tray: pure-DBus StatusNotifierItem, which is what COSMIC hosts
+ksni = "0.2"
+# decodes the froklog favicons for the tray and window icon
+png = "0.17"
+# only for EventLoopBuilderExtX11 — eframe already builds this exact version
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+# native window
+eframe = { version = "0.29", default-features = false, features = ["glow", "wayland", "x11", "default_fonts"] }
+egui = "0.29"
+
+# DPS meter overlay: layer-shell surface (COSMIC/KDE/wlroots) + egui-on-wgpu.
+# The main window stays on eframe/glow; the overlay is its own thread with its
+# own Wayland connection, so the two never share an event loop.
+layershellev = "0.19"
+egui-wgpu = "0.29"
+pollster = "0.3"
+# monitor enumeration for the meter's output picker (layershellev can target
+# an output by name but not list them) — same version already in the tree
+wayland-client = "0.31"
+
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "5"
+open = "5"
+anyhow = "1"
+
+[dependencies.regex]
+# the builder's "Try it" compiles the draft pattern and fires it against the
+# pasted line without saving anything first (also used by tests)
+version = "1"

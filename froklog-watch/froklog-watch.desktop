@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=froklog watch
+GenericName=EverQuest log streamer
+Comment=Keep every character's EverQuest log flowing into froklog
+Exec=froklog-watch
+Icon=froklog-watch
+Terminal=false
+Categories=Game;Utility;
+Keywords=everquest;eq;log;froklog;
+# The dock matches a running window to this entry by WM_CLASS, which winit
+# sets from the binary name. Without this line the window gets a generic icon.
+StartupWMClass=froklog-watch
