@@ -865,4 +865,17 @@ parse.
 
 ---
 
+## 54. The Linux client moves in
+
+`froklog-watch/` — the Linux tray client (meter overlay, message
+overlay, voice queue, triggers, local-only mode) — now lives in-tree,
+imported with its full history. It builds against the repo's own
+library (`path = ".."`), because the two move in lockstep: the client
+needed `BATCH_REJECTS` and the `Unknown` variant the same day they
+were written, and a separate repo turns that coupling into permanent
+version skew. Deliberately outside any cargo workspace, so the root
+crate's CI and Windows cross-checks are untouched by this directory.
+
+---
+
 *(subsequent changes appended as they land)*
