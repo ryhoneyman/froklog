@@ -8,7 +8,7 @@ description = "Tray service that watches an EverQuest install for character logs
 # the parsing/tailing/pushing engine is the dev's — we only orchestrate it
 # "triggers" pulls in his trigger engine and sound packages, but not the
 # Windows tray/overlay that normally gates them
-froklog = { path = "../eqlogweb/reference/froklog", features = ["triggers"] }
+froklog = { path = "..", features = ["triggers"] }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 arc-swap = "1"
