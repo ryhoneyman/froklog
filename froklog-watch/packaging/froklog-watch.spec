@@ -18,6 +18,7 @@ BuildRequires:  rust
 BuildRequires:  gcc
 BuildRequires:  openssl-devel
 BuildRequires:  pkgconf-pkg-config
+BuildRequires:  dbus-devel
 
 # wgpu loads the Vulkan loader at runtime (dlopen), which rpm's automatic
 # dependency scan cannot see.
