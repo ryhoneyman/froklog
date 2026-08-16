@@ -16,10 +16,20 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Fails fast if the pushed tag doesn't match Cargo.toml's version — cheap
-  # guard against shipping a release under the wrong version number.
-  check-version:
-    name: Check tag matches Cargo.toml version
+  # Fails fast if the pushed tag doesn't match Cargo.toml's version (cheap
+  # guard against shipping under the wrong version number), then runs the
+  # same fast checks ci.yml's "Test (Linux)" job does (fmt + clippy,
+  # --all-targets, no tray feature — ~5 min there, not the slower
+  # tray-feature/Windows builds ci.yml also covers). release.yml and ci.yml
+  # are independently triggered (branch push vs tag push), so without this
+  # a tag could push a commit that never actually passed ci.yml's checks —
+  # this closes that gap directly in the release pipeline's own critical
+  # path, rather than trying to make release.yml wait on a separate ci.yml
+  # run (which would need cross-workflow triggering and SHA-to-tag
+  # resolution — real complexity for the same guarantee this gets more
+  # simply, at the cost of a few extra minutes here instead).
+  validate:
+    name: Validate (version + fmt/clippy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,11 +44,53 @@ jobs:
           fi
           echo "Tag matches Cargo.toml version $CARGO_VERSION"
 
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Fetch espeak-rs-sys
+        run: |
+          FETCH_DIR=$(mktemp -d)
+          mkdir -p "$FETCH_DIR/src"
+          printf '%s\n' \
+            '[package]' \
+            'name = "espeak-fetch-shim"' \
+            'version = "0.0.0"' \
+            'edition = "2021"' \
+            '[dependencies]' \
+            'espeak-rs-sys = "=0.2.0"' \
+            > "$FETCH_DIR/Cargo.toml"
+          echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+          (cd "$FETCH_DIR" && cargo fetch --quiet)
+          SRC=$(find "$HOME/.cargo/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-0.2.0
+          rm -rf "$FETCH_DIR"
+          mkdir -p vendor
+          cp -r "$SRC" vendor/espeak-rs-sys
+          chmod -R u+w vendor/espeak-rs-sys
+          patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
   # Native Linux build — same system deps as ci.yml's test-linux-tray job,
   # plus the two fetch-* recipes, then the actual packaging recipe.
   package-linux:
     name: Package (Linux tray)
-    needs: check-version
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +112,12 @@ jobs:
             libasound2-dev \
             cmake
 
+      # Same cache key prefix as ci.yml's test-linux-tray job — both build
+      # natively on Linux with the tray feature (one debug, one release),
+      # so they share the same dependency graph and most of the same
+      # compiled artifacts (registry downloads, proc-macro/build-script
+      # output). Different keys meant this job never benefited from
+      # test-linux-tray already having warmed the cache on the same push.
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -67,8 +125,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-release-linux-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-release-linux-
+          key: ${{ runner.os }}-cargo-tray-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-tray-
 
       - name: Fetch espeak-rs-sys
         run: just fetch-espeak-rs-sys
@@ -100,7 +158,7 @@ jobs:
   # serve, so the steps are inlined directly.
   package-windows:
     name: Package (Windows tray)
-    needs: check-version
+    needs: validate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -165,16 +223,21 @@ jobs:
           curl -sSL -o assets/voices/en_US-amy-low.onnx.json \
             "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/low/en_US-amy-low.onnx.json"
 
-      # Static CRT: this is a portable zip with no installer to guarantee
-      # the VC++ Redistributable is present, so link vcruntime/msvcp in
-      # rather than depend on them being on the target machine already.
-      # Scoped to this step only (env:), not a repo-wide .cargo/config.toml
-      # change — local cargo-xwin dev/CI builds are unaffected.
+      # NOT statically linking the CRT here (no +crt-static): confirmed by a
+      # real failure — espeak-ng's C code is compiled via cmake with the
+      # DEFAULT dynamic CRT (/MD), and its .obj files reference the dynamic
+      # CRT's __imp_-prefixed import-library thunks (realloc, isspace,
+      # fopen, strdup, etc.). Statically linking Rust's own CRT while those
+      # .obj files expect the dynamic one is a hard link-time mismatch
+      # (LNK2019: unresolved external symbol __imp_*, ~29 of them). Forcing
+      # espeak-ng's cmake build to also go static would need yet another
+      # vendor patch (CMAKE_MSVC_RUNTIME_LIBRARY) for marginal benefit —
+      # simpler and more standard to just depend on the VC++ Redistributable
+      # being present, which is already extremely common on real Windows
+      # installs (see the README note below).
       - name: Build (release)
         shell: bash
         run: cargo build --release --features tray --bin froklog
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
 
       - name: Stage + zip
         shell: bash
@@ -204,8 +267,9 @@ jobs:
             'except your own data alongside the exe (icons, sound packages,' \
             'downloaded voices) and settings, same as any portable Windows app.' \
             '' \
-            'If froklog.exe fails to start with a missing-DLL error, install the' \
-            'Microsoft Visual C++ Redistributable (x64):' \
+            'Requires the Microsoft Visual C++ Redistributable (x64), already' \
+            'installed on most Windows machines. If froklog.exe fails to start' \
+            'with a missing-DLL error, install it from:' \
             'https://aka.ms/vs/17/release/vc_redist.x64.exe' \
             > "$STAGE/README.txt"
           mkdir -p dist

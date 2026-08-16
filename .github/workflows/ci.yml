@@ -243,10 +243,26 @@ jobs:
           sudo ./llvm.sh 19
           echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
 
-      - name: Install cmake and cargo-xwin
-        run: |
-          sudo apt-get install -y cmake
-          cargo install cargo-xwin
+      - name: Install cmake
+        run: sudo apt-get install -y cmake
+
+      # cargo-xwin isn't part of this repo's Cargo.lock (it's a globally
+      # installed tool, not a dependency), so it needs its own cache — the
+      # existing "Cache cargo" step below only covers ~/.cargo/registry and
+      # target/, not ~/.cargo/bin. Without this, `cargo install cargo-xwin`
+      # recompiled the whole tool from source on every single run, real
+      # wasted time on every push. Bump the "-v1" suffix if cargo-xwin ever
+      # needs a forced refresh (a security fix, a bug this project hits).
+      - name: Cache cargo-xwin binary
+        id: cache-cargo-xwin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-xwin
+          key: ${{ runner.os }}-cargo-xwin-bin-v1
+
+      - name: Install cargo-xwin
+        if: steps.cache-cargo-xwin.outputs.cache-hit != 'true'
+        run: cargo install cargo-xwin
 
       # vendor/espeak-rs-sys is gitignored (see justfile's fetch-espeak-rs-sys
       # and Cargo.toml's [patch.crates-io]) — fetch + patch it here so the
