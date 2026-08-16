@@ -142,21 +142,41 @@ fetch-default-voice:
         "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/low/en_US-amy-low.onnx.json"
     echo "Bundled voice fetched into assets/voices/"
 
-# Fetches espeak-rs-sys 0.2.0 from crates.io into gitignored vendor/ and
-# applies froklog's one-line-per-file Windows cross-compile fix on top (see
-# vendor-patches/ and Cargo.toml's [patch.crates-io]) — cargo-xwin's clang-cl
-# doesn't transitively pull in <io.h>/advapi32 the way real MSVC's cl.exe
-# does, so espeak-ng's vendored CLI tool (built as a data-compiler step even
-# though froklog never runs it) fails to compile/link without this.
+# Fetches espeak-rs-sys 0.2.0 into gitignored vendor/ and applies froklog's
+# one-line-per-file Windows cross-compile fix on top (see vendor-patches/ and
+# Cargo.toml's [patch.crates-io]) — cargo-xwin's clang-cl doesn't
+# transitively pull in <io.h>/advapi32 the way real MSVC's cl.exe does, so
+# espeak-ng's vendored CLI tool (built as a data-compiler step even though
+# froklog never runs it) fails to compile/link without this.
+#
+# Fetches via a throwaway shim crate + `cargo fetch`, NOT a raw `curl` to
+# crates.io's API download endpoint — crates.io's abuse-detection blocks that
+# pattern (confirmed: it returned a 403 here AND on GitHub Actions' runners,
+# both presumably flagged as automated/bulk traffic), while `cargo fetch`
+# itself, going through the real registry protocol, is unaffected.
 espeak_rs_sys_version := "0.2.0"
 fetch-espeak-rs-sys:
     #!/usr/bin/env bash
-    set -e
+    set -euo pipefail
+    FETCH_DIR=$(mktemp -d)
+    mkdir -p "$FETCH_DIR/src"
+    printf '%s\n' \
+        '[package]' \
+        'name = "espeak-fetch-shim"' \
+        'version = "0.0.0"' \
+        'edition = "2021"' \
+        '[dependencies]' \
+        'espeak-rs-sys = "={{espeak_rs_sys_version}}"' \
+        > "$FETCH_DIR/Cargo.toml"
+    echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+    (cd "$FETCH_DIR" && cargo fetch --quiet)
+    CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
+    SRC=$(find "$CARGO_HOME_DIR/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-{{espeak_rs_sys_version}}
+    rm -rf "$FETCH_DIR"
     rm -rf vendor/espeak-rs-sys
     mkdir -p vendor
-    curl -sSL "https://crates.io/api/v1/crates/espeak-rs-sys/{{espeak_rs_sys_version}}/download" \
-        | tar -xz -C vendor
-    mv "vendor/espeak-rs-sys-{{espeak_rs_sys_version}}" vendor/espeak-rs-sys
+    cp -r "$SRC" vendor/espeak-rs-sys
+    chmod -R u+w vendor/espeak-rs-sys
     patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
     echo "espeak-rs-sys {{espeak_rs_sys_version}} fetched and patched into vendor/espeak-rs-sys/"
 

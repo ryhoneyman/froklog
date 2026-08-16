@@ -120,15 +120,33 @@ jobs:
 
       # Same fix as vendor-patches/espeak-rs-sys-windows-cross-compile.patch
       # everywhere else, applied via `git apply` instead of `patch -p1` —
-      # GNU patch.exe isn't guaranteed on this runner the way git is.
+      # GNU patch.exe isn't guaranteed on this runner the way git is. Fetches
+      # via a throwaway shim crate + `cargo fetch`, NOT a raw `curl` to
+      # crates.io's API download endpoint — crates.io's abuse-detection
+      # blocks that pattern (confirmed on GitHub-hosted runners), while
+      # `cargo fetch` itself, going through the real registry protocol, is
+      # unaffected.
       - name: Fetch espeak-rs-sys
         shell: bash
         run: |
+          FETCH_DIR=$(mktemp -d)
+          mkdir -p "$FETCH_DIR/src"
+          printf '%s\n' \
+            '[package]' \
+            'name = "espeak-fetch-shim"' \
+            'version = "0.0.0"' \
+            'edition = "2021"' \
+            '[dependencies]' \
+            'espeak-rs-sys = "=0.2.0"' \
+            > "$FETCH_DIR/Cargo.toml"
+          echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+          (cd "$FETCH_DIR" && cargo fetch --quiet)
+          CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
+          SRC=$(find "$CARGO_HOME_DIR/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-0.2.0
+          rm -rf "$FETCH_DIR"
           mkdir -p vendor
-          curl -sSL "https://crates.io/api/v1/crates/espeak-rs-sys/0.2.0/download" -o espeak-rs-sys.crate
-          tar -xzf espeak-rs-sys.crate -C vendor
-          rm espeak-rs-sys.crate
-          mv vendor/espeak-rs-sys-0.2.0 vendor/espeak-rs-sys
+          cp -r "$SRC" vendor/espeak-rs-sys
+          chmod -R u+w vendor/espeak-rs-sys
           git -C vendor/espeak-rs-sys init -q
           git -C vendor/espeak-rs-sys apply --whitespace=nowarn ../../vendor-patches/espeak-rs-sys-windows-cross-compile.patch
           rm -rf vendor/espeak-rs-sys/.git

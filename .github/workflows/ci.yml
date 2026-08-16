@@ -32,6 +32,33 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      # Cargo.toml's [patch.crates-io] applies workspace-wide, so ANY cargo
+      # invocation here — even --all-targets with no tray feature, which
+      # never actually uses espeak-rs-sys's code — needs vendor/espeak-rs-sys
+      # present just to resolve the patch table. Gitignored (see justfile's
+      # fetch-espeak-rs-sys); mirrors that recipe directly rather than
+      # installing `just` just for this.
+      - name: Fetch espeak-rs-sys
+        run: |
+          FETCH_DIR=$(mktemp -d)
+          mkdir -p "$FETCH_DIR/src"
+          printf '%s\n' \
+            '[package]' \
+            'name = "espeak-fetch-shim"' \
+            'version = "0.0.0"' \
+            'edition = "2021"' \
+            '[dependencies]' \
+            'espeak-rs-sys = "=0.2.0"' \
+            > "$FETCH_DIR/Cargo.toml"
+          echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+          (cd "$FETCH_DIR" && cargo fetch --quiet)
+          SRC=$(find "$HOME/.cargo/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-0.2.0
+          rm -rf "$FETCH_DIR"
+          mkdir -p vendor
+          cp -r "$SRC" vendor/espeak-rs-sys
+          chmod -R u+w vendor/espeak-rs-sys
+          patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+
       - name: Check formatting
         run: cargo fmt --check
 
@@ -77,12 +104,30 @@ jobs:
       # and Cargo.toml's [patch.crates-io]) — fetch + patch it here so the
       # `tray` feature (which pulls in piper-rs -> espeak-rs-sys) has a
       # source to compile against. Mirrors the justfile recipe directly
-      # rather than installing `just` just for this.
+      # rather than installing `just` just for this. Fetches via a throwaway
+      # shim crate + `cargo fetch`, NOT a raw `curl` to crates.io's API
+      # download endpoint — crates.io's abuse-detection blocks that pattern
+      # (confirmed on these very runners), while `cargo fetch` itself, going
+      # through the real registry protocol, is unaffected.
       - name: Fetch espeak-rs-sys
         run: |
+          FETCH_DIR=$(mktemp -d)
+          mkdir -p "$FETCH_DIR/src"
+          printf '%s\n' \
+            '[package]' \
+            'name = "espeak-fetch-shim"' \
+            'version = "0.0.0"' \
+            'edition = "2021"' \
+            '[dependencies]' \
+            'espeak-rs-sys = "=0.2.0"' \
+            > "$FETCH_DIR/Cargo.toml"
+          echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+          (cd "$FETCH_DIR" && cargo fetch --quiet)
+          SRC=$(find "$HOME/.cargo/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-0.2.0
+          rm -rf "$FETCH_DIR"
           mkdir -p vendor
-          curl -sSL "https://crates.io/api/v1/crates/espeak-rs-sys/0.2.0/download" | tar -xz -C vendor
-          mv vendor/espeak-rs-sys-0.2.0 vendor/espeak-rs-sys
+          cp -r "$SRC" vendor/espeak-rs-sys
+          chmod -R u+w vendor/espeak-rs-sys
           patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
 
       - name: Cache cargo
@@ -133,10 +178,43 @@ jobs:
           key: ${{ runner.os }}-cargo-win-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-win-
 
+      # Same reason as the "test" job above: Cargo.toml's [patch.crates-io]
+      # applies workspace-wide, so these headless-only binaries (which never
+      # touch espeak-rs-sys's code) still need vendor/espeak-rs-sys present
+      # just to resolve the patch table.
+      - name: Fetch espeak-rs-sys
+        run: |
+          FETCH_DIR=$(mktemp -d)
+          mkdir -p "$FETCH_DIR/src"
+          printf '%s\n' \
+            '[package]' \
+            'name = "espeak-fetch-shim"' \
+            'version = "0.0.0"' \
+            'edition = "2021"' \
+            '[dependencies]' \
+            'espeak-rs-sys = "=0.2.0"' \
+            > "$FETCH_DIR/Cargo.toml"
+          echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+          (cd "$FETCH_DIR" && cargo fetch --quiet)
+          SRC=$(find "$HOME/.cargo/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-0.2.0
+          rm -rf "$FETCH_DIR"
+          mkdir -p vendor
+          cp -r "$SRC" vendor/espeak-rs-sys
+          chmod -R u+w vendor/espeak-rs-sys
+          patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+
+      # --bin must come before the `--` separator — cargo-level flags like
+      # --bin select which targets to build, while everything after `--` is
+      # passed straight through as extra compiler arguments for every unit
+      # compiled (including the build script). Misplacing them there doesn't
+      # break `cargo build` (which never routes args through CLIPPY_ARGS),
+      # but `cargo clippy` does, and clippy-driver rejects the resulting
+      # bogus "--bin" token outright ("error: Unrecognized option: 'bin'").
       - name: Clippy headless binaries
         run: |
-          cargo clippy --target x86_64-pc-windows-gnu -- -D warnings \
-            --bin froklog-server --bin froklog-replay --bin froklog-debug --bin froklog-migrate --bin froklog-loggen
+          cargo clippy --target x86_64-pc-windows-gnu \
+            --bin froklog-server --bin froklog-replay --bin froklog-debug --bin froklog-migrate --bin froklog-loggen \
+            -- -D warnings
 
   # The tray client specifically, via cargo-xwin/clang-cl instead of mingw
   # — see justfile's setup-windows-msvc-target doc comment for why, and
@@ -173,12 +251,31 @@ jobs:
       # vendor/espeak-rs-sys is gitignored (see justfile's fetch-espeak-rs-sys
       # and Cargo.toml's [patch.crates-io]) — fetch + patch it here so the
       # msvc build below has something at that path. Mirrors the justfile
-      # recipe directly rather than installing `just` just for this.
+      # recipe directly rather than installing `just` just for this. Fetches
+      # via a throwaway shim crate + `cargo fetch`, NOT a raw `curl` to
+      # crates.io's API download endpoint — crates.io's abuse-detection
+      # blocks that pattern (confirmed on these very runners), while `cargo
+      # fetch` itself, going through the real registry protocol, is
+      # unaffected.
       - name: Fetch espeak-rs-sys
         run: |
+          FETCH_DIR=$(mktemp -d)
+          mkdir -p "$FETCH_DIR/src"
+          printf '%s\n' \
+            '[package]' \
+            'name = "espeak-fetch-shim"' \
+            'version = "0.0.0"' \
+            'edition = "2021"' \
+            '[dependencies]' \
+            'espeak-rs-sys = "=0.2.0"' \
+            > "$FETCH_DIR/Cargo.toml"
+          echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+          (cd "$FETCH_DIR" && cargo fetch --quiet)
+          SRC=$(find "$HOME/.cargo/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-0.2.0
+          rm -rf "$FETCH_DIR"
           mkdir -p vendor
-          curl -sSL "https://crates.io/api/v1/crates/espeak-rs-sys/0.2.0/download" | tar -xz -C vendor
-          mv vendor/espeak-rs-sys-0.2.0 vendor/espeak-rs-sys
+          cp -r "$SRC" vendor/espeak-rs-sys
+          chmod -R u+w vendor/espeak-rs-sys
           patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
 
       - name: Cache cargo
