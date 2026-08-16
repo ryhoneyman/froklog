@@ -1,0 +1,57 @@
+import { Theme } from "../theme.slint";
+import { Button } from "../common/buttons.slint";
+import { TextField } from "../common/text-field.slint";
+import { LabeledField } from "../common/labeled-field.slint";
+
+// Add/Edit body for a sound package's label-name -> file mapping, embedded
+// in the Settings drawer (see settings_shell.slint's drawer markup) instead
+// of a standalone window — was SoundLabelEditWindow
+// (ui/dialogs/sound_label_edit_dialog.slint) before the drawer migration.
+export component SoundLabelPanel inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in-out property <string> label-name;
+    in-out property <string> file-path;
+
+    callback browse();
+    callback test();
+    callback ok();
+    callback cancel();
+
+    LabeledField {
+        label: "Label name";
+        TextField { text <=> root.label-name; }
+    }
+
+    LabeledField {
+        label: "Sound file";
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            TextField { text <=> root.file-path; read-only: true; }
+            Button { text: "Browse\u{2026}"; primary: false; clicked => { root.browse(); } }
+        }
+    }
+
+    Button {
+        text: "\u{25B6} Test";
+        primary: false;
+        enabled: root.file-path != "";
+        clicked => { root.test(); }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        alignment: end;
+        Button { text: "Cancel"; primary: false; clicked => { root.cancel(); } }
+        Button {
+            text: "OK";
+            primary: true;
+            enabled: root.label-name != "" && root.file-path != "";
+            clicked => { root.ok(); }
+        }
+    }
+}

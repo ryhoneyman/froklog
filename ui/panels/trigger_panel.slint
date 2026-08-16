@@ -1,0 +1,280 @@
+import { Theme } from "../theme.slint";
+import { Button } from "../common/buttons.slint";
+import { ToggleSwitch } from "../common/toggle-switch.slint";
+import { TextField } from "../common/text-field.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { ScrollArea } from "../common/scroll-area.slint";
+
+// One condition/action row: `badge` is the pre-formatted bracketed tag
+// (e.g. "match/regex", "play_sound") stripped of its own brackets, `text`
+// is everything after it, `tint` colors the badge so condition/action
+// kinds are visually distinguishable at a glance. Built in Rust by
+// condition_row()/action_row() in settings_window.rs — same "structured
+// data down, plain strings only where there's truly nothing to
+// distinguish" split as IconOption in icon-combo-box.slint; a flat
+// `[string]` can't drive a differently-colored badge without string
+// splitting, which Slint's expression language doesn't support.
+export struct TriggerRow {
+    badge: string,
+    text: string,
+    tint: color,
+}
+
+// Shared body for the condition list and the action list: a single
+// bordered card containing the row list, a divider, then the icon
+// toolbar — replaces the old "ListBox, then a separate button row below
+// it" layout with one unified frame per the reference mock.
+component TriggerRowGroup inherits Rectangle {
+    in property <[TriggerRow]> rows;
+    in-out property <int> selected-index: -1;
+    callback add();
+    callback edit();
+    callback delete();
+    callback move-up();
+    callback move-down();
+
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.bg-elevated;
+    clip: true;
+
+    VerticalLayout {
+        // Fixed to 3 rows (28px each) so the drawer doesn't need to grow —
+        // and doesn't need its own scrollbar-within-a-scrollbar — just to
+        // show a typical trigger's condition/action list.
+        ScrollArea {
+            height: 84px;
+            content-height: rows-content.preferred-height;
+
+            rows-content := VerticalLayout {
+                for row[i] in root.rows: Rectangle {
+                    height: 28px;
+                    background: root.selected-index == i
+                        ? Theme.accent
+                        : (row-touch.has-hover ? Theme.bg-hover : transparent);
+
+                    animate background { duration: 100ms; }
+
+                    HorizontalLayout {
+                        padding-left: Theme.space-sm;
+                        padding-right: Theme.space-sm;
+                        spacing: Theme.space-xs;
+
+                        Text {
+                            text: "[" + row.badge + "]";
+                            color: root.selected-index == i ? Theme.on-accent : row.tint;
+                            font-size: Theme.font-size-sm;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            horizontal-stretch: 0;
+                        }
+                        Text {
+                            text: row.text;
+                            color: root.selected-index == i ? Theme.on-accent : Theme.text-primary;
+                            font-size: Theme.font-size-md;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+
+                    row-touch := TouchArea {
+                        clicked => { root.selected-index = i; }
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border; }
+
+        HorizontalLayout {
+            padding: Theme.space-xs;
+            spacing: Theme.space-xs;
+
+            Button {
+                width: 34px;
+                h-padding: Theme.space-xs;
+                font-size: Theme.font-size-lg;
+                text: "+";
+                primary: false;
+                clicked => { root.add(); }
+            }
+            // Custom rect instead of Button — that component only lays out a
+            // text label, and a literal "E" glyph reads as unlabeled
+            // initials rather than "edit". Same visual chrome as Button
+            // (size, border, hover wash) with a colorized pencil icon
+            // (PositionPill's lock-icon pattern) in place of text.
+            Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: Theme.radius-sm;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: edit-touch.has-hover ? Theme.bg-hover : Theme.bg-elevated;
+                opacity: root.selected-index >= 0 ? 1.0 : 0.5;
+
+                animate background { duration: 100ms; }
+
+                Image {
+                    source: @image-url("../common/icons/pencil.svg");
+                    colorize: Theme.text-primary;
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                edit-touch := TouchArea {
+                    enabled: root.selected-index >= 0;
+                    clicked => { root.edit(); }
+                }
+            }
+            Button {
+                width: 34px;
+                h-padding: Theme.space-xs;
+                font-size: Theme.font-size-lg;
+                text: "\u{00D7}";
+                primary: false;
+                enabled: root.selected-index >= 0;
+                clicked => { root.delete(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                width: 34px;
+                h-padding: Theme.space-xs;
+                text: "\u{25B2}";
+                primary: false;
+                enabled: root.selected-index > 0;
+                clicked => { root.move-up(); }
+            }
+            Button {
+                width: 34px;
+                h-padding: Theme.space-xs;
+                text: "\u{25BC}";
+                primary: false;
+                enabled: root.selected-index >= 0 && root.selected-index < root.rows.length - 1;
+                clicked => { root.move-down(); }
+            }
+        }
+    }
+}
+
+// Edit body for a trigger (name/enabled/condition-logic + condition/action
+// lists), embedded in the Settings drawer — was TriggerEditWindow
+// (ui/dialogs/trigger_edit_dialog.slint) before the drawer migration. Its
+// Condition/Action Add/Edit buttons push ConditionPanel/ActionPanel on top
+// of this panel in the same drawer, rather than opening separate windows.
+export component TriggerPanel inherits VerticalLayout {
+    // Left/right/bottom keep the drawer's usual generous inset; top is
+    // trimmed to near-nothing since the drawer's own 48px breadcrumb bar
+    // already separates this panel from the window edge — stacking a full
+    // space-lg of padding on top of that just left a dead gap above Name.
+    padding-left: Theme.space-lg;
+    padding-right: Theme.space-lg;
+    padding-top: Theme.space-xs;
+    padding-bottom: Theme.space-md;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in-out property <string> trigger-name;
+    in-out property <bool> trigger-enabled: true;
+    in-out property <string> condition-logic: "ALL (AND)";
+
+    in property <[TriggerRow]> condition-rows;
+    in-out property <int> selected-condition-index: -1;
+    callback add-condition();
+    callback edit-condition();
+    callback delete-condition();
+    callback move-condition-up();
+    callback move-condition-down();
+
+    in property <[TriggerRow]> action-rows;
+    in-out property <int> selected-action-index: -1;
+    callback add-action();
+    callback edit-action();
+    callback delete-action();
+    callback move-action-up();
+    callback move-action-down();
+
+    callback ok();
+    callback cancel();
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        Text {
+            text: "Trigger Name";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+            vertical-alignment: center;
+        }
+        TextField {
+            horizontal-stretch: 1;
+            text <=> root.trigger-name;
+        }
+        ToggleSwitch { checked <=> root.trigger-enabled; }
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-xs;
+        Text {
+            horizontal-stretch: 0;
+            text: "IF";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-md;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+        ComboBoxField {
+            horizontal-stretch: 0;
+            width: 108px;
+            options: ["ALL (AND)", "ANY (OR)"];
+            value <=> root.condition-logic;
+        }
+        Text {
+            horizontal-stretch: 0;
+            text: "of these conditions match:";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-md;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    TriggerRowGroup {
+        rows: root.condition-rows;
+        selected-index <=> root.selected-condition-index;
+        add => { root.add-condition(); }
+        edit => { root.edit-condition(); }
+        delete => { root.delete-condition(); }
+        move-up => { root.move-condition-up(); }
+        move-down => { root.move-condition-down(); }
+    }
+
+    Text {
+        text: "THEN execute all of these actions:";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-md;
+        font-weight: 700;
+    }
+
+    TriggerRowGroup {
+        rows: root.action-rows;
+        selected-index <=> root.selected-action-index;
+        add => { root.add-action(); }
+        edit => { root.edit-action(); }
+        delete => { root.delete-action(); }
+        move-up => { root.move-action-up(); }
+        move-down => { root.move-action-down(); }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        alignment: end;
+        Button { text: "Cancel"; primary: false; clicked => { root.cancel(); } }
+        Button { text: "OK"; primary: true; clicked => { root.ok(); } }
+    }
+}

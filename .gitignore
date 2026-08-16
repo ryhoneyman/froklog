@@ -17,3 +17,23 @@
 
 # EQ spell icon assets
 /assets/spellicons/*
+
+# Local test fixtures dropped in during manual testing — spells_us.txt is a
+# raw EverQuest data dump (copyrighted, 38MB) read from the user's EQ install
+# dir at runtime (see spell_icons.rs), not a bundled repo asset.
+/assets/spells/*
+/assets/sounds/test.mp3
+
+# Fetched at build time by justfile's fetch-onnxruntime/fetch-default-voice
+# recipes — bundled onnxruntime shared libs and the default TTS voice
+# (see src/tts.rs, src/assets.rs's runtime_dir()/bundled_voices_dir()).
+/assets/runtime/*
+/assets/voices/*
+
+# Fetched + patched at build time by justfile's fetch-espeak-rs-sys recipe
+# (crates.io source + vendor-patches/espeak-rs-sys-windows-cross-compile.patch,
+# see Cargo.toml's [patch.crates-io]). The patch file itself IS tracked.
+/vendor/*
+
+# Staged release archives — just package-tray-linux, .github/workflows/release.yml
+/dist/

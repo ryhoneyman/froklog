@@ -1,0 +1,24 @@
+// Backdrop behind SettingsWindow's embedded add/edit "drawer" (see
+// settings_shell.slint's drawer markup and settings_window.rs's
+// `PanelFrame` stack) — placed as the last (topmost) child before the
+// drawer itself, toggled by Rust via `drawer-open`. A bare TouchArea still
+// captures and swallows clicks even with no handlers (ordinary Slint
+// z-order hit-testing), so nothing beneath it in the tab content is
+// reachable while the drawer is open.
+//
+// Originally built as a cross-platform stand-in for Windows'
+// owner-window + EnableWindow(FALSE) modal pattern, back when add/edit
+// flows (trigger, condition, action, color picker, sound label, log
+// profile) were six separate top-level dialog windows rather than panels
+// in one embedded drawer — the multiplatform conversion had dropped the
+// raw `windows` crate dependency entirely (this app now builds/runs on
+// Linux too), so there was no OS-level "disable the owner window" call
+// available for those extra windows. That six-window design is gone now
+// (folded into the single drawer), but this component's click-blocking
+// role lives on for the drawer's own backdrop.
+export component ModalScrim inherits Rectangle {
+    in property <bool> active: false;
+    visible: root.active;
+    background: #000000a0;
+    TouchArea { }
+}

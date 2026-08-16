@@ -1,0 +1,122 @@
+import { Theme } from "theme.slint";
+import { StrokedText } from "common/stroked-text.slint";
+import { OverlayShell } from "common/overlay-shell.slint";
+
+// Phase 3.2 — real history overlay window, replacing overlay_history.rs's
+// WS_EX_LAYERED popup. A flat, non-interactive row list — unlike the
+// alert overlay, this one genuinely does have a background panel in the
+// source (`PANEL_BG`, a dark translucent rounded rect), so it's kept
+// here. Newest entry renders at the top (the source pushes new entries
+// onto the end of a Vec but iterates `.rev()` when drawing); rows fade in
+// over `FADE_IN_SECS` (0.25s) after arrival via `row-alpha`, recomputed
+// by Rust each tick from `HistoryRow.arrived` — same "Rust drives
+// per-frame numbers" split as the alert overlay.
+//
+// Long messages truncate with an ellipsis (`StrokedText`'s `truncate`
+// property, matching the source's `DT_END_ELLIPSIS`) rather than widening
+// past the window.
+export struct HistoryRow {
+    icon-source: image,
+    has-icon: bool,
+    icon-color: color,
+    message: string,
+    message-color: color,
+    border-color: color,
+    time-label: string,
+    row-alpha: float,
+}
+
+export component HistoryOverlayWindow inherits OverlayShell {
+    width: 320px;
+    // Content-driven, not a fixed guess: both entry count
+    // (overlay_history_max_entries) and font size
+    // (overlay_history_font_size) are user-configurable, so the window
+    // must track the panel's actual computed height exactly (matching the
+    // source's own `h = ROW_H * entries.len() + PAD_Y * 2`, recomputed
+    // fresh every frame) rather than clip or leave dead space.
+    height: panel.preferred-height;
+
+    in property <[HistoryRow]> rows;
+    in property <length> row-font-size: 12px;
+
+    // Drag-to-move — see overlay_alert.slint's comment on the same
+    // property/callback for why this exists and how it works. Placed as
+    // `panel`'s first child (i.e. underneath everything else in z-order) so
+    // it only captures drags on empty space, not that this window has any
+    // interactive rows to conflict with today anyway.
+    // See common/overlay-shell.slint's doc comment for why this trio can't
+    // just be inherited from `OverlayShell` like the window-level flags.
+    in property <bool> locked: false;
+    // See overlay_alert.slint's comment on the same property for why
+    // Show All Windows overrides Locked here.
+    in property <bool> force-show: false;
+    callback drag-requested();
+
+    panel := Rectangle {
+        background: #0c0c11c8;
+        border-radius: 6px;
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: !root.locked || root.force-show;
+            changed pressed => {
+                if self.pressed {
+                    root.drag-requested();
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding: 8px;
+
+            for row[i] in root.rows: Rectangle {
+                // Content-driven per row too, so a larger configured font
+                // doesn't get clipped by a stale fixed row height.
+                height: content-row.preferred-height;
+                background: mod(i, 2) == 1 ? #ffffff08 : transparent;
+                opacity: row.row-alpha;
+
+                content-row := HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+                    spacing: 8px;
+
+                    if row.has-icon: Image {
+                        source: row.icon-source;
+                        width: root.row-font-size;
+                        height: root.row-font-size;
+                        image-fit: contain;
+                    }
+                    if !row.has-icon: Rectangle {
+                        width: root.row-font-size;
+                        height: root.row-font-size;
+                        border-radius: 3px;
+                        background: row.icon-color;
+                    }
+
+                    StrokedText {
+                        text: row.message;
+                        text-color: row.message-color;
+                        stroke-color: row.border-color;
+                        stroke-width: 1px;
+                        font-size: root.row-font-size;
+                        horizontal-stretch: 1;
+                        truncate: true;
+                    }
+
+                    Text {
+                        text: row.time-label;
+                        color: #969aa0;
+                        font-size: root.row-font-size;
+                        width: 46px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

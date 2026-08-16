@@ -480,21 +480,35 @@ pub fn normalize_miss(word: &str) -> &'static str {
     }
 }
 
-/// Any chat line, capturing just what was said.
+/// Any chat line, capturing the speaker and just what was said.
 ///
-/// Covers both directions, because a macro you type and a raid leader's call
-/// land in the log completely differently:
+/// Deliberately verb-agnostic — matches `<speaker> <lowercase verb phrase>, '<msg>'`
+/// without enumerating say/tell/shout/auction/etc., so it isn't a checklist that
+/// silently misses a channel (an earlier enumerated version omitted "shouts,"
+/// entirely, letting a shouted line reach the combat regexes below). The channel
+/// name after the verb is matched loosely (`[^,]*`) on purpose: EQ Legends words
+/// tell-to-channel differently from classic EQ — it says "You say to your guild"
+/// where classic says "You tell your guild" — and custom channels carry arbitrary
+/// names ("Zyro tells General:1, '...'").
+///
 ///   You say to your guild, 'raid start'      <- your own /gu
 ///   You tell your party, 'raid start'        <- your own /g
+///   You shout, 'incoming!'                   <- your own /shout
 ///   Kermitzalot tells the raid, 'raid start' <- someone else's
 ///   Zyro tells General:1, 'raid start'       <- a custom channel
 ///
-/// The channel is matched loosely (`[^,]*`) on purpose: EQ Legends words
-/// these differently from classic EQ — it says "You say to your guild" where
-/// classic says "You tell your guild" — and custom channels carry arbitrary
-/// names. What matters is the message, not which pipe carried it.
+/// `speaker` is the literal text "You" only for the log owner's own speech —
+/// EQ's client never emits that literal prefix for anyone else's chat, and
+/// another player's quoted text always lands *after* their own name+verb
+/// preamble, never at line-start, so callers that gate on `speaker == "You"`
+/// (e.g. raid marks) can't be spoofed by someone else's message content.
+///
+/// `verb` is the structural "says"/"tells the guild"/"shouts"/etc. segment,
+/// separate from `msg` — trigger channel classification keys on `verb`, never
+/// on `msg`, so quoted message text can't be crafted to misclassify which
+/// channel carried it (see `triggers::engine::chat_channel_matches`).
 pub static RE_CHAT: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?:You (?:say|tell|told)|[A-Za-z`'-]+ (?:says?|tells?|told))[^,]*, '(.*)'$")
+    Regex::new(r"^(?P<speaker>[A-Za-z`'-]+) (?P<verb>[a-z][^,]*), '(?P<msg>.*)'$")
         .expect("valid regex")
 });
 
@@ -1347,20 +1361,34 @@ mod raid_mark_tests {
     #[test]
     fn re_chat_matches_both_directions() {
         let cases = [
-            ("You say to your guild, 'raid start'", "raid start"),
-            ("You say, 'raid start'", "raid start"),
-            ("You tell your party, 'raid start'", "raid start"),
-            ("You say to your raid, 'raid end'", "raid end"),
-            ("Kermitzalot tells the raid, 'raid start'", "raid start"),
-            ("Zyro tells General:1, 'raid start'", "raid start"),
-            ("Gnominated tells the guild, 'hello there'", "hello there"),
-            ("Raimier says, 'hi'", "hi"),
+            ("You say to your guild, 'raid start'", "You", "raid start"),
+            ("You say, 'raid start'", "You", "raid start"),
+            ("You tell your party, 'raid start'", "You", "raid start"),
+            ("You say to your raid, 'raid end'", "You", "raid end"),
+            ("You shout, 'incoming!'", "You", "incoming!"),
+            (
+                "Kermitzalot tells the raid, 'raid start'",
+                "Kermitzalot",
+                "raid start",
+            ),
+            ("Zyro tells General:1, 'raid start'", "Zyro", "raid start"),
+            (
+                "Gnominated tells the guild, 'hello there'",
+                "Gnominated",
+                "hello there",
+            ),
+            ("Raimier says, 'hi'", "Raimier", "hi"),
+            // "shouts," was missing from the old enumerated verb list — a
+            // verb-agnostic regex must not repeat that gap.
+            ("Raimier shouts, 'hi'", "Raimier", "hi"),
+            ("Raimier says out of character, 'hi'", "Raimier", "hi"),
         ];
-        for (line, want) in cases {
+        for (line, want_speaker, want_msg) in cases {
             let caps = RE_CHAT
                 .captures(line)
                 .unwrap_or_else(|| panic!("no match: {line}"));
-            assert_eq!(&caps[1], want, "{line}");
+            assert_eq!(&caps["speaker"], want_speaker, "{line}");
+            assert_eq!(&caps["msg"], want_msg, "{line}");
         }
     }
 
@@ -1372,6 +1400,25 @@ mod raid_mark_tests {
             "[45 CLR/SHD/BER] Zyro (Human) <Ancient Artifacts>",
         ] {
             assert!(RE_CHAT.captures(line).is_none(), "should not match: {line}");
+        }
+    }
+
+    /// A shouted (or otherwise spoken) line that quotes combat-shaped text
+    /// must still be recognized as chat, so parser.rs's chat guard swallows
+    /// it before the combat regexes get a chance to misread it as a real
+    /// kill/hit. This is the injection this whole pattern exists to block.
+    #[test]
+    fn re_chat_catches_spoofed_combat_text_in_any_channel() {
+        for line in [
+            "Rysk shouts, 'Rysk has slain a goblin!'",
+            "Rysk says, 'Rysk has slain a goblin!'",
+            "Rysk says out of character, 'Rysk has slain a goblin!'",
+            "Rysk tells you, 'Rysk hits you for 500 points of damage.'",
+        ] {
+            let caps = RE_CHAT
+                .captures(line)
+                .unwrap_or_else(|| panic!("no match: {line}"));
+            assert_eq!(&caps["speaker"], "Rysk", "{line}");
         }
     }
 

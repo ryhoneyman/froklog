@@ -1,0 +1,168 @@
+import { StrokedText } from "common/stroked-text.slint";
+import { OverlayShell } from "common/overlay-shell.slint";
+
+// Combined alert+history overlay window — the "Merged" `alert_style`
+// alternative to running the alert overlay (overlay_alert.slint) and
+// history overlay (overlay_history.slint) as two separate windows.
+// Structurally a twin of overlay_history.slint (same translucent rounded
+// panel, same content-driven height, same row list) with one addition: a
+// top "incoming" slot that renders the currently active alert large,
+// driven by the same FlyIn/Hold/ShrinkOut phase math as the standalone
+// alert overlay (see overlay.rs's `resolve_frame`, reused as-is by
+// overlay_merged.rs). As that alert's `ShrinkOut` phase finishes it lands
+// in `AppHandle.overlay_history` exactly like the standalone alert does
+// (see `alert_engine.rs`), and — because this window renders both the
+// incoming slot and the row list itself — the entry then simply appears at
+// the top of the row list below, reading as the message having slid down
+// into history rather than as two disconnected windows.
+export struct MergedHistoryRow {
+    icon-source: image,
+    has-icon: bool,
+    icon-color: color,
+    message: string,
+    message-color: color,
+    border-color: color,
+    time-label: string,
+    row-alpha: float,
+}
+
+export component MergedOverlayWindow inherits OverlayShell {
+    width: 320px;
+    height: panel.preferred-height;
+
+    in property <[MergedHistoryRow]> rows;
+    in property <length> row-font-size: 12px;
+
+    // Incoming-alert slot — see module doc above. Mirrors
+    // overlay_alert.slint's per-frame properties (all resolved in Rust by
+    // the same `resolve_frame` the standalone alert overlay uses), minus
+    // the Vibrate/Pulse jitter offsets: those read as the alert overlay
+    // shaking in place, which doesn't translate to a slot embedded in a
+    // layout flow, so only the Glow treatment carries over here.
+    in property <bool> has-incoming: false;
+    in property <string> incoming-message;
+    in property <image> incoming-icon-source;
+    in property <bool> incoming-has-icon: false;
+    in property <color> incoming-text-color: white;
+    in property <color> incoming-stroke-color: black;
+    in property <float> incoming-font-size-pt: 10;
+    in property <float> incoming-alpha: 0;
+    in property <bool> incoming-glow: false;
+    in property <float> incoming-glow-pulse: 0;
+
+    // See common/overlay-shell.slint's doc comment for why this trio can't
+    // just be inherited from `OverlayShell` like the window-level flags.
+    in property <bool> locked: false;
+    in property <bool> force-show: false;
+    callback drag-requested();
+
+    panel := Rectangle {
+        background: #0c0c11c8;
+        border-radius: 6px;
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: !root.locked || root.force-show;
+            changed pressed => {
+                if self.pressed {
+                    root.drag-requested();
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 4px;
+
+            if root.has-incoming: Rectangle {
+                height: incoming-wrap.preferred-height + 10px;
+                opacity: root.incoming-alpha;
+
+                incoming-wrap := Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    width: incoming-row.preferred-width;
+                    height: incoming-row.preferred-height;
+
+                    if root.incoming-glow: Rectangle {
+                        x: -10px;
+                        y: -10px;
+                        width: parent.width + 20px;
+                        height: parent.height + 20px;
+                        border-radius: 16px;
+                        background: root.incoming-text-color;
+                        opacity: root.incoming-glow-pulse * 0.35;
+                    }
+
+                    incoming-row := HorizontalLayout {
+                        width: 100%;
+                        height: 100%;
+                        spacing: 10px;
+                        alignment: center;
+
+                        if root.incoming-has-icon: Image {
+                            source: root.incoming-icon-source;
+                            width: root.incoming-font-size-pt * 1px;
+                            height: root.incoming-font-size-pt * 1px;
+                            image-fit: contain;
+                        }
+
+                        StrokedText {
+                            text: root.incoming-message;
+                            text-color: root.incoming-text-color;
+                            stroke-color: root.incoming-stroke-color;
+                            stroke-width: max(1px, min(3px, root.incoming-font-size-pt / 20 * 1px));
+                            font-size: root.incoming-font-size-pt * 1px;
+                        }
+                    }
+                }
+            }
+
+            for row[i] in root.rows: Rectangle {
+                height: content-row.preferred-height;
+                background: mod(i, 2) == 1 ? #ffffff08 : transparent;
+                opacity: row.row-alpha;
+
+                content-row := HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+                    spacing: 8px;
+
+                    if row.has-icon: Image {
+                        source: row.icon-source;
+                        width: root.row-font-size;
+                        height: root.row-font-size;
+                        image-fit: contain;
+                    }
+                    if !row.has-icon: Rectangle {
+                        width: root.row-font-size;
+                        height: root.row-font-size;
+                        border-radius: 3px;
+                        background: row.icon-color;
+                    }
+
+                    StrokedText {
+                        text: row.message;
+                        text-color: row.message-color;
+                        stroke-color: row.border-color;
+                        stroke-width: 1px;
+                        font-size: root.row-font-size;
+                        horizontal-stretch: 1;
+                        truncate: true;
+                    }
+
+                    Text {
+                        text: row.time-label;
+                        color: #969aa0;
+                        font-size: root.row-font-size;
+                        width: 46px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

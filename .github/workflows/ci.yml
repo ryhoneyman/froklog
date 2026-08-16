@@ -41,8 +41,75 @@ jobs:
       - name: Tests
         run: cargo test
 
+  # The `tray` feature (settings window, overlays, TTS, trigger engine) now
+  # builds and runs natively on Linux, not just Windows-cross-compiled (see
+  # memory/project_multiplatform.md) — this job is what actually exercises
+  # that code with clippy/build/test. The plain `test` job above runs with
+  # no features, so without this, tray-gated code was never linted, built,
+  # or tested by CI at all, only `cargo check`-ed cross-compiled for Windows
+  # by the job below.
+  test-linux-tray:
+    name: Test (Linux tray)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Keep this package list in sync with justfile's setup-linux-tray-deps
+      # recipe (GTK/appindicator for the tray icon, X11/Wayland for winit,
+      # ALSA for sound, cmake for building espeak-ng from source — piper-rs's
+      # phonemization backend, see src/tts.rs — libxdo for tray-icon's menu
+      # shortcuts).
+      - name: Install tray system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libayatana-appindicator3-dev libxdo-dev \
+            libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev \
+            libasound2-dev \
+            cmake
+
+      # vendor/espeak-rs-sys is gitignored (see justfile's fetch-espeak-rs-sys
+      # and Cargo.toml's [patch.crates-io]) — fetch + patch it here so the
+      # `tray` feature (which pulls in piper-rs -> espeak-rs-sys) has a
+      # source to compile against. Mirrors the justfile recipe directly
+      # rather than installing `just` just for this.
+      - name: Fetch espeak-rs-sys
+        run: |
+          mkdir -p vendor
+          curl -sSL "https://crates.io/api/v1/crates/espeak-rs-sys/0.2.0/download" | tar -xz -C vendor
+          mv vendor/espeak-rs-sys-0.2.0 vendor/espeak-rs-sys
+          patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-tray-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-tray-
+
+      - name: Clippy (tray)
+        run: cargo clippy --features tray --bin froklog -- -D warnings
+
+      - name: Build (tray)
+        run: cargo build --features tray --bin froklog
+
+      - name: Tests (tray)
+        run: cargo test --features tray
+
+  # Headless binaries only (froklog-server/-replay/-debug/-migrate/-loggen)
+  # — the tray client moved to windows-msvc (see cross-check-tray-msvc
+  # below), since it links onnxruntime via piper-rs (see src/tts.rs), whose
+  # Windows binaries target the MSVC ABI, not mingw's.
   cross-check:
-    name: Cross-compile check (Windows)
+    name: Cross-compile check (Windows, headless binaries)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +118,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-gnu
+          components: clippy
 
       - name: Install MinGW cross-compiler
         run: sudo apt-get install -y gcc-mingw-w64-x86-64
@@ -65,8 +133,71 @@ jobs:
           key: ${{ runner.os }}-cargo-win-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-win-
 
-      - name: Check froklog (tray)
-        run: cargo check --bin froklog --target x86_64-pc-windows-gnu --features tray
+      - name: Clippy headless binaries
+        run: |
+          cargo clippy --target x86_64-pc-windows-gnu -- -D warnings \
+            --bin froklog-server --bin froklog-replay --bin froklog-debug --bin froklog-migrate --bin froklog-loggen
 
-      - name: Check froklog-replay
-        run: cargo check --bin froklog-replay --target x86_64-pc-windows-gnu
+  # The tray client specifically, via cargo-xwin/clang-cl instead of mingw
+  # — see justfile's setup-windows-msvc-target doc comment for why, and
+  # memory/project_piper_tts_spike.md for how this toolchain was proven out.
+  cross-check-tray-msvc:
+    name: Cross-compile check (Windows, tray client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + Windows msvc target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy, llvm-tools
+
+      # apt.llvm.org's own install script — CI has real sudo, so this is
+      # simpler than justfile's setup-clang19 (which exists only for
+      # no-sudo dev machines). Needed because real MSVC's STL headers
+      # reject anything older than Clang 19; the runner's default Clang is
+      # too old.
+      - name: Install Clang 19
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 19
+          echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
+
+      - name: Install cmake and cargo-xwin
+        run: |
+          sudo apt-get install -y cmake
+          cargo install cargo-xwin
+
+      # vendor/espeak-rs-sys is gitignored (see justfile's fetch-espeak-rs-sys
+      # and Cargo.toml's [patch.crates-io]) — fetch + patch it here so the
+      # msvc build below has something at that path. Mirrors the justfile
+      # recipe directly rather than installing `just` just for this.
+      - name: Fetch espeak-rs-sys
+        run: |
+          mkdir -p vendor
+          curl -sSL "https://crates.io/api/v1/crates/espeak-rs-sys/0.2.0/download" | tar -xz -C vendor
+          mv vendor/espeak-rs-sys-0.2.0 vendor/espeak-rs-sys
+          patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-win-msvc-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-win-msvc-
+
+      # xwin's downloaded MSVC CRT/SDK is ~1-2GB — cache it so this doesn't
+      # re-fetch from Microsoft on every run.
+      - name: Cache xwin SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-${{ runner.os }}
+
+      - name: Build tray client (msvc)
+        run: cargo xwin build --features tray --bin froklog --target x86_64-pc-windows-msvc

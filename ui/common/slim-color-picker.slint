@@ -1,0 +1,144 @@
+import { Theme } from "../theme.slint";
+
+// Compact saturation/value square + hue strip + recent-colors grid,
+// replacing the full circular-wheel `ColorPickerPanel` (now retired) for
+// the three color fields in the action editor (Icon's Color Box mode, Text
+// color, Border color). No hex field: approved as a deliberate simplicity
+// tradeoff over the old wheel panel, which had one.
+//
+// Same "bitmap, not a gradient brush" approach the old wheel used and for
+// the same reason (see the old color_picker_panel.slint's now-removed
+// comment, and the software renderer's `border-radius`-vs-gradient gap it
+// documented) — `sv-image` is rendered fresh by Rust every time `hue`
+// changes (`generate_sv_image` in settings_window.rs), `hue-strip-image` is
+// static and rendered once. Both get `clip: true` + `border-radius` on
+// their wrapping `Rectangle` for rounded corners, which is a different
+// (working) code path from a gradient *brush* not respecting
+// `border-radius` — clipping *children* to a rounded rect is unaffected by
+// that gap.
+export component SlimColorPicker inherits VerticalLayout {
+    spacing: Theme.space-sm;
+
+    in-out property <float> hue: 0; // 0..360
+    in-out property <float> sat: 0; // 0..1
+    in-out property <float> val: 1; // 0..1
+    in property <image> sv-image;
+    in property <image> hue-strip-image;
+    in property <[color]> recent-colors;
+
+    callback hsv-changed();
+    callback recent-picked(color);
+
+    changed hue => { root.hsv-changed(); }
+    changed sat => { root.hsv-changed(); }
+    changed val => { root.hsv-changed(); }
+
+    property <length> sv-height: 80px;
+    property <length> hue-height: 14px;
+    property <length> cursor-size: 12px;
+    property <length> hue-cursor-size: 14px;
+
+    sv := Rectangle {
+        height: root.sv-height;
+        border-radius: Theme.radius-sm;
+        clip: true;
+
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.sv-image;
+        }
+
+        Rectangle {
+            width: root.cursor-size;
+            height: root.cursor-size;
+            x: root.sat * (parent.width - self.width);
+            y: (1.0 - root.val) * (parent.height - self.height);
+            border-radius: self.width / 2;
+            border-width: 2px;
+            border-color: white;
+        }
+
+        sv-touch := TouchArea {
+            width: 100%;
+            height: 100%;
+            changed pressed => {
+                if self.pressed {
+                    root.sat = clamp(self.mouse-x / self.width, 0.0, 1.0);
+                    root.val = 1.0 - clamp(self.mouse-y / self.height, 0.0, 1.0);
+                }
+            }
+            moved => {
+                if self.pressed {
+                    root.sat = clamp(self.mouse-x / self.width, 0.0, 1.0);
+                    root.val = 1.0 - clamp(self.mouse-y / self.height, 0.0, 1.0);
+                }
+            }
+        }
+    }
+
+    hue-bar := Rectangle {
+        height: root.hue-height;
+        border-radius: self.height / 2;
+        clip: true;
+
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.hue-strip-image;
+        }
+
+        Rectangle {
+            width: root.hue-cursor-size;
+            height: root.hue-cursor-size;
+            x: (root.hue / 360.0) * (parent.width - self.width);
+            y: (parent.height - self.height) / 2;
+            border-radius: self.width / 2;
+            border-width: 2px;
+            border-color: white;
+        }
+
+        hue-touch := TouchArea {
+            width: 100%;
+            height: 100%;
+            changed pressed => {
+                if self.pressed {
+                    root.hue = clamp(self.mouse-x / self.width, 0.0, 1.0) * 360.0;
+                }
+            }
+            moved => {
+                if self.pressed {
+                    root.hue = clamp(self.mouse-x / self.width, 0.0, 1.0) * 360.0;
+                }
+            }
+        }
+    }
+
+    // Fixed 8-column grid via absolute positioning (`mod`/integer-division
+    // on the loop index) — Slint has no CSS flex-wrap equivalent, this is
+    // the same trick a wrapping icon grid needs (see icon-combo-box.slint).
+    // Capped to two rows by the caller (Rust only ever hands this at most
+    // 16 colors — `MAX_SHOWN_COLORS` in settings_window.rs), so no
+    // scrolling is needed here.
+    if root.recent-colors.length > 0: recent-grid := Rectangle {
+        property <int> cols: 8;
+        property <length> step: 26px;
+        // `ceil`/`floor`/`mod` (not raw `int / int`) so row/column math
+        // doesn't depend on whether Slint's division operator happens to
+        // truncate for two `int` operands.
+        height: ceil(root.recent-colors.length / recent-grid.cols) * recent-grid.step;
+
+        for c[i] in root.recent-colors: Rectangle {
+            x: mod(i, recent-grid.cols) * recent-grid.step;
+            y: floor(i / recent-grid.cols) * recent-grid.step;
+            width: 20px;
+            height: 20px;
+            border-radius: Theme.radius-sm;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: c;
+
+            TouchArea { clicked => { root.recent-picked(c); } }
+        }
+    }
+}

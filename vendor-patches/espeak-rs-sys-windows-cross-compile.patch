@@ -1,0 +1,68 @@
+diff -ru a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -289,10 +289,25 @@
+     }
+
+     // Linux
+-    if cfg!(target_os = "linux") {
++    //
++    // froklog patch: was `cfg!(target_os = "linux")`, which is a HOST check
++    // (build.rs itself always runs natively, so this was always true even
++    // when cross-compiling to windows-msvc via cargo-xwin from a Linux
++    // host) — should be a TARGET check, using the `target` var already
++    // computed above from $TARGET. The wrong version emitted an `stdc++`
++    // link request that doesn't exist in MSVC's world, failing the link.
++    if target.contains("linux") {
+         println!("cargo:rustc-link-lib=dylib=stdc++");
+     }
+
++    // froklog patch: espeak-ng's speech.c (espeak_ng_InitializePath) calls
++    // the Win32 registry API (RegOpenKeyExA/RegQueryValueExA) to look up
++    // install paths — real MSVC's default libs pull in advapi32
++    // automatically, clang-cl cross-compiling via cargo-xwin does not.
++    if target.contains("windows") {
++        println!("cargo:rustc-link-lib=dylib=advapi32");
++    }
++
+     if target.contains("apple") {
+         // On (older) OSX we need to link against the clang runtime,
+         // which is hidden in some non-default path.
+diff -ru a/espeak-ng/src/CMakeLists.txt b/espeak-ng/src/CMakeLists.txt
+--- a/espeak-ng/src/CMakeLists.txt
++++ b/espeak-ng/src/CMakeLists.txt
+@@ -10,6 +10,18 @@
+ target_link_libraries(
+   espeak-ng-bin PRIVATE espeak-ng espeak-ng-config
+ )
++# froklog patch: espeak-ng-bin itself isn't something froklog ever runs —
++# but cmake/data.cmake (included below via CMakeLists.txt) uses
++# $<TARGET_FILE:espeak-ng-bin> to actually *run* this CLI tool as a
++# build-time data compiler, generating the phoneme/dictionary data the
++# espeak-ng library needs at runtime. So it can't just be excluded from the
++# build (tried that — cmake's generate step fails outright, "No target
++# espeak-ng-bin"); it has to actually build and link, on every target.
++# advapi32 (Win32 registry API) is what real MSVC's default libs pull in
++# automatically that clang-cl (cargo-xwin's cross-compile) doesn't.
++if (WIN32)
++  target_link_libraries(espeak-ng-bin PRIVATE advapi32)
++endif()
+ set_target_properties(
+   espeak-ng-bin PROPERTIES
+   MACOSX_RPATH ON
+diff -ru a/espeak-ng/src/espeak-ng.c b/espeak-ng/src/espeak-ng.c
+--- a/espeak-ng/src/espeak-ng.c
++++ b/espeak-ng/src/espeak-ng.c
+@@ -30,6 +30,12 @@
+ #include <sys/stat.h>
+ #include <fcntl.h>
+ #include <time.h>
++#ifdef _WIN32
++// _setmode/_fileno prototypes — needed under clang-cl (froklog cross-compiles
++// via cargo-xwin), which unlike real MSVC's cl.exe doesn't pull this in
++// transitively through another system header.
++#include <io.h>
++#endif
+
+ #include <espeak-ng/espeak_ng.h>
+ #include <espeak-ng/speak_lib.h>

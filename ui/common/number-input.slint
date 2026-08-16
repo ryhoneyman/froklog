@@ -1,0 +1,69 @@
+import { Theme } from "../theme.slint";
+
+// Labeled numeric field with a muted unit suffix embedded at the input's
+// right edge (pt / px / s) instead of cluttering the label text, plus an
+// optional helper line that self-documents a "0" value (e.g. "Never (0s)"
+// for idle-hide, "Auto (0px)" for width). Values are kept as strings, same
+// "parse on save" convention as TextField — see appearance_tab.slint's
+// header comment.
+export component NumberInput inherits VerticalLayout {
+    in property <string> label;
+    in property <string> unit;
+    // Word shown when value == "0", e.g. "Never" or "Auto". Empty disables
+    // the helper line entirely (not every zero-able field wants one).
+    in property <string> zero-hint;
+    in property <bool> enabled: true;
+    in-out property <string> value <=> input.text;
+
+    spacing: Theme.space-xs;
+
+    Text {
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Theme.font-size-sm;
+    }
+
+    Rectangle {
+        height: 30px;
+        // Without this, a NumberInput placed next to a stretchy spacer
+        // (e.g. Opacity's `NumberInput { ... } Rectangle { horizontal-
+        // stretch: 1; }` pairing in appearance_tab.slint) has no other
+        // sibling to size itself against and collapses toward the width of
+        // its own label text — the input's computed width then goes near
+        // zero (or negative), leaving no room to click/type and making the
+        // unit suffix (e.g. "/255") render on top of the value instead of
+        // to its right.
+        min-width: 120px;
+        background: root.enabled ? Theme.bg-elevated : Theme.bg-panel;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.border;
+
+        animate border-color { duration: 100ms; }
+
+        input := TextInput {
+            x: Theme.space-sm;
+            width: parent.width - 2 * Theme.space-sm - unit-text.width - Theme.space-xs;
+            height: 100%;
+            vertical-alignment: center;
+            color: root.enabled ? Theme.text-primary : Theme.text-disabled;
+            font-size: Theme.font-size-md;
+            read-only: !root.enabled;
+        }
+
+        unit-text := Text {
+            x: parent.width - self.width - Theme.space-sm;
+            text: root.unit;
+            color: Theme.text-disabled;
+            font-size: Theme.font-size-sm;
+            vertical-alignment: center;
+            height: 100%;
+        }
+    }
+
+    if root.zero-hint != "" && root.value == "0": Text {
+        text: root.zero-hint + " (0" + root.unit + ")";
+        color: Theme.text-disabled;
+        font-size: 11px;
+    }
+}

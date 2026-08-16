@@ -1,0 +1,400 @@
+import { Theme } from "../theme.slint";
+import { ScrollArea } from "scroll-area.slint";
+import { TextField } from "text-field.slint";
+import { ComboBoxField } from "combo-box.slint";
+import { SlimColorPicker } from "slim-color-picker.slint";
+
+export struct IconOption {
+    label: string,
+    icon: image,
+    has-icon: bool,
+}
+
+// Icon picker for the action editor's Icon field. Three top-level modes —
+// None / Color Box / Icon — replace what used to be two synthetic entries
+// mixed into a flat icon list; only the Icon mode's pane shows a search
+// box, a Source filter (which `uifiles` skin directory an extracted icon
+// came from — see spell_icons.rs), and a grid of matching icons. Color Box
+// mode embeds `SlimColorPicker` directly inline, no separate dialog — it
+// rides inside this combo's own popup, with the same ✕/✓ cancel/confirm
+// pair bottom-right that `ColorSwatchField`'s popover uses (✕ reverts to
+// the hue/sat/val captured when the popup opened, ✓ just closes it since
+// edits already apply live via `hsv-changed`).
+//
+// `options` is the full, stable, unfiltered icon list — `icon-index` is an
+// index into *that* list, never into whatever's currently filtered, so a
+// search/source change can never invalidate the current selection or
+// change what `icon-index` points at. `visible-indices` is a separate list
+// of positions into `options` that the grid actually renders; Rust
+// recomputes it from the current search/source filter and leaves `options`
+// itself untouched. This is the same "index, not string re-match" contract
+// the old flat-list version of this component used, just with a filter
+// layer added on top — see the `for` loop below for how it's used.
+export component IconComboBoxField inherits Rectangle {
+    in property <[IconOption]> options;
+    in property <[int]> visible-indices;
+    in property <[string]> source-labels;
+    in-out property <string> source-label-value: "";
+    in-out property <string> search-text: "";
+    in-out property <string> mode: "icon"; // "none" | "colorbox" | "icon"
+    in-out property <int> icon-index: 0;
+    in-out property <float> hue: 0;
+    in-out property <float> sat: 0;
+    in-out property <float> val: 1;
+    in property <image> sv-image;
+    in property <image> hue-strip-image;
+    in property <color> resolved-color;
+    in property <[color]> recent-colors;
+    in property <bool> enabled: true;
+
+    callback search-changed(string);
+    callback source-changed(string);
+    callback hsv-changed();
+    callback recent-picked(color);
+
+    property <IconOption> current: root.options[root.icon-index];
+    property <bool> mode-none: root.mode == "none";
+    property <bool> mode-colorbox: root.mode == "colorbox";
+    property <bool> mode-icon: root.mode == "icon";
+
+    property <length> popup-width: 340px;
+    property <int> grid-cols: 6;
+    property <length> grid-step: 54px;
+    property <length> grid-cell: 42px;
+
+    // hue/sat/val snapshot taken when the popup opens, so Color Box mode's
+    // Cancel button can revert the live edits `hsv-changed` already applied
+    // — same "no OK step upstream" situation as `ColorSwatchField`'s popover.
+    property <float> opened-hue;
+    property <float> opened-sat;
+    property <float> opened-val;
+
+    height: 30px;
+    background: root.enabled ? Theme.bg-elevated : Theme.bg-panel;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: touch.has-hover ? Theme.accent : Theme.border;
+
+    animate border-color { duration: 100ms; }
+
+    HorizontalLayout {
+        padding-left: Theme.space-sm;
+        padding-right: Theme.space-sm;
+        spacing: Theme.space-xs;
+
+        // Each wrapper stretches to the row's full height (no explicit
+        // `height`, same as the Text siblings below, so the layout treats
+        // it the same way) with the actual fixed-size swatch centered
+        // inside it by hand — a 22px child asked to size itself directly
+        // in the HorizontalLayout ended up flush against the top instead
+        // of centered, clipping its corner under the field's own rounded
+        // top edge.
+        if root.mode-none: Rectangle {
+            width: 22px;
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 3px;
+                border-width: 1px;
+                border-color: Theme.text-disabled;
+            }
+        }
+        if root.mode-colorbox: Rectangle {
+            width: 22px;
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 3px;
+                background: root.resolved-color;
+            }
+        }
+        if root.mode-icon && root.current.has-icon: Rectangle {
+            width: 22px;
+            Image {
+                source: root.current.icon;
+                width: 22px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                image-fit: contain;
+            }
+        }
+
+        Text {
+            text: root.mode-none ? "(none)" : root.mode-colorbox ? "Color Box" : root.current.label;
+            color: root.enabled ? Theme.text-primary : Theme.text-disabled;
+            font-size: Theme.font-size-md;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        Text {
+            text: "\u{25be}";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.opened-hue = root.hue;
+            root.opened-sat = root.sat;
+            root.opened-val = root.val;
+            popup.show();
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 6px;
+        width: root.popup-width;
+        // Clicks anywhere inside (segmented buttons, search, the picker,
+        // grid tiles) must NOT dismiss this — only a real selection
+        // (`None`, or a grid tile) closes it, both via an explicit
+        // `popup.close()` below. Only a click outside should close it
+        // "for free".
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            background: Theme.bg-elevated;
+            border-radius: Theme.radius-sm;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            VerticalLayout {
+                HorizontalLayout {
+                    padding: Theme.space-sm;
+                    spacing: 4px;
+
+                    Rectangle {
+                        height: 27px;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: root.mode-none ? Theme.accent : Theme.border;
+                        background: root.mode-none ? Theme.accent : Theme.bg-panel;
+                        Text {
+                            text: "None";
+                            color: root.mode-none ? Theme.on-accent : Theme.text-secondary;
+                            font-size: Theme.font-size-sm;
+                            font-weight: root.mode-none ? 600 : 400;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            clicked => {
+                                root.mode = "none";
+                                popup.close();
+                            }
+                        }
+                    }
+                    Rectangle {
+                        height: 27px;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: root.mode-colorbox ? Theme.accent : Theme.border;
+                        background: root.mode-colorbox ? Theme.accent : Theme.bg-panel;
+                        Text {
+                            text: "Color Box";
+                            color: root.mode-colorbox ? Theme.on-accent : Theme.text-secondary;
+                            font-size: Theme.font-size-sm;
+                            font-weight: root.mode-colorbox ? 600 : 400;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            clicked => { root.mode = "colorbox"; }
+                        }
+                    }
+                    Rectangle {
+                        height: 27px;
+                        border-radius: Theme.radius-sm;
+                        border-width: 1px;
+                        border-color: root.mode-icon ? Theme.accent : Theme.border;
+                        background: root.mode-icon ? Theme.accent : Theme.bg-panel;
+                        Text {
+                            text: "Icon";
+                            color: root.mode-icon ? Theme.on-accent : Theme.text-secondary;
+                            font-size: Theme.font-size-sm;
+                            font-weight: root.mode-icon ? 600 : 400;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            clicked => { root.mode = "icon"; }
+                        }
+                    }
+                }
+
+                if root.mode-none: VerticalLayout {
+                    padding-left: Theme.space-sm;
+                    padding-right: Theme.space-sm;
+                    padding-bottom: Theme.space-md;
+                    Text {
+                        text: "No icon will be shown for this action.";
+                        color: Theme.text-disabled;
+                        font-size: Theme.font-size-sm;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if root.mode-colorbox: VerticalLayout {
+                    padding: Theme.space-sm;
+                    spacing: Theme.space-sm;
+
+                    SlimColorPicker {
+                        hue <=> root.hue;
+                        sat <=> root.sat;
+                        val <=> root.val;
+                        sv-image: root.sv-image;
+                        hue-strip-image: root.hue-strip-image;
+                        recent-colors: root.recent-colors;
+                        hsv-changed => { root.hsv-changed(); }
+                        recent-picked(c) => { root.recent-picked(c); }
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Theme.space-xs;
+
+                        Rectangle {
+                            width: 22px;
+                            height: 22px;
+                            border-radius: self.width / 2;
+                            background: cancel-touch.has-hover ? Theme.danger : Theme.bg-panel;
+                            border-width: 1px;
+                            border-color: Theme.danger;
+
+                            Text {
+                                text: "\u{00D7}";
+                                color: cancel-touch.has-hover ? Theme.on-accent : Theme.danger;
+                                font-size: Theme.font-size-lg;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            cancel-touch := TouchArea {
+                                clicked => {
+                                    root.hue = root.opened-hue;
+                                    root.sat = root.opened-sat;
+                                    root.val = root.opened-val;
+                                    root.hsv-changed();
+                                    popup.close();
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 22px;
+                            height: 22px;
+                            border-radius: self.width / 2;
+                            background: confirm-touch.has-hover ? Theme.success : Theme.bg-panel;
+                            border-width: 1px;
+                            border-color: Theme.success;
+
+                            Text {
+                                text: "✓";
+                                color: confirm-touch.has-hover ? Theme.on-accent : Theme.success;
+                                font-size: Theme.font-size-lg;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            confirm-touch := TouchArea {
+                                clicked => { popup.close(); }
+                            }
+                        }
+                    }
+                }
+
+                if root.mode-icon: VerticalLayout {
+                    VerticalLayout {
+                        padding: Theme.space-sm;
+                        spacing: Theme.space-sm;
+
+                        TextField {
+                            placeholder: "Search icon or source name\u{2026}";
+                            text <=> root.search-text;
+                            edited(t) => { root.search-changed(t); }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-sm;
+                            Text {
+                                text: "Source";
+                                color: Theme.text-secondary;
+                                font-size: Theme.font-size-sm;
+                                vertical-alignment: center;
+                            }
+                            ComboBoxField {
+                                horizontal-stretch: 1;
+                                options: root.source-labels;
+                                value <=> root.source-label-value;
+                                selected(s) => { root.source-changed(s); }
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: Theme.border; }
+
+                    VerticalLayout {
+                        padding: Theme.space-sm;
+                        Text {
+                            text: root.visible-indices.length + (root.visible-indices.length == root.options.length ? " icons" : " of " + root.options.length + " icons");
+                            color: Theme.text-disabled;
+                            font-size: Theme.font-size-sm;
+                        }
+                    }
+
+                    if root.visible-indices.length == 0: VerticalLayout {
+                        padding: Theme.space-lg;
+                        Text {
+                            text: "No icons match.";
+                            color: Theme.text-disabled;
+                            font-size: Theme.font-size-sm;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    if root.visible-indices.length > 0: ScrollArea {
+                        height: 210px;
+                        content-height: ceil(root.visible-indices.length / root.grid-cols) * root.grid-step;
+
+                        Rectangle {
+                            width: 100%;
+                            height: ceil(root.visible-indices.length / root.grid-cols) * root.grid-step;
+
+                            for idx[i] in root.visible-indices: Rectangle {
+                                x: Theme.space-sm + mod(i, root.grid-cols) * root.grid-step;
+                                y: floor(i / root.grid-cols) * root.grid-step;
+                                width: root.grid-cell;
+                                height: root.grid-cell;
+                                border-radius: Theme.radius-sm;
+                                border-width: 1px;
+                                border-color: idx == root.icon-index && root.mode-icon ? Theme.accent : transparent;
+                                background: tile-touch.has-hover ? Theme.bg-hover : transparent;
+
+                                if root.options[idx].has-icon: Image {
+                                    source: root.options[idx].icon;
+                                    width: 100%;
+                                    height: 100%;
+                                    image-fit: contain;
+                                }
+
+                                tile-touch := TouchArea {
+                                    clicked => {
+                                        root.icon-index = idx;
+                                        root.mode = "icon";
+                                        popup.close();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

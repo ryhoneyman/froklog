@@ -1,0 +1,69 @@
+import { Theme } from "../theme.slint";
+
+// Minimal themed scroll container over the low-level Flickable primitive.
+// Replaces std-widgets' ScrollView: that one's scrollbar auto-hides when
+// the mouse isn't over it and renders in a fixed light color that doesn't
+// follow this app's dark theme — neither is configurable on the widget.
+//
+// Caller must pass `content-height` explicitly (the tallest content among
+// possibly-several permanently-instantiated siblings, `visible`-toggled
+// rather than conditionally instantiated — see settings_shell.slint for
+// why) since automatic viewport sizing only works for a single child.
+export component ScrollArea inherits Rectangle {
+    in property <length> content-height;
+
+    property <length> bar-width: 8px;
+    property <bool> can-scroll: flick.viewport-height > flick.height;
+
+    flick := Flickable {
+        width: parent.width;
+        height: parent.height;
+        viewport-height: max(root.content-height, self.height);
+        @children
+    }
+
+    if can-scroll: Rectangle {
+        x: parent.width - bar-width - 2px;
+        y: 2px;
+        width: bar-width;
+        height: parent.height - 4px;
+        background: Theme.bg-panel;
+        border-radius: self.width / 2;
+
+        property <length> press-anchor-viewport-y;
+
+        thumb := Rectangle {
+            width: parent.width;
+            border-radius: self.width / 2;
+            background: drag.pressed ? Theme.accent : Theme.text-disabled;
+            y: (-flick.viewport-y / flick.viewport-height) * parent.height;
+            height: max(24px, (flick.height / flick.viewport-height) * parent.height);
+
+            animate background { duration: 100ms; }
+        }
+
+        // Dedicated drag handling for the thumb: without this, dragging
+        // here fell through to Flickable's own touch-pan gesture
+        // underneath, which moves *content* with the pointer (inverted
+        // from conventional scrollbar-thumb-drag, where the thumb follows
+        // the pointer and content follows the thumb the same direction).
+        drag := TouchArea {
+            width: parent.width;
+            height: parent.height;
+
+            changed pressed => {
+                if self.pressed {
+                    press-anchor-viewport-y = flick.viewport-y;
+                }
+            }
+
+            moved => {
+                flick.viewport-y = clamp(
+                    press-anchor-viewport-y - (self.mouse-y - self.pressed-y) * (flick.viewport-height / parent.height),
+                    -(flick.viewport-height - flick.height),
+                    0px,
+                );
+            }
+        }
+    }
+}

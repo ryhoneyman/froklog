@@ -77,8 +77,15 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
 
+    // Serializes tests that touch the process-wide SERVER_SKEW_SECS static,
+    // which cargo test's default thread-per-test parallelism would
+    // otherwise race (one test observing a skew value another test set and
+    // hasn't reset yet).
+    static SKEW_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn epoch_is_monotonic_across_consecutive_seconds() {
+        let _guard = SKEW_TEST_LOCK.lock().unwrap();
         let d = NaiveDate::from_ymd_opt(2026, 7, 30).unwrap();
         let a = naive_log_time_to_epoch(d.and_hms_opt(20, 15, 1).unwrap());
         let b = naive_log_time_to_epoch(d.and_hms_opt(20, 15, 2).unwrap());
@@ -87,6 +94,7 @@ mod tests {
 
     #[test]
     fn epoch_differs_from_fake_utc_by_tz_offset() {
+        let _guard = SKEW_TEST_LOCK.lock().unwrap();
         // Unless the machine runs in UTC, true epoch != fake-UTC epoch, and
         // the difference is exactly a whole number of minutes (a tz offset).
         let naive = NaiveDate::from_ymd_opt(2026, 1, 15)
@@ -100,6 +108,7 @@ mod tests {
 
     #[test]
     fn skew_is_applied() {
+        let _guard = SKEW_TEST_LOCK.lock().unwrap();
         let naive = NaiveDate::from_ymd_opt(2026, 7, 30)
             .unwrap()
             .and_hms_opt(10, 0, 0)

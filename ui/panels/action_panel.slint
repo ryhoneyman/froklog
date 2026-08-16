@@ -1,0 +1,330 @@
+import { Theme } from "../theme.slint";
+import { Button } from "../common/buttons.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { TextField } from "../common/text-field.slint";
+import { LabeledField } from "../common/labeled-field.slint";
+import { ColorSwatchField } from "../common/color-swatch-field.slint";
+import { RadioGroup } from "../common/radio-group.slint";
+import { IconComboBoxField, IconOption } from "../common/icon-combo-box.slint";
+
+// Edit body for a single trigger action, embedded in the Settings drawer —
+// was ActionEditWindow (ui/dialogs/action_edit_dialog.slint) before the
+// drawer migration. Only ever pushed on top of an open TriggerPanel. The
+// largest of the panels: 4 action types, each with a different field set.
+//
+// Icon/Text/Border color all pick via the same slim inline/popover picker
+// (`SlimColorPicker`, reused through `IconComboBoxField`'s Color Box mode
+// and `ColorSwatchField`) — replaces the old shared drawer-level
+// `ColorPickerPanel` (a full hue/saturation wheel), which this panel used
+// to push onto the stack via `pick-icon-color`/`pick-message-color`/
+// `pick-border-color`. Each of the three keeps its own independent
+// hue/sat/val/sv-image, since all three can be mid-edit simultaneously;
+// `hue-strip-image` and `recent-colors` are shared (one static rainbow
+// bitmap, one recent-colors list) since neither depends on which field is
+// being edited.
+export component ActionPanel inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in-out property <string> action-type: "Overlay message";
+    property <bool> is-overlay: root.action-type == "Overlay message";
+    property <bool> is-store-var: root.action-type == "Store variable";
+    property <bool> is-voice-alert: root.action-type == "Voice Alert (TTS)";
+    property <bool> is-play-sound: root.action-type == "Play Sound";
+
+    // ── Overlay ──────────────────────────────────────────────────────────
+    in-out property <string> icon-mode: "icon"; // "none" | "colorbox" | "icon"
+    in-out property <int> icon-index: 0;
+    in property <[IconOption]> icon-options;
+    in property <[int]> icon-visible-indices;
+    in property <[string]> icon-source-labels;
+    in-out property <string> icon-source-label-value: "";
+    in-out property <string> icon-search-text: "";
+    in-out property <float> icon-hue: 0;
+    in-out property <float> icon-sat: 0;
+    in-out property <float> icon-val: 1;
+    in property <image> icon-sv-image;
+    in property <color> icon-color-preview: Theme.text-primary;
+    callback icon-search-changed(string);
+    callback icon-source-changed(string);
+    callback icon-hsv-changed();
+    callback icon-recent-picked(color);
+
+    in-out property <string> message;
+    in-out property <float> message-hue: 0;
+    in-out property <float> message-sat: 0;
+    in-out property <float> message-val: 1;
+    in property <image> message-sv-image;
+    in property <color> message-color-preview: Theme.text-primary;
+    callback message-hsv-changed();
+    callback message-recent-picked(color);
+
+    in-out property <float> border-hue: 0;
+    in-out property <float> border-sat: 0;
+    in-out property <float> border-val: 0;
+    in property <image> border-sv-image;
+    in property <color> border-color-preview: #000000;
+    callback border-hsv-changed();
+    callback border-recent-picked(color);
+
+    // Shared by all three color pickers above.
+    in property <image> hue-strip-image;
+    in property <[color]> recent-colors;
+
+    in-out property <string> treatment: "None";
+    in-out property <string> overlay-priority: "Operational (queues)";
+
+    // Shared with Play Sound — the source uses one delay control for both,
+    // only one of which is ever visible.
+    in-out property <string> delay-secs;
+
+    // ── Play Sound ───────────────────────────────────────────────────────
+    // `sound-options` is the full set of available sound names for each
+    // row's dropdown; `sound-slots` is the current rotation, one entry per
+    // row — Rust owns array mutation (add/remove/edit). Playback mode only
+    // matters once there's something to rotate between.
+    in property <[string]> sound-options;
+    in property <[string]> sound-slots;
+    callback set-sound-slot(int, string);
+    callback add-sound-slot();
+    callback remove-sound-slot(int);
+    callback test-sound-slot(int);
+    in-out property <string> sound-mode: "Random";
+    property <bool> show-sound-mode: root.sound-slots.length >= 2;
+
+    // ── Voice Alert ──────────────────────────────────────────────────────
+    in-out property <string> tts-text;
+    callback test-tts();
+    // 0 Emergency, 1 Operational, 2 Ambient — matches RadioGroup's index contract.
+    in-out property <int> voice-priority: 1;
+
+    // ── Store Variable ───────────────────────────────────────────────────
+    in-out property <string> var-name;
+    in-out property <string> var-value;
+
+    callback ok();
+    callback cancel();
+
+    LabeledField {
+        label: "Action type";
+        ComboBoxField {
+            options: [
+                "Overlay message", "Store variable",
+                "Voice Alert (TTS)", "Play Sound",
+            ];
+            value <=> root.action-type;
+        }
+    }
+
+    Rectangle { height: 1px; background: Theme.border; }
+
+    if root.is-overlay: VerticalLayout {
+        spacing: Theme.space-md;
+
+        LabeledField {
+            label: "Icon";
+            IconComboBoxField {
+                options: root.icon-options;
+                visible-indices: root.icon-visible-indices;
+                source-labels: root.icon-source-labels;
+                source-label-value <=> root.icon-source-label-value;
+                search-text <=> root.icon-search-text;
+                mode <=> root.icon-mode;
+                icon-index <=> root.icon-index;
+                hue <=> root.icon-hue;
+                sat <=> root.icon-sat;
+                val <=> root.icon-val;
+                sv-image: root.icon-sv-image;
+                hue-strip-image: root.hue-strip-image;
+                resolved-color: root.icon-color-preview;
+                recent-colors: root.recent-colors;
+                search-changed(t) => { root.icon-search-changed(t); }
+                source-changed(s) => { root.icon-source-changed(s); }
+                hsv-changed => { root.icon-hsv-changed(); }
+                recent-picked(c) => { root.icon-recent-picked(c); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            LabeledField {
+                label: "Message";
+                horizontal-stretch: 1;
+                TextField {
+                    placeholder: "{1},{2}=positional; {name}=named capture; {var}=stored var";
+                    text <=> root.message;
+                }
+            }
+            LabeledField {
+                label: "Text color";
+                ColorSwatchField {
+                    hue <=> root.message-hue;
+                    sat <=> root.message-sat;
+                    val <=> root.message-val;
+                    sv-image: root.message-sv-image;
+                    hue-strip-image: root.hue-strip-image;
+                    preview: root.message-color-preview;
+                    recent-colors: root.recent-colors;
+                    hsv-changed => { root.message-hsv-changed(); }
+                    recent-picked(c) => { root.message-recent-picked(c); }
+                }
+            }
+            LabeledField {
+                label: "Border color";
+                ColorSwatchField {
+                    hue <=> root.border-hue;
+                    sat <=> root.border-sat;
+                    val <=> root.border-val;
+                    sv-image: root.border-sv-image;
+                    hue-strip-image: root.hue-strip-image;
+                    preview: root.border-color-preview;
+                    recent-colors: root.recent-colors;
+                    hsv-changed => { root.border-hsv-changed(); }
+                    recent-picked(c) => { root.border-recent-picked(c); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            LabeledField {
+                label: "Treatment";
+                ComboBoxField {
+                    options: ["None", "Glow", "Vibrate", "Pulse"];
+                    value <=> root.treatment;
+                }
+            }
+            LabeledField {
+                label: "Priority";
+                ComboBoxField {
+                    options: [
+                        "Emergency (interrupts)", "Operational (queues)",
+                        "Ambient (may drop)",
+                    ];
+                    value <=> root.overlay-priority;
+                }
+            }
+        }
+
+        LabeledField {
+            label: "Delay (sec)";
+            TextField { placeholder: "0 or empty = immediate"; text <=> root.delay-secs; }
+        }
+    }
+
+    if root.is-play-sound: VerticalLayout {
+        spacing: Theme.space-md;
+
+        LabeledField {
+            label: "Sounds";
+            VerticalLayout {
+                spacing: Theme.space-xs;
+
+                for slot[i] in root.sound-slots: HorizontalLayout {
+                    spacing: Theme.space-sm;
+                    ComboBoxField {
+                        horizontal-stretch: 1;
+                        options: root.sound-options;
+                        value: slot;
+                        placeholder: "Choose a sound\u{2026}";
+                        selected(s) => { root.set-sound-slot(i, s); }
+                    }
+                    // Fixed square icon buttons — without an explicit
+                    // width each Button auto-sizes to its own text, so
+                    // rows with longer/shorter dropdown values would
+                    // otherwise leave the ▶/✕ columns misaligned. The
+                    // default text-button padding (space-md each side)
+                    // is sized for a button that grows around it, so it
+                    // eats almost all of a fixed 34px square here —
+                    // tightened and paired with a larger glyph size so
+                    // the icon actually centers and reads at a glance.
+                    Button {
+                        width: 34px;
+                        h-padding: Theme.space-xs;
+                        font-size: Theme.font-size-lg;
+                        text: "\u{25B6}";
+                        primary: false;
+                        clicked => { root.test-sound-slot(i); }
+                    }
+                    if root.sound-slots.length > 1: Button {
+                        width: 34px;
+                        h-padding: Theme.space-xs;
+                        font-size: Theme.font-size-lg;
+                        text: "\u{00D7}";
+                        primary: false;
+                        clicked => { root.remove-sound-slot(i); }
+                    }
+                }
+
+                Button {
+                    text: "+ Add sound";
+                    primary: false;
+                    clicked => { root.add-sound-slot(); }
+                }
+            }
+        }
+
+        if root.show-sound-mode: LabeledField {
+            label: "Playback";
+            ComboBoxField {
+                options: ["Random", "Sequential"];
+                value <=> root.sound-mode;
+            }
+        }
+
+        LabeledField {
+            label: "Delay (sec)";
+            TextField { placeholder: "0 or empty = immediate"; text <=> root.delay-secs; }
+        }
+    }
+
+    if root.is-voice-alert: VerticalLayout {
+        spacing: Theme.space-md;
+
+        LabeledField {
+            label: "TTS text";
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                TextField {
+                    placeholder: "{1},{2}=positional; {name}=named capture; {var}=stored var";
+                    text <=> root.tts-text;
+                    horizontal-stretch: 1;
+                }
+                Button { text: "\u{25B6}"; primary: false; clicked => { root.test-tts(); } }
+            }
+        }
+        LabeledField {
+            label: "Priority";
+            RadioGroup {
+                options: ["Emergency", "Operational", "Ambient"];
+                selected <=> root.voice-priority;
+            }
+        }
+    }
+
+    if root.is-store-var: VerticalLayout {
+        spacing: Theme.space-md;
+
+        LabeledField {
+            label: "Variable name";
+            TextField { text <=> root.var-name; }
+        }
+        LabeledField {
+            label: "Value";
+            TextField {
+                placeholder: "{1},{2}=positional; {name}=named capture; {var}=stored var";
+                text <=> root.var-value;
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        alignment: end;
+        Button { text: "Cancel"; primary: false; clicked => { root.cancel(); } }
+        Button { text: "OK"; primary: true; clicked => { root.ok(); } }
+    }
+}

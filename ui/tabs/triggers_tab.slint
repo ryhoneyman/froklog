@@ -1,0 +1,106 @@
+import { Theme } from "../theme.slint";
+import { ListBox } from "../common/list-box.slint";
+import { Button } from "../common/buttons.slint";
+
+// Phase 2.5 — the Triggers tab itself, replacing create_triggers_panel()
+// in overlay_config_win.rs. The nested TriggerEditDialog / Condition
+// EditDialog / ActionEditDialog modals (opened by Add/Edit) are a
+// separate follow-up given their size (~2000 lines combined in the
+// source) — this tab is fully functional on its own once wired to a real
+// TriggerConfig; Add/Edit currently have nothing to open.
+//
+// Row labels are pre-formatted in Rust ("[✓] Name  (ALL 2 cond, 3 act)"),
+// matching rebuild_trigger_list()'s exact format, rather than passing
+// structured data and re-deriving the string here — keeps this slice
+// small; can move to a proper struct-backed model when the row also needs
+// to drive double-click-to-edit or per-row controls.
+export component TriggersTab inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in property <[string]> trigger-rows;
+    in-out property <int> selected-trigger-index: -1;
+
+    callback add-trigger();
+    callback edit-trigger();
+    callback delete-trigger();
+    callback move-trigger-up();
+    callback move-trigger-down();
+    callback toggle-trigger();
+    callback test-trigger();
+
+    Text {
+        text: "Triggers";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-xl;
+        font-weight: 700;
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+
+        ListBox {
+            height: 380px;
+            horizontal-stretch: 1;
+            items: root.trigger-rows;
+            selected-index <=> root.selected-trigger-index;
+        }
+
+        VerticalLayout {
+            // Wide enough for "Enable/Disable", the longest label in this
+            // column — 110px let its text overflow past the button's own
+            // edge instead of centering within it.
+            width: 152px;
+            spacing: Theme.space-xs;
+            alignment: start;
+
+            Button { text: "Add"; primary: false; clicked => { root.add-trigger(); } }
+            Button {
+                text: "Edit";
+                primary: false;
+                enabled: root.selected-trigger-index >= 0;
+                clicked => { root.edit-trigger(); }
+            }
+            Button {
+                text: "Delete";
+                primary: false;
+                enabled: root.selected-trigger-index >= 0;
+                clicked => { root.delete-trigger(); }
+            }
+
+            Rectangle { height: Theme.space-sm; }
+
+            Button {
+                text: "Move Up";
+                primary: false;
+                enabled: root.selected-trigger-index > 0;
+                clicked => { root.move-trigger-up(); }
+            }
+            Button {
+                text: "Move Down";
+                primary: false;
+                enabled: root.selected-trigger-index >= 0 && root.selected-trigger-index < root.trigger-rows.length - 1;
+                clicked => { root.move-trigger-down(); }
+            }
+
+            Rectangle { height: Theme.space-sm; }
+
+            Button {
+                text: "Enable/Disable";
+                primary: false;
+                enabled: root.selected-trigger-index >= 0;
+                clicked => { root.toggle-trigger(); }
+            }
+
+            Rectangle { height: Theme.space-sm; }
+
+            Button {
+                text: "Test";
+                primary: false;
+                enabled: root.selected-trigger-index >= 0;
+                clicked => { root.test-trigger(); }
+            }
+        }
+    }
+}

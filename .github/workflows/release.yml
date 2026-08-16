@@ -1,30 +1,64 @@
 name: Release
 
+# Tag-triggered only (v*) — every-push and manual-only were both considered
+# and passed over; see memory/project_build.md and the release-packaging
+# plan this workflow implements. Publishes a GitHub Release with a Linux
+# tarball and a Windows zip of the froklog tray client. The headless
+# binaries (froklog-server/-replay/-debug/-migrate/-loggen) are not part of
+# this release — they're dev/ops tools, already covered by ci.yml.
+
 on:
   push:
-    tags:
-      - "v*"
-
-permissions:
-  contents: write
+    tags: ["v*"]
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
-  build-windows:
-    name: Build Windows binaries
+  # Fails fast if the pushed tag doesn't match Cargo.toml's version — cheap
+  # guard against shipping a release under the wrong version number.
+  check-version:
+    name: Check tag matches Cargo.toml version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable + Windows target
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
+      - name: Compare tag to Cargo.toml
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME (version $TAG_VERSION) does not match Cargo.toml's version $CARGO_VERSION" >&2
+            exit 1
+          fi
+          echo "Tag matches Cargo.toml version $CARGO_VERSION"
 
-      - name: Install MinGW cross-compiler
-        run: sudo apt-get install -y gcc-mingw-w64-x86-64
+  # Native Linux build — same system deps as ci.yml's test-linux-tray job,
+  # plus the two fetch-* recipes, then the actual packaging recipe.
+  package-linux:
+    name: Package (Linux tray)
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # Keep in sync with justfile's setup-linux-tray-deps / ci.yml's
+      # test-linux-tray "Install tray system dependencies" step.
+      - name: Install tray system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libayatana-appindicator3-dev libxdo-dev \
+            libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev \
+            libasound2-dev \
+            cmake
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -33,25 +67,156 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-release-
+          key: ${{ runner.os }}-cargo-release-linux-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-linux-
 
-      - name: Build froklog.exe (tray client)
-        run: cargo build --release --bin froklog --target x86_64-pc-windows-gnu --features tray
+      - name: Fetch espeak-rs-sys
+        run: just fetch-espeak-rs-sys
 
-      - name: Build froklog-replay.exe
-        run: cargo build --release --bin froklog-replay --target x86_64-pc-windows-gnu
-
-      - name: Collect artifacts
+      - name: Fetch onnxruntime + default voice
         run: |
-          mkdir dist
-          cp target/x86_64-pc-windows-gnu/release/froklog.exe dist/
-          cp target/x86_64-pc-windows-gnu/release/froklog-replay.exe dist/
+          just fetch-onnxruntime
+          just fetch-default-voice
 
-      - name: Create GitHub Release
+      - name: Package
+        run: just package-tray-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: froklog-linux-x86_64
+          path: dist/froklog-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # Native windows-latest runner (real MSVC, not cargo-xwin cross-compile
+  # from Linux) — see the release-packaging plan for why: it's the only way
+  # espeak-rs-sys's cmake build actually produces its own espeak-ng-data
+  # (data.cmake runs the just-built espeak-ng-bin as part of the build; that
+  # tool is a Windows .exe and can't execute under cross-compilation from a
+  # Linux host). This is deliberately independent of package-linux — no
+  # cross-job data borrowing needed, unlike the local dev cargo-xwin path.
+  #
+  # No justfile recipe is used here (see package-tray-linux's neighboring
+  # comment in the justfile) — this build has no local-iteration purpose to
+  # serve, so the steps are inlined directly.
+  package-windows:
+    name: Package (Windows tray)
+    needs: check-version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-windows-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-windows-
+
+      # Same fix as vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+      # everywhere else, applied via `git apply` instead of `patch -p1` —
+      # GNU patch.exe isn't guaranteed on this runner the way git is.
+      - name: Fetch espeak-rs-sys
+        shell: bash
+        run: |
+          mkdir -p vendor
+          curl -sSL "https://crates.io/api/v1/crates/espeak-rs-sys/0.2.0/download" -o espeak-rs-sys.crate
+          tar -xzf espeak-rs-sys.crate -C vendor
+          rm espeak-rs-sys.crate
+          mv vendor/espeak-rs-sys-0.2.0 vendor/espeak-rs-sys
+          git -C vendor/espeak-rs-sys init -q
+          git -C vendor/espeak-rs-sys apply --whitespace=nowarn ../../vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+          rm -rf vendor/espeak-rs-sys/.git
+
+      # Same URLs/version as justfile's fetch-onnxruntime/fetch-default-voice.
+      - name: Fetch onnxruntime + default voice
+        shell: bash
+        run: |
+          mkdir -p assets/runtime/windows assets/voices
+          curl -sSL -o ort.zip \
+            "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-1.29.0.zip"
+          7z x -bd -y ort.zip -oassets/runtime/windows >/dev/null
+          rm ort.zip
+          curl -sSL -o assets/voices/en_US-amy-low.onnx \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/low/en_US-amy-low.onnx"
+          curl -sSL -o assets/voices/en_US-amy-low.onnx.json \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/low/en_US-amy-low.onnx.json"
+
+      # Static CRT: this is a portable zip with no installer to guarantee
+      # the VC++ Redistributable is present, so link vcruntime/msvcp in
+      # rather than depend on them being on the target machine already.
+      # Scoped to this step only (env:), not a repo-wide .cargo/config.toml
+      # change — local cargo-xwin dev/CI builds are unaffected.
+      - name: Build (release)
+        shell: bash
+        run: cargo build --release --features tray --bin froklog
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+
+      - name: Stage + zip
+        shell: bash
+        run: |
+          STAGE="dist/froklog-windows-x86_64"
+          rm -rf "$STAGE" && mkdir -p "$STAGE" "$STAGE/runtime" "$STAGE/voices"
+          cp target/release/froklog.exe "$STAGE/"
+          # Flatten: runtime_dir() (assets.rs) expects the .dll directly
+          # beside the exe, not nested under onnxruntime's own zip layout.
+          cp assets/runtime/windows/*/lib/onnxruntime.dll "$STAGE/runtime/"
+          cp assets/runtime/windows/*/lib/onnxruntime_providers_shared.dll "$STAGE/runtime/"
+          cp assets/voices/en_US-amy-low.onnx "$STAGE/voices/"
+          cp assets/voices/en_US-amy-low.onnx.json "$STAGE/voices/"
+          ESPEAK_DATA=$(find target -path '*/build/espeak-rs-sys-*/out/share/espeak-ng-data' -type d | head -1)
+          if [ -z "$ESPEAK_DATA" ]; then
+            echo "error: no espeak-ng-data found under target/ after a native build" >&2
+            exit 1
+          fi
+          cp -r "$ESPEAK_DATA" "$STAGE/espeak-ng-data"
+          printf '%s\r\n' \
+            'froklog (Windows tray client)' \
+            '==============================' \
+            '' \
+            'Run: froklog.exe' \
+            '' \
+            'This is a portable install: nothing gets written outside this folder' \
+            'except your own data alongside the exe (icons, sound packages,' \
+            'downloaded voices) and settings, same as any portable Windows app.' \
+            '' \
+            'If froklog.exe fails to start with a missing-DLL error, install the' \
+            'Microsoft Visual C++ Redistributable (x64):' \
+            'https://aka.ms/vs/17/release/vc_redist.x64.exe' \
+            > "$STAGE/README.txt"
+          mkdir -p dist
+          (cd dist && 7z a -bd froklog-windows-x86_64.zip froklog-windows-x86_64 >/dev/null)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: froklog-windows-x86_64
+          path: dist/froklog-windows-x86_64.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [package-linux, package-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/froklog.exe
-            dist/froklog-replay.exe
+            dist/froklog-linux-x86_64.tar.gz
+            dist/froklog-windows-x86_64.zip
           generate_release_notes: true

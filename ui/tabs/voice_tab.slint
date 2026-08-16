@@ -1,0 +1,93 @@
+import { Theme } from "../theme.slint";
+import { Card } from "../common/card.slint";
+import { LabeledField } from "../common/labeled-field.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { Checkbox } from "../common/checkbox.slint";
+import { RadioGroup } from "../common/radio-group.slint";
+import { Button } from "../common/buttons.slint";
+
+// Phase 2.3 — replaces create_voice_panel() in overlay_config_win.rs: TTS
+// enable, speed, audio mode (Smart Priority/Queue All/Interrupt
+// Constantly), per-priority verbosity filter, and voice selection.
+export component VoiceTab inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in-out property <bool> tts-enabled;
+    in-out property <string> tts-speed: "Normal (1x)";
+    property <[string]> speed-options: [
+        "Normal (1x)", "Fast (1.2x)", "Faster (1.5x)", "Fastest (2x)",
+    ];
+
+    // Index into ["Smart Priority (Recommended)", "Queue All Messages", "Interrupt Constantly"].
+    in-out property <int> audio-mode: 0;
+
+    in-out property <bool> read-emergency: true;
+    in-out property <bool> read-operational: true;
+    in-out property <bool> read-ambient: true;
+
+    // Populated from crate::overlay::overlay::enumerate_tts_voices() at
+    // dialog-open time (system-dependent, not a fixed list like the other
+    // combos on this tab).
+    in-out property <string> voice;
+    in property <[string]> voice-options;
+    callback test-voice();
+    callback manage-voices();
+
+    Text {
+        text: "Voice";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-xl;
+        font-weight: 700;
+    }
+
+    Card {
+        Checkbox { text: "Enable Text-to-Speech"; checked <=> root.tts-enabled; }
+
+        LabeledField {
+            label: "Voice Speed";
+            ComboBoxField { options: root.speed-options; value <=> root.tts-speed; }
+        }
+
+        LabeledField {
+            label: "Audio Mode";
+            RadioGroup {
+                options: [
+                    "Smart Priority (Recommended)", "Queue All Messages", "Interrupt Constantly",
+                ];
+                selected <=> root.audio-mode;
+            }
+        }
+
+        LabeledField {
+            label: "Verbosity Filter";
+            VerticalLayout {
+                spacing: Theme.space-xs;
+                Checkbox { text: "Read Emergency Alerts"; checked <=> root.read-emergency; }
+                Checkbox { text: "Read Operational Events"; checked <=> root.read-operational; }
+                Checkbox { text: "Read Ambient Notices"; checked <=> root.read-ambient; }
+            }
+        }
+
+        LabeledField {
+            label: "Voice";
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                ComboBoxField {
+                    options: root.voice-options;
+                    value <=> root.voice;
+                    horizontal-stretch: 1;
+                    empty-message: "No voices found — close and reopen Settings to retry";
+                }
+                Button { text: "\u{25B6}"; primary: false; clicked => { root.test-voice(); } }
+            }
+        }
+
+        Button {
+            text: "Manage Voices\u{2026}";
+            primary: false;
+            clicked => { root.manage-voices(); }
+        }
+    }
+}

@@ -1,0 +1,26 @@
+import { Theme } from "../theme.slint";
+
+export component SectionHeader inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    spacing: Theme.space-xs;
+
+    Text {
+        text: root.title;
+        color: Theme.text-primary;
+        font-size: Theme.font-size-lg;
+        font-weight: 700;
+    }
+
+    if root.subtitle != "": Text {
+        text: root.subtitle;
+        color: Theme.text-secondary;
+        font-size: Theme.font-size-sm;
+        wrap: word-wrap;
+    }
+
+    Rectangle {
+        height: 1px;
+        background: Theme.border;
+    }
+}

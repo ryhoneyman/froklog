@@ -253,4 +253,13 @@ cargo run --bin froklog-migrate -- /path/to/streams/
 | Currency | `You receive 6 platinum, 1 gold, 8 silver and 3 copper from the corpse.` |
 | /who | `[65 Warrior] Crunchy (Human)` — up to 3 classes per player |
 
+## License
+
+GPL-3.0-or-later (see [LICENSE](LICENSE)). This follows from `espeak-ng`
+(GPL-3.0-or-later), which the tray client's TTS statically links via
+`piper-rs`/`espeak-rs-sys` (see `vendor-patches/`) — a program distributing
+a GPL-linked binary is bound by GPL's terms for the combined work
+regardless of its own declared license, so froklog is licensed to match
+rather than misstate its actual terms.
+
 Add or adjust patterns in [src/patterns.rs](src/patterns.rs) — each is a compiled `once_cell::sync::Lazy<Regex>`.

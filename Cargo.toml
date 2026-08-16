@@ -1,7 +1,8 @@
 [package]
 name = "froklog"
-version = "0.1.0"
+version = "3.0.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 
 [lib]
 name = "froklog"
@@ -33,8 +34,25 @@ path = "src/bin/froklog-loggen/main.rs"
 
 [features]
 default = []
-# Windows systray client (no visible window; requires Windows cross-compile)
-tray = ["triggers", "dep:tray-icon", "dep:winit", "dep:image", "dep:zip"]
+# System-tray client (Windows + Linux); overlays, trigger engine, TTS, settings dialogs
+tray = [
+    "triggers",
+    "dep:tray-icon",
+    "dep:winit",
+    "dep:image",
+    "dep:zip",
+    "dep:slint",
+    "dep:rodio",
+    "dep:piper-rs",
+    "dep:ort",
+    "dep:rfd",
+    "dep:arboard",
+    "dep:open",
+    "dep:gtk",
+    "dep:x11rb",
+    "dep:raw-window-handle",
+    "dep:windows-sys",
+]
 # Data-driven trigger engine on its own. It is pure Rust — regex, glob and
 # serde, no platform APIs — so a non-Windows client can reuse the matching,
 # variables and templates and supply its own output for the actions.
@@ -68,6 +86,10 @@ tokio-util = { version = "0.7", features = ["io"] }
 
 # Parsing
 regex = "1"
+# AST access for auto-escaping literal `(text)` in trigger regex patterns
+# (see triggers::engine::auto_escape_literal_groups) — already pulled in
+# transitively by `regex`, pinned here so we can use it directly.
+regex-syntax = "0.8"
 once_cell = "1"
 
 # Lock-free shared state for hot-path reads
@@ -120,36 +142,122 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 tract-onnx       = { version = "0.22", optional = true }
 sentencepiece-rs = { version = "0.2", optional = true }
 
-[target.'cfg(windows)'.dependencies]
-# Sound playback (trigger sounds) — decodes WAV and MP3, WASAPI backend needs no C libs
-rodio = { version = "0.19", default-features = false, features = ["wav", "mp3"] }
+# Sound playback (trigger sounds) — decodes WAV and MP3. WASAPI on Windows,
+# ALSA/PulseAudio on Linux; no C deps to vendor either way (cpal talks to
+# the system audio API directly).
+rodio = { version = "0.19", optional = true, default-features = false, features = ["wav", "mp3"] }
 
-# Native Windows dialogs (file picker, message box)
-windows = { version = "0.58", features = [
+# GUI toolkit for the tray client's settings window and overlays —
+# software renderer only (no Skia/FemtoVG GPU path), which keeps this both
+# cross-compiling via MinGW (x86_64-pc-windows-gnu) and buildable natively
+# on Linux with no GPU driver assumptions. `system-tray` default feature is
+# dropped: this app manages its own tray icon via the `tray-icon` crate.
+slint = { version = "1", optional = true, default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-software",
+    # Exposes the underlying winit::window::Window (WinitWindowAccessor),
+    # used to call the OS's native interactive window-move loop for the
+    # alert/history/DPS-meter overlay windows' drag-to-move — see
+    # overlay.rs's create_alert_window. Manually repositioning a window by
+    # tracking mouse deltas relative to that same window causes a feedback
+    # loop (each move changes what "mouse position relative to the window"
+    # means, which re-triggers another move) that reads as jittering while
+    # dragging; the native OS move loop is what real title-bar dragging
+    # already uses and has none of that.
+    "unstable-winit-030",
+] }
+
+# Cross-platform native file/message dialogs (log file, sound file, trigger
+# export/import, warning messages) — replaces raw Win32 common dialogs.
+# rfd's *actual* default backend on Linux is the xdg-desktop-portal (async,
+# via ashpd/D-Bus), not GTK3 — despite what the comment here used to claim.
+# That portal often isn't running (or isn't configured) in the environments
+# this app targets, so `pick_file()`/`save_file()` silently returns None with
+# no dialog ever appearing. Force the GTK3 backend instead: it matches the
+# GTK the tray icon already initializes/pumps via `tray-icon` (see tray.rs),
+# so no extra event-loop plumbing is needed. Windows/macOS backends aren't
+# gated by these features at all, so this only changes Linux behavior.
+rfd = { version = "0.15", optional = true, default-features = false, features = [
+    "gtk3",
+] }
+
+# Cross-platform clipboard (viewer-URL copy) — replaces raw Win32 clipboard calls.
+arboard = { version = "3", optional = true }
+
+# Cross-platform "open URL in default browser" — replaces ShellExecuteW.
+open = { version = "5", optional = true }
+
+# Neural text-to-speech (replaces the `tts` crate — SAPI/speech-dispatcher/
+# AVFoundation — with one bundled + downloadable-more voice set on every
+# platform). See src/tts.rs.
+piper-rs = { version = "0.2", optional = true }
+# Pinned to the exact version piper-rs depends on so Cargo unifies features:
+# load-dynamic makes ort dlopen() a manually-provided onnxruntime.so at
+# runtime (via ORT_DYLIB_PATH) instead of statically linking its own
+# downloaded prebuilt binary, which needs glibc >=2.38 on Linux.
+ort = { version = "=2.0.0-rc.12", optional = true, features = ["load-dynamic"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# `tray-icon`'s GTK/appindicator backend (and rfd's GTK dialogs) need GTK's
+# own GLib event loop serviced — unlike Windows, where winit already drives
+# the win32 message loop tray-icon piggybacks on. `run()` in tray.rs calls
+# `gtk::init()` once and pumps this loop from the existing Slint timer
+# rather than dedicating a whole OS thread to `gtk::main()`.
+gtk = { version = "0.18", optional = true }
+
+# X11 EWMH taskbar-hint support for the overlay windows (see
+# overlay_draw.rs::hide_from_taskbar) — mirrors Windows' `set_skip_taskbar`.
+# Version/feature set matches what winit's own X11 backend already pulls in
+# (see winit's Cargo.toml), so this doesn't add a second x11rb build.
+x11rb = { version = "0.13", optional = true, default-features = false, features = [
+    "allow-unsafe-code",
+    "dl-libxcb",
+] }
+# Reads the raw X11 window ID out of the winit-created overlay windows, to
+# hand to x11rb above. Version matches winit's own `rwh_06` dependency
+# (winit already compiles with this enabled — see i-slint-backend-winit's
+# Cargo.toml — so this doesn't add a second raw-window-handle build either).
+raw-window-handle = { version = "0.6", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Sets WS_EX_NOACTIVATE on the overlay windows (see
+# overlay_draw.rs::set_no_activate) so showing them never steals input focus
+# from the game. Version matches winit's own windows-sys dependency (see
+# winit's Cargo.toml), so this doesn't add a second windows-sys build.
+windows-sys = { version = "0.52", optional = true, features = [
     "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_System_Com",
-    "Win32_System_DataExchange",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
-    "Win32_System_Ole",
-    "Win32_UI_Controls",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Controls_Dialogs",
-    "Win32_UI_Shell",
-    "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
-    "Win32_Media",
-    "Win32_Media_Speech",
-    "Win32_System_Registry",
-]}
+] }
+# Reads the raw HWND out of the winit-created overlay windows, to hand to
+# windows-sys above. Same crate/version winit itself already compiles with
+# (see the Linux `raw-window-handle` entry above), so this doesn't add a
+# second build.
+raw-window-handle = { version = "0.6", optional = true }
 
 [build-dependencies]
 cc = "1"
 embed-resource = "3"
+slint-build = "1"
 
 [dev-dependencies]
 tempfile = "3"
+
+# espeak-rs-sys 0.2.0's vendored espeak-ng.c fails to cross-compile to
+# windows-msvc under clang-cl (missing `#include <io.h>` for `_setmode` —
+# real MSVC pulls this in transitively, clang-cl doesn't), plus two related
+# link fixes (advapi32, target-vs-host cfg check) — see
+# vendor-patches/espeak-rs-sys-windows-cross-compile.patch, otherwise
+# identical to the crates.io release. Only affects the CLI tool build
+# (espeak-ng-bin), which nothing in froklog actually links against — but
+# espeak-rs-sys's build.rs always builds cmake's full `install` target.
+# vendor/espeak-rs-sys itself is gitignored and fetched by
+# `just fetch-espeak-rs-sys` (run once per machine/CI, not committed).
+# Remove this patch (and vendor/) if a future espeak-rs-sys release fixes
+# it upstream.
+[patch.crates-io]
+espeak-rs-sys = { path = "vendor/espeak-rs-sys" }
 
 [profile.release]
 opt-level = 3

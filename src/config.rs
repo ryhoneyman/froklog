@@ -9,11 +9,11 @@ fn default_true() -> bool {
 }
 
 fn default_overlay_alpha() -> u8 {
-    200
+    255
 }
 
 fn default_overlay_start_font_size() -> u32 {
-    10
+    6
 }
 
 fn default_overlay_max_font_size() -> u32 {
@@ -21,7 +21,7 @@ fn default_overlay_max_font_size() -> u32 {
 }
 
 fn default_overlay_fly_ms() -> u32 {
-    240
+    1000
 }
 
 fn default_overlay_hold_secs() -> f32 {
@@ -33,7 +33,7 @@ fn default_overlay_history_font_size() -> u32 {
 }
 
 fn default_overlay_history_idle_secs() -> u32 {
-    8
+    0
 }
 
 fn default_overlay_history_max_entries() -> usize {
@@ -41,23 +41,97 @@ fn default_overlay_history_max_entries() -> usize {
 }
 
 fn default_overlay_history_width() -> i32 {
-    320
+    0
+}
+
+// ── Combined Alert + History overlay settings ───────────────────────────────
+// Mirror the standalone alert/history defaults above — the merged overlay
+// used to just read those shared fields directly, but it needs its own
+// independent copies (see `Config::overlay_merged_start_font_size` etc.'s
+// doc comments).
+
+fn default_overlay_merged_start_font_size() -> u32 {
+    6
+}
+
+fn default_overlay_merged_max_font_size() -> u32 {
+    60
+}
+
+fn default_overlay_merged_fly_ms() -> u32 {
+    1000
+}
+
+fn default_overlay_merged_hold_secs() -> f32 {
+    2.5
+}
+
+fn default_overlay_merged_alpha() -> u8 {
+    255
+}
+
+fn default_overlay_merged_history_font_size() -> u32 {
+    12
+}
+
+fn default_overlay_merged_history_idle_secs() -> u32 {
+    0
+}
+
+fn default_overlay_merged_history_max_entries() -> usize {
+    8
 }
 
 fn default_neg_one_i32() -> i32 {
     -1
 }
 
+fn default_overlay_alert_window() -> OverlayWindowConfig {
+    OverlayWindowConfig {
+        enabled: false,
+        locked: false,
+        x: -1,
+        y: -1,
+    }
+}
+
+fn default_overlay_history_window() -> OverlayWindowConfig {
+    OverlayWindowConfig {
+        enabled: true,
+        locked: false,
+        x: -1,
+        y: -1,
+    }
+}
+
+fn default_overlay_meter_window() -> OverlayWindowConfig {
+    OverlayWindowConfig {
+        enabled: false,
+        locked: false,
+        x: -1,
+        y: -1,
+    }
+}
+
+fn default_overlay_merged_window() -> OverlayWindowConfig {
+    OverlayWindowConfig {
+        enabled: false,
+        locked: false,
+        x: -1,
+        y: -1,
+    }
+}
+
 fn default_meter_max_rows() -> usize {
-    12
+    8
 }
 
 fn default_meter_idle_secs() -> u32 {
-    10
+    0
 }
 
 fn default_meter_font_size() -> u32 {
-    11
+    12
 }
 
 fn default_meter_width() -> i32 {
@@ -70,6 +144,13 @@ fn default_sound_volume() -> u8 {
 
 fn default_sound_package() -> String {
     "default".to_string()
+}
+
+/// The one voice bundled with every install (see
+/// `assets::bundled_voices_dir()`) — low-quality tier, chosen so TTS works
+/// out of the box with no first-run download.
+fn default_tts_voice() -> String {
+    "en_US-amy-low".to_string()
 }
 
 /// Voice speed multiplier for TTS playback.
@@ -112,10 +193,118 @@ pub enum TtsAudioMode {
     InterruptConstantly,
 }
 
+/// A named EverQuest log file the user has configured — one game
+/// install/character's `eqlog_*.txt`. Multiple profiles may exist (e.g. one
+/// per EQ variant or character); exactly one is watched at a time, chosen by
+/// `Config::log_watch_mode`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LogProfile {
+    pub name: String,
+    pub path: String,
+    /// Game id, e.g. "eql" for Everquest Legends — see settings_window.rs's
+    /// `GAME_IDS`/`GAMES`.
+    #[serde(default)]
+    pub game: Option<String>,
+    /// Explicit server name; overrides filename extraction when set.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// Explicit player name; overrides filename extraction when set.
+    #[serde(default)]
+    pub player: Option<String>,
+    /// Whether this profile exposes a public /player/{game}/{server}/{player}
+    /// URL when it's the active stream. Defaults to false (opt-in).
+    #[serde(default)]
+    pub public_stream: bool,
+}
+
+impl LogProfile {
+    /// Best-effort player name: explicit field first, then derived from this
+    /// profile's log filename.
+    pub fn effective_player(&self) -> String {
+        self.player
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| player_name_from_path(&self.path))
+            .unwrap_or_default()
+    }
+
+    /// Best-effort server name: explicit field first, then derived from this
+    /// profile's log filename (e.g. "Test" from eqlog_Name_Test.txt).
+    pub fn effective_server(&self) -> String {
+        self.server
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| server_name_from_path(&self.path))
+            .unwrap_or_default()
+    }
+}
+
+/// Which log profile is actively tailed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LogWatchMode {
+    /// Watch whichever configured profile's file was written to most recently.
+    #[default]
+    Auto,
+    /// Always watch the named profile, regardless of other profiles' activity.
+    Pinned(String),
+}
+
+/// Shared chrome for an overlay window: whether it's shown, whether it's
+/// click-through (locked in place), and its last dragged position. One of
+/// these lives per [`crate::overlay_registry::OverlayKind`] on `Config`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OverlayWindowConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub locked: bool,
+    /// -1 = auto-position.
+    #[serde(default = "default_neg_one_i32")]
+    pub x: i32,
+    /// -1 = auto-position.
+    #[serde(default = "default_neg_one_i32")]
+    pub y: i32,
+}
+
+impl Default for OverlayWindowConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            locked: false,
+            x: -1,
+            y: -1,
+        }
+    }
+}
+
+/// Which alert presentation is active.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertStyle {
+    /// A standalone flying alert window plus a separate history window.
+    #[default]
+    Separate,
+    /// One combined window where alerts land directly at the top of the
+    /// history list instead of flying in a window of their own.
+    Merged,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Path to the EverQuest log file being tailed.
+    /// Legacy single-logfile path. Only read once, by `load()`'s migration
+    /// into `log_profiles`/`log_watch_mode` below — nothing writes to this
+    /// field anymore. Kept so old config.toml files still load.
+    #[serde(default)]
     pub log_path: Option<String>,
+    /// Configured log files, each a distinct EQ install/character. Exactly
+    /// one is watched at a time — see `log_watch_mode` and
+    /// `resolve_active_log_path()`.
+    #[serde(default)]
+    pub log_profiles: Vec<LogProfile>,
+    /// Which `log_profiles` entry is currently watched.
+    #[serde(default)]
+    pub log_watch_mode: LogWatchMode,
     /// Base HTTP URL of the froklog-server, e.g. `http://server:8766`.
     pub server_url: Option<String>,
     /// Secret stream token used to authenticate the ingest WebSocket.
@@ -125,20 +314,14 @@ pub struct Config {
     /// Viewer token embedded in the shareable URL.
     pub view_token: Option<String>,
 
-    /// Game selection, e.g. "Everquest Legends".
-    #[serde(default)]
-    pub game: Option<String>,
-    /// EQ server name extracted from / matching the log filename, e.g. "Test".
-    #[serde(default)]
-    pub server_name: Option<String>,
-    /// Explicit player name (A-Z only); overrides filename extraction.
-    #[serde(default)]
-    pub player_name: Option<String>,
     /// Optional password required by the froklog-server to create streams.
     /// Left empty for public servers; set by the server operator via FROKLOG_STREAM_PASSWORD.
     #[serde(default)]
     pub stream_password: Option<String>,
-    /// Whether to expose a public /player/{server}/{name} URL for this stream.
+    /// Legacy global toggle, superseded by the per-profile
+    /// `LogProfile::public_stream`. Only read once, by `load()`'s migration
+    /// into `log_profiles[].public_stream` below — nothing writes to this
+    /// field anymore. Kept so old config.toml files still load.
     #[serde(default)]
     pub public_stream: bool,
     /// Whether the log-tail engine is enabled. Defaults to true.
@@ -146,7 +329,10 @@ pub struct Config {
     pub logging_enabled: bool,
     /// Whether parsed events are pushed to the remote server. Local processing
     /// (DPS meter, triggers, overlays) runs regardless of this setting; it only
-    /// gates the network push. Defaults to true.
+    /// gates the network push. `#[serde(default)]` here is for configs saved
+    /// before this field existed, when remote push always ran — those users
+    /// keep getting `true` on load. Fresh installs get `false` from
+    /// `Config::fresh()` instead.
     #[serde(default = "default_true")]
     pub remote_logging_enabled: bool,
 
@@ -162,86 +348,96 @@ pub struct Config {
     #[serde(default = "default_sound_package")]
     pub sound_package: String,
 
-    // ── Overlay settings ──────────────────────────────────────────────────────
-    /// Whether the overlay window is visible.
+    // ── Overlay window chrome (visibility/lock/position) ───────────────────────
+    /// Standalone alert overlay window — used when `alert_style` is `Separate`.
+    #[serde(default = "default_overlay_alert_window")]
+    pub overlay_alert: OverlayWindowConfig,
+    /// Standalone history overlay window — used when `alert_style` is `Separate`.
+    #[serde(default = "default_overlay_history_window")]
+    pub overlay_history: OverlayWindowConfig,
+    /// DPS/Tank/Heal meter window.
+    #[serde(default = "default_overlay_meter_window")]
+    pub overlay_meter: OverlayWindowConfig,
+    /// Combined alert+history overlay window — used when `alert_style` is `Merged`.
+    #[serde(default = "default_overlay_merged_window")]
+    pub overlay_merged: OverlayWindowConfig,
+    /// Which alert presentation is active — see [`AlertStyle`].
     #[serde(default)]
-    pub overlay_enabled: bool,
-    /// Window opacity 0–255 (255 = fully opaque). Default 200.
+    pub alert_style: AlertStyle,
+
+    // ── Overlay settings ──────────────────────────────────────────────────────
+    /// Window opacity 0–255 (255 = fully opaque). Default 255.
     #[serde(default = "default_overlay_alpha")]
     pub overlay_alpha: u8,
     /// Font family for overlay text. Empty = system default (Segoe UI).
     #[serde(default)]
     pub overlay_font: String,
-    /// Font point size at the start of the fly-in animation. Default 10.
+    /// Font point size at the start of the fly-in animation. Default 6.
     #[serde(default = "default_overlay_start_font_size")]
     pub overlay_start_font_size: u32,
     /// Font point size at the peak / hold of the fly-in animation. Default 60.
     #[serde(default = "default_overlay_max_font_size")]
     pub overlay_max_font_size: u32,
-    /// Milliseconds for the fly-in and shrink-out animations. Default 240.
+    /// Milliseconds for the fly-in and shrink-out animations. Default 1000.
     #[serde(default = "default_overlay_fly_ms")]
     pub overlay_fly_ms: u32,
     /// Seconds the message holds at peak size before shrinking away. Default 2.5.
     #[serde(default = "default_overlay_hold_secs")]
     pub overlay_hold_secs: f32,
-    /// Overlay window X position (pixels from left of screen). Default -1 = auto-centre.
-    #[serde(default = "default_neg_one_i32")]
-    pub overlay_x: i32,
-    /// Overlay window Y position (pixels from top of screen). Default -1 = auto-centre.
-    #[serde(default = "default_neg_one_i32")]
-    pub overlay_y: i32,
-    /// When true, the alert overlay window is click-through (locked in place).
-    #[serde(default)]
-    pub overlay_locked: bool,
 
-    // ── Overlay history settings ──────────────────────────────────────────────
-    /// Whether the history overlay window can be shown at all, independent of
-    /// the alert overlay's own enable toggle. Defaults to true.
-    #[serde(default = "default_true")]
-    pub overlay_history_enabled: bool,
+    // ── Overlay history settings ────────────────────────────────────────────────
     /// Font point size for history rows. Default 12.
     #[serde(default = "default_overlay_history_font_size")]
     pub overlay_history_font_size: u32,
-    /// Seconds of inactivity before the history overlay auto-hides. 0 = never. Default 8.
+    /// Seconds of inactivity before the history overlay auto-hides. 0 = never. Default 0.
     #[serde(default = "default_overlay_history_idle_secs")]
     pub overlay_history_idle_secs: u32,
     /// Maximum number of rows kept in the history overlay. Default 8.
     #[serde(default = "default_overlay_history_max_entries")]
     pub overlay_history_max_entries: usize,
-    /// History overlay window X position. Default -1 = auto-position.
-    #[serde(default = "default_neg_one_i32")]
-    pub overlay_history_x: i32,
-    /// History overlay window Y position. Default -1 = auto-position.
-    #[serde(default = "default_neg_one_i32")]
-    pub overlay_history_y: i32,
-    /// History overlay window width in pixels. Default 320.
+    /// History overlay window width in pixels. Default 0.
     #[serde(default = "default_overlay_history_width")]
     pub overlay_history_width: i32,
-    /// When true, the history overlay window is click-through (locked in place).
-    #[serde(default)]
-    pub overlay_history_locked: bool,
+
+    // ── Combined Alert + History overlay settings ───────────────────────────────
+    // Independent of the standalone `overlay_*`/`overlay_history_*` fields above
+    // — the Combined overlay used to just read those directly, but that meant
+    // its appearance couldn't be tuned separately from the Separate-mode
+    // windows even though only one of the two is ever visible at a time.
+    /// Font point size at the start of the incoming-alert fly-in animation. Default 6.
+    #[serde(default = "default_overlay_merged_start_font_size")]
+    pub overlay_merged_start_font_size: u32,
+    /// Font point size at the peak/hold of the incoming-alert animation. Default 60.
+    #[serde(default = "default_overlay_merged_max_font_size")]
+    pub overlay_merged_max_font_size: u32,
+    /// Milliseconds for the incoming-alert fly-in/shrink-out animations. Default 1000.
+    #[serde(default = "default_overlay_merged_fly_ms")]
+    pub overlay_merged_fly_ms: u32,
+    /// Seconds the incoming alert holds at peak size before shrinking away. Default 2.5.
+    #[serde(default = "default_overlay_merged_hold_secs")]
+    pub overlay_merged_hold_secs: f32,
+    /// Window opacity 0-255 (255 = fully opaque). Default 255.
+    #[serde(default = "default_overlay_merged_alpha")]
+    pub overlay_merged_alpha: u8,
+    /// Font point size for history rows. Default 12.
+    #[serde(default = "default_overlay_merged_history_font_size")]
+    pub overlay_merged_history_font_size: u32,
+    /// Seconds of inactivity before the combined overlay auto-hides. 0 = never. Default 0.
+    #[serde(default = "default_overlay_merged_history_idle_secs")]
+    pub overlay_merged_history_idle_secs: u32,
+    /// Maximum number of history rows kept. Default 8.
+    #[serde(default = "default_overlay_merged_history_max_entries")]
+    pub overlay_merged_history_max_entries: usize,
 
     // ── DPS meter settings ──────────────────────────────────────────────────────
-    /// Whether the live DPS/Tank/Heal meter window is visible.
-    #[serde(default)]
-    pub meter_enabled: bool,
-    /// Meter window X position (pixels from left of screen). Default -1 = auto-position.
-    #[serde(default = "default_neg_one_i32")]
-    pub meter_x: i32,
-    /// Meter window Y position (pixels from top of screen). Default -1 = auto-position.
-    #[serde(default = "default_neg_one_i32")]
-    pub meter_y: i32,
-    /// When true, the meter window is click-through (locked in place).
-    #[serde(default)]
-    pub meter_locked: bool,
-    /// Maximum number of ranked rows shown per tab. Default 12.
+    /// Maximum number of ranked rows shown per tab. Default 8.
     #[serde(default = "default_meter_max_rows")]
     pub meter_max_rows: usize,
     /// Seconds of inactivity (no new combat events for the active mob) before the
-    /// meter auto-hides. 0 = never hide. Default 10.
+    /// meter auto-hides. 0 = never hide. Default 0.
     #[serde(default = "default_meter_idle_secs")]
     pub meter_idle_secs: u32,
-    /// Font point size for meter rows. Default 11.
+    /// Font point size for meter rows. Default 12.
     #[serde(default = "default_meter_font_size")]
     pub meter_font_size: u32,
     /// Meter window width in pixels, user-resizable via the left/right edges.
@@ -268,8 +464,16 @@ pub struct Config {
     /// Whether Ambient priority voice alerts are spoken.
     #[serde(default = "default_true")]
     pub tts_read_ambient: bool,
-    /// SAPI voice token key name (e.g. `TTS_MS_EN-US_DAVID_11.0`).  Empty = system default.
-    #[serde(default)]
+    /// Piper voice name (e.g. `en_US-amy-low`) — the `.onnx`/`.onnx.json`
+    /// file stem in `assets::bundled_voices_dir()` or
+    /// `assets::downloaded_voices_dir()`. Defaults to the bundled voice so
+    /// TTS works out of the box. Configs saved before this replaced the
+    /// `tts` crate stored an OS voice id here instead (SAPI/speech-
+    /// dispatcher) — there's no sane mapping from that to a piper voice
+    /// name, so this is a clean break, not a migration: an old id here
+    /// just won't resolve to any installed voice file and `PiperEngine`
+    /// silently fails to load until the user picks one again in Settings.
+    #[serde(default = "default_tts_voice")]
     pub tts_voice: String,
 }
 
@@ -281,11 +485,36 @@ impl Config {
     fn fresh() -> Self {
         Self {
             logging_enabled: true,
-            remote_logging_enabled: true,
-            overlay_history_enabled: true,
+            remote_logging_enabled: false,
+            overlay_alert: default_overlay_alert_window(),
+            overlay_history: default_overlay_history_window(),
+            overlay_meter: default_overlay_meter_window(),
+            overlay_merged: default_overlay_merged_window(),
             sound_enabled: true,
             sound_volume: 100,
             sound_package: default_sound_package(),
+            tts_voice: default_tts_voice(),
+            overlay_alpha: default_overlay_alpha(),
+            overlay_start_font_size: default_overlay_start_font_size(),
+            overlay_max_font_size: default_overlay_max_font_size(),
+            overlay_fly_ms: default_overlay_fly_ms(),
+            overlay_hold_secs: default_overlay_hold_secs(),
+            overlay_history_font_size: default_overlay_history_font_size(),
+            overlay_history_idle_secs: default_overlay_history_idle_secs(),
+            overlay_history_max_entries: default_overlay_history_max_entries(),
+            overlay_history_width: default_overlay_history_width(),
+            overlay_merged_start_font_size: default_overlay_merged_start_font_size(),
+            overlay_merged_max_font_size: default_overlay_merged_max_font_size(),
+            overlay_merged_fly_ms: default_overlay_merged_fly_ms(),
+            overlay_merged_hold_secs: default_overlay_merged_hold_secs(),
+            overlay_merged_alpha: default_overlay_merged_alpha(),
+            overlay_merged_history_font_size: default_overlay_merged_history_font_size(),
+            overlay_merged_history_idle_secs: default_overlay_merged_history_idle_secs(),
+            overlay_merged_history_max_entries: default_overlay_merged_history_max_entries(),
+            meter_max_rows: default_meter_max_rows(),
+            meter_idle_secs: default_meter_idle_secs(),
+            meter_font_size: default_meter_font_size(),
+            meter_width: default_meter_width(),
             ..Default::default()
         }
     }
@@ -296,7 +525,23 @@ impl Config {
             return Self::fresh();
         };
         match toml::from_str(&text) {
-            Ok(cfg) => cfg,
+            Ok(cfg) => {
+                let cfg: Self = cfg;
+                let cfg = if cfg.log_profiles.is_empty() && cfg.log_path.is_some() {
+                    let migrated = cfg.migrate_legacy_log_path();
+                    migrated.save();
+                    migrated
+                } else {
+                    cfg
+                };
+                if cfg.public_stream {
+                    let migrated = cfg.migrate_legacy_public_stream();
+                    migrated.save();
+                    migrated
+                } else {
+                    cfg
+                }
+            }
             Err(e) => {
                 // A corrupt config used to be silently replaced with defaults
                 // — server URL, tokens and layout gone, then saved over.
@@ -349,14 +594,13 @@ impl Config {
     /// private streams use /stream/{id}?vtok={token}.
     pub fn stream_url(&self) -> Option<String> {
         let base = self.server_url.as_deref()?.trim_end_matches('/');
-        if self.public_stream {
-            let game = self.game.as_deref()?;
-            let server = self
-                .server_name
-                .clone()
-                .or_else(|| self.server_name_from_log())?;
-            let player = self.effective_player_name();
-            if player.is_empty() {
+        let profile = self.resolve_active_profile();
+        if profile.is_some_and(|p| p.public_stream) {
+            let profile = profile?;
+            let game = profile.game.as_deref()?;
+            let server = profile.effective_server();
+            let player = profile.effective_player();
+            if server.is_empty() || player.is_empty() {
                 return None;
             }
             Some(format!("{base}/player/{game}/{server}/{player}"))
@@ -367,13 +611,15 @@ impl Config {
 
     /// Returns true when there's enough config to run the local engine (tailer,
     /// parser, triggers, DPS meter) regardless of remote server availability.
+    /// Deliberately O(1) — no filesystem access — so callers may poll this
+    /// as often as they like.
     pub fn local_ready(&self) -> bool {
-        self.log_path.is_some()
+        !self.log_profiles.is_empty()
     }
 
     /// Returns true when the config has everything needed to start pushing.
     pub fn is_ready(&self) -> bool {
-        self.log_path.is_some() && self.ingest_ws_url().is_some() && self.stream_token.is_some()
+        self.local_ready() && self.ingest_ws_url().is_some() && self.stream_token.is_some()
     }
 
     /// Returns true when remote push should actually run: the user hasn't
@@ -387,38 +633,108 @@ impl Config {
         self.stream_id.is_some() && self.stream_token.is_some() && self.view_token.is_some()
     }
 
-    /// Best-effort player name: explicit field first, then derived from log filename.
-    pub fn effective_player_name(&self) -> String {
-        if let Some(ref name) = self.player_name {
-            if !name.is_empty() {
-                return name.clone();
-            }
-        }
-        self.log_path
-            .as_deref()
-            .and_then(|p| {
-                let stem = std::path::Path::new(p).file_stem()?.to_str()?;
-                let parts: Vec<&str> = stem.split('_').collect();
-                if parts.len() >= 3 {
-                    Some(parts[1].to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default()
+    /// Resolves which configured log file is currently the active one. Thin
+    /// wrapper over `resolve_active_profile()` for callers that only need
+    /// the path.
+    pub fn resolve_active_log_path(&self) -> Option<String> {
+        self.resolve_active_profile().map(|p| p.path.clone())
     }
 
-    /// Server name derived from log filename (e.g. "Test" from eqlog_Name_Test.txt).
-    pub fn server_name_from_log(&self) -> Option<String> {
-        let p = self.log_path.as_deref()?;
-        let stem = std::path::Path::new(p).file_stem()?.to_str()?;
-        // eqlog_{player}_{server}.txt  →  parts[2] is the server
-        let parts: Vec<&str> = stem.split('_').collect();
-        if parts.len() >= 3 {
-            Some(parts[2..].join("_"))
-        } else {
-            None
+    /// Resolves which configured log profile is currently active. In Auto
+    /// mode this stats every profile's path to find the most recently
+    /// written one — only call this at engine start or from a coarse
+    /// background poll, never in a tight loop.
+    pub fn resolve_active_profile(&self) -> Option<&LogProfile> {
+        match &self.log_watch_mode {
+            LogWatchMode::Pinned(name) => self
+                .log_profiles
+                .iter()
+                .find(|p| &p.name == name)
+                .or_else(|| self.log_profiles.first()),
+            LogWatchMode::Auto => {
+                let newest = self
+                    .log_profiles
+                    .iter()
+                    .filter_map(|p| {
+                        let modified = std::fs::metadata(&p.path).ok()?.modified().ok()?;
+                        Some((modified, p))
+                    })
+                    .max_by_key(|(t, _)| *t)
+                    .map(|(_, p)| p);
+                // No file currently stats successfully (e.g. not written yet) —
+                // fall back to the first profile so run_engine_once still
+                // starts a tailer, which retries a missing file internally
+                // rather than the engine bailing out.
+                newest.or_else(|| self.log_profiles.first())
+            }
         }
+    }
+
+    /// One-time migration of the legacy single-`log_path` field into a
+    /// `Pinned` log profile. Only called from `load()` when `log_profiles`
+    /// is empty and a legacy path is present.
+    fn migrate_legacy_log_path(&self) -> Self {
+        let mut migrated = self.clone();
+        let Some(path) = migrated.log_path.take() else {
+            return migrated;
+        };
+        let player = player_name_from_path(&path);
+        let server = server_name_from_path(&path);
+        let name = match (&player, &server) {
+            (Some(p), Some(s)) => format!("{p}  ({s})"),
+            _ => std::path::Path::new(&path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("Log Profile")
+                .to_string(),
+        };
+        migrated.log_watch_mode = LogWatchMode::Pinned(name.clone());
+        migrated.log_profiles.push(LogProfile {
+            name,
+            path,
+            game: Some("eql".to_string()),
+            server,
+            player,
+            public_stream: false,
+        });
+        migrated
+    }
+
+    /// One-time migration of the legacy global `public_stream` toggle into
+    /// every configured profile's own `LogProfile::public_stream`. Only
+    /// called from `load()` when the legacy flag is set — it applied to
+    /// whichever profile was active, so turning it on everywhere preserves
+    /// prior behavior regardless of which profile ends up active next.
+    fn migrate_legacy_public_stream(&self) -> Self {
+        let mut migrated = self.clone();
+        for profile in &mut migrated.log_profiles {
+            profile.public_stream = true;
+        }
+        migrated.public_stream = false;
+        migrated
+    }
+}
+
+/// Derives a player name from an `eqlog_{player}_{server}.txt`-style filename.
+pub(crate) fn player_name_from_path(path: &str) -> Option<String> {
+    let stem = std::path::Path::new(path).file_stem()?.to_str()?;
+    let parts: Vec<&str> = stem.split('_').collect();
+    if parts.len() >= 3 {
+        Some(parts[1].to_string())
+    } else {
+        None
+    }
+}
+
+/// Derives a server name from an `eqlog_{player}_{server}.txt`-style filename.
+pub(crate) fn server_name_from_path(path: &str) -> Option<String> {
+    let stem = std::path::Path::new(path).file_stem()?.to_str()?;
+    // eqlog_{player}_{server}.txt  →  parts[2..] is the server
+    let parts: Vec<&str> = stem.split('_').collect();
+    if parts.len() >= 3 {
+        Some(parts[2..].join("_"))
+    } else {
+        None
     }
 }
 
