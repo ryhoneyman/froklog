@@ -3,8 +3,13 @@ name: CI
 on:
   push:
     branches: ["main"]
+    # dynamic-config.json is data the client downloads at runtime (see
+    # src/trigger_presets.rs), not code — editing it shouldn't need a
+    # full CI run any more than it needs a release.
+    paths-ignore: ["dynamic-config.json"]
   pull_request:
     branches: ["main"]
+    paths-ignore: ["dynamic-config.json"]
 
 env:
   CARGO_TERM_COLOR: always
