@@ -1,0 +1,12 @@
+# Without this, GitHub-hosted Windows runners' default git config
+# (core.autocrlf=true) silently converts these to CRLF on checkout —
+# harmless for most text files, but fatal for unified diffs: `git apply`
+# parses them byte-exactly, and a stray \r on a blank context line breaks
+# hunk parsing ("error: corrupt patch at line N"). Confirmed: this broke
+# vendor-patches/espeak-rs-sys-windows-cross-compile.patch specifically in
+# .github/workflows/release.yml's Windows job (git apply), even though the
+# same file applies fine via `patch -p1` on the Linux jobs, which don't do
+# this conversion by default.
+*.patch text eol=lf
+justfile text eol=lf
+*.sh text eol=lf
