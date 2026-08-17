@@ -233,6 +233,26 @@ pub mod settings_window {
         let window = crate::overlay_draw::overlay_draw::suppress_utility_window_hint(|| {
             SettingsWindow::new().expect("create settings window")
         });
+        // Dock/taskbar icon for the one window that has a taskbar entry.
+        // Deferred like hide_from_taskbar: the native window may not exist
+        // synchronously during creation.
+        {
+            let weak = window.as_weak();
+            slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+                let Some(w) = weak.upgrade() else { return };
+                use slint::winit_030::WinitWindowAccessor;
+                const ICON: &[u8] = include_bytes!("../assets/froklog-window-64.png");
+                if let Ok(img) = image::load_from_memory(ICON) {
+                    let rgba = img.into_rgba8();
+                    let (iw, ih) = rgba.dimensions();
+                    if let Ok(icon) = winit::window::Icon::from_rgba(rgba.into_raw(), iw, ih) {
+                        let _ = w
+                            .window()
+                            .with_winit_window(|ww| ww.set_window_icon(Some(icon)));
+                    }
+                }
+            });
+        }
         window.set_current_tab(initial_tab);
         window.set_pattern_presets(ModelRc::new(VecModel::from(build_pattern_preset_rows())));
 
