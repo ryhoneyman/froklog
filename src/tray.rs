@@ -441,8 +441,11 @@ pub mod tray {
                             prev_icon_choice = Some(choice);
                             TRAY.with(|t| {
                                 if let Some(tray) = t.borrow().as_ref() {
-                                    let _ = tray
-                                        .set_icon(Some(make_icon(&cfg, logging_on, is_connected)));
+                                    let _ = tray.set_icon(Some(make_icon(
+                                        &cfg,
+                                        logging_on,
+                                        is_connected,
+                                    )));
                                 }
                             });
                         }

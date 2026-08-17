@@ -759,7 +759,8 @@ pub(crate) fn server_name_from_path(path: &str) -> Option<String> {
 }
 
 /// Sidecar cache of last-seen player classes (see overlay_dps's class
-/// cache) — same directory as config.toml.
+/// cache) — same directory as config.toml. Tray-only, like its caller.
+#[cfg(feature = "tray")]
 pub(crate) fn classes_cache_path() -> PathBuf {
     config_path().with_file_name("classes-cache.toml")
 }

@@ -395,7 +395,10 @@ pub mod overlay_draw {
         /// input shape: an empty rectangle list removes the window from
         /// hit-testing entirely; resetting with a `None` mask restores the
         /// default full-window shape.
-        pub(super) fn set_input_passthrough(winit_window: &winit::window::Window, passthrough: bool) {
+        pub(super) fn set_input_passthrough(
+            winit_window: &winit::window::Window,
+            passthrough: bool,
+        ) {
             use x11rb::protocol::shape::{self, ConnectionExt as _};
             let Some(xid) = window_xid(winit_window) else {
                 return;
@@ -440,7 +443,9 @@ pub mod overlay_draw {
         /// Asking the server for coords relative to the dragged window
         /// subtracts the current window position right back out, cancelling
         /// XWayland's addition and recovering the stable frozen frame.
-        pub(super) fn pointer_local(winit_window: &winit::window::Window) -> Option<(i32, i32, bool)> {
+        pub(super) fn pointer_local(
+            winit_window: &winit::window::Window,
+        ) -> Option<(i32, i32, bool)> {
             let xid = window_xid(winit_window)?;
             let (conn, _) = XCBConnection::connect(None).ok()?;
             let reply = conn.query_pointer(xid).ok()?.reply().ok()?;

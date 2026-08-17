@@ -380,7 +380,6 @@ pub mod overlay_dps {
         }
     }
 
-
     fn fmt_k(n: u64) -> String {
         if n >= 1_000_000 {
             let s = format!("{:.1}M", n as f64 / 1_000_000.0);

@@ -138,7 +138,15 @@ pub mod overlay_shell {
                 }
             });
             if let Some((anchor_local, anchor_win)) = anchors {
-                manual_drag_step(weak, handle, kind, anchor_local, anchor_win, DragMode::Probe, 0);
+                manual_drag_step(
+                    weak,
+                    handle,
+                    kind,
+                    anchor_local,
+                    anchor_win,
+                    DragMode::Probe,
+                    0,
+                );
                 return;
             }
             // Pointer already released (or query failed): fall through to
@@ -251,7 +259,11 @@ pub mod overlay_shell {
                     };
                     tracing::debug!(
                         "drag {kind:?}: sense probe={probe_delta:?} shift={shift:?} -> {}",
-                        if rebased { "incremental (rebasing X server)" } else { "absolute (frozen frame)" }
+                        if rebased {
+                            "incremental (rebasing X server)"
+                        } else {
+                            "absolute (frozen frame)"
+                        }
                     );
                     if rebased {
                         DragMode::Incremental
@@ -428,7 +440,9 @@ pub mod overlay_shell {
     }
 
     fn save_width(kind: OverlayKind, handle: &Arc<AppHandle>, width: i32) {
-        let Some(field) = width_field(kind) else { return };
+        let Some(field) = width_field(kind) else {
+            return;
+        };
         let mut cfg = handle.config.lock().unwrap();
         *field(&mut cfg) = width;
         cfg.save();
