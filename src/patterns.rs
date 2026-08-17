@@ -8,7 +8,7 @@ pub const TS_LEN: usize = 27;
 
 pub static RE_MELEE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"^(?P<src>[A-Za-z][A-Za-z`', ]*?) ",
+        r"^(?P<src>[A-Za-z][A-Za-z`', -]*?) ",
         r"(?P<verb>hits|hit|slashes|slash|backstabs|backstab|bashes|bash|",
         r"kicks|kick|crushes|crush|pierces|pierce|punches|punch|",
         r"frenzies|frenzy|strikes|strike|slays|slay|mauls|maul|",
@@ -17,7 +17,7 @@ pub static RE_MELEE: Lazy<Regex> = Lazy::new(|| {
         r"shoots|shoot|slams|slam|slices|slice|stabs|stab|sweeps|sweep|",
         r"smites|smite) ",
         r"(?:on )?",
-        r"(?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<dmg>\d+) point"
+        r"(?P<tgt>[A-Za-z][A-Za-z `',-]*?) for (?P<dmg>\d+) point"
     ))
     .unwrap()
 });
@@ -27,8 +27,8 @@ pub static RE_MELEE: Lazy<Regex> = Lazy::new(|| {
 // misidentified as a mob melee attack.
 pub static RE_HIT_BY_SPELL: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"^(?P<src>[A-Za-z][A-Za-z`', ]*?) hit ",
-        r"(?P<tgt>[A-Za-z][A-Za-z `',]*?) ",
+        r"^(?P<src>[A-Za-z][A-Za-z`', -]*?) hit ",
+        r"(?P<tgt>[A-Za-z][A-Za-z `',-]*?) ",
         r"for (?P<dmg>\d+) points? of \w+ damage by ",
         r"(?P<spell>[A-Za-z][A-Za-z `'-]+?)\.*$"
     ))
@@ -37,27 +37,27 @@ pub static RE_HIT_BY_SPELL: Lazy<Regex> = Lazy::new(|| {
 
 // "Player's SpellName hit Target for X" — proc/attributed spell
 pub static RE_SPELL_ATTR: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<src>[A-Za-z][A-Za-z`']*)'s (?P<spell>[A-Za-z][A-Za-z `']+?) hit (?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<dmg>\d+) point").unwrap()
+    Regex::new(r"^(?P<src>[A-Za-z][A-Za-z`'-]*)'s (?P<spell>[A-Za-z][A-Za-z `'-]+?) hit (?P<tgt>[A-Za-z][A-Za-z `',-]*?) for (?P<dmg>\d+) point").unwrap()
 });
 
 // "SpellName hit Target for X" — needs spell→caster lookup
 pub static RE_SPELL_HIT: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<spell>[A-Za-z][A-Za-z `']+?) hit (?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<dmg>\d+) point").unwrap()
+    Regex::new(r"^(?P<spell>[A-Za-z][A-Za-z `'-]+?) hit (?P<tgt>[A-Za-z][A-Za-z `',-]*?) for (?P<dmg>\d+) point").unwrap()
 });
 
 // "Target has been damaged by Player's SpellName for X" — DoT tick
 pub static RE_DOT: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) has been damaged by (?P<src>[A-Za-z][A-Za-z`']*)'s (?P<spell>[A-Za-z][A-Za-z `']+?) for (?P<dmg>\d+)").unwrap()
+    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',-]*?) has been damaged by (?P<src>[A-Za-z][A-Za-z`'-]*)'s (?P<spell>[A-Za-z][A-Za-z `'-]+?) for (?P<dmg>\d+)").unwrap()
 });
 
 // "Target was injured by Player's riposte for X"
 pub static RE_RIPOSTE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) was injured by (?P<src>[A-Za-z][A-Za-z`']*)'s riposte for (?P<dmg>\d+)").unwrap()
+    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',-]*?) was injured by (?P<src>[A-Za-z][A-Za-z`'-]*)'s riposte for (?P<dmg>\d+)").unwrap()
 });
 
 // "Target was struck by Player's damage shield for X"
 pub static RE_DS: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) was struck by (?P<src>[A-Za-z][A-Za-z`']*)'s damage shield for (?P<dmg>\d+)").unwrap()
+    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',-]*?) was struck by (?P<src>[A-Za-z][A-Za-z`'-]*)'s damage shield for (?P<dmg>\d+)").unwrap()
 });
 
 // "Mob is burned by YOUR flames for N points of non-melee damage."
@@ -65,8 +65,8 @@ pub static RE_DS: Lazy<Regex> = Lazy::new(|| {
 // Outbound DS proc: a player's damage shield retaliating against an attacker.
 pub static RE_DS_PROC: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) is \w+ by ",
-        r"(?:(?P<src>[A-Za-z][A-Za-z`']*)'s|YOUR) \w+ ",
+        r"^(?P<tgt>[A-Za-z][A-Za-z `',-]*?) is \w+ by ",
+        r"(?:(?P<src>[A-Za-z][A-Za-z`'-]*)'s|YOUR) \w+ ",
         r"for (?P<dmg>\d+) points? of non-melee damage\."
     ))
     .unwrap()
@@ -78,7 +78,7 @@ pub static RE_DS_PROC: Lazy<Regex> = Lazy::new(|| {
 // name, and a trailing "!".
 pub static RE_DS_BURN_YOU: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"^YOU are \w+ by (?P<src>[A-Za-z][A-Za-z `']*?)'s \w+ for (?P<dmg>\d+) points? of non-melee damage[.!]",
+        r"^YOU are \w+ by (?P<src>[A-Za-z][A-Za-z `'-]*?)'s \w+ for (?P<dmg>\d+) points? of non-melee damage[.!]",
     )
     .unwrap()
 });
@@ -87,7 +87,7 @@ pub static RE_DS_BURN_YOU: Lazy<Regex> = Lazy::new(|| {
 // Crowd-control landing on a mob: the target is deliberately parked.
 pub static RE_CC_PARK: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) has been (?:mesmerized|enthralled|entranced)[.!]$",
+        r"^(?P<tgt>[A-Za-z][A-Za-z `',-]*?) has been (?:mesmerized|enthralled|entranced)[.!]$",
     )
     .unwrap()
 });
@@ -95,7 +95,7 @@ pub static RE_CC_PARK: Lazy<Regex> = Lazy::new(|| {
 // "Orc centurion has been awakened by Zary." — crowd control broken.
 pub static RE_CC_WAKE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) has been awakened(?: by (?P<src>[A-Za-z`']+))?[.!]$",
+        r"^(?P<tgt>[A-Za-z][A-Za-z `',-]*?) has been awakened(?: by (?P<src>[A-Za-z`'-]+))?[.!]$",
     )
     .unwrap()
 });
@@ -112,7 +112,7 @@ pub static RE_HEARTBEAT: Lazy<Regex> = Lazy::new(|| {
         r"|You regain your concentration and continue your casting\.",
         r"|You feel your life force drain away\.",
         r"|Insufficient Mana to cast this spell!",
-        r"|Your [A-Za-z `']+ spell is interrupted\.)$"
+        r"|Your [A-Za-z `'-]+ spell is interrupted\.)$"
     ))
     .unwrap()
 });
@@ -123,7 +123,7 @@ pub static RE_HEARTBEAT: Lazy<Regex> = Lazy::new(|| {
 // Cast events at all.
 pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"^(?P<src>[A-Za-z][A-Za-z`', ]*) begins? casting (?P<spell>[A-Za-z][A-Za-z `':-]+?)\.",
+        r"^(?P<src>[A-Za-z][A-Za-z`', -]*) begins? casting (?P<spell>[A-Za-z][A-Za-z `':-]+?)\.",
     )
     .unwrap()
 });
@@ -132,7 +132,7 @@ pub static RE_CAST: Lazy<Regex> = Lazy::new(|| {
 pub static RE_HEAL: Lazy<Regex> = Lazy::new(|| {
     // src allows spaces: mob healers ("an orc thaumaturgist healed itself…")
     // are multi-word and previously never matched at all.
-    Regex::new(r"^(?P<src>[A-Za-z][A-Za-z `']*?) (?:has )?healed (?P<tgt>[A-Za-z][A-Za-z `',]*?) for (?P<amt>\d+)(?: \(\d+\))? hit points?(?: by (?P<spell>[A-Za-z][A-Za-z `'-]+))?\.?$").unwrap()
+    Regex::new(r"^(?P<src>[A-Za-z][A-Za-z `'-]*?) (?:has )?healed (?P<tgt>[A-Za-z][A-Za-z `',-]*?) for (?P<amt>\d+)(?: \(\d+\))? hit points?(?: by (?P<spell>[A-Za-z][A-Za-z `'-]+))?\.?$").unwrap()
 });
 
 // "X has/have taken N damage from [Player's / your] Spell[ by Player]."
@@ -140,7 +140,7 @@ pub static RE_HEAL: Lazy<Regex> = Lazy::new(|| {
 pub static RE_HAS_TAKEN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
         r"^(?P<tgt>.+?) (?:has|have) taken (?P<dmg>\d+) damage from ",
-        r"(?:(?P<src>[A-Za-z][A-Za-z`']*)'s |(?P<your>your) )?",
+        r"(?:(?P<src>[A-Za-z][A-Za-z`'-]*)'s |(?P<your>your) )?",
         r"(?P<spell>.+?)(?: by (?P<by_src>.+?))?\.?\s*$"
     ))
     .unwrap()
@@ -151,7 +151,7 @@ pub static RE_HAS_TAKEN: Lazy<Regex> = Lazy::new(|| {
 pub static RE_EXTRA_DMG: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
         r"^(?P<tgt>.+?) has taken an extra (?P<dmg>\d+) points? of non-melee damage from ",
-        r"(?:(?P<src>[A-Za-z][A-Za-z`']*)'s |(?P<your>your) )",
+        r"(?:(?P<src>[A-Za-z][A-Za-z`'-]*)'s |(?P<your>your) )",
         r"(?P<spell>.+?) spell\.$"
     ))
     .unwrap()
@@ -159,22 +159,22 @@ pub static RE_EXTRA_DMG: Lazy<Regex> = Lazy::new(|| {
 
 // "X has slain Y!" — killer=X, target=Y.
 pub static RE_SLAY_HAS: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<killer>[A-Za-z][A-Za-z`', ]*?) has slain (?P<tgt>[A-Za-z][A-Za-z `',]+)!")
+    Regex::new(r"^(?P<killer>[A-Za-z][A-Za-z`', -]*?) has slain (?P<tgt>[A-Za-z][A-Za-z `',-]+)!")
         .unwrap()
 });
 
 // "You have slain Y!" — killer is the local player.
 pub static RE_SLAY_YOU: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^You have slain (?P<tgt>[A-Za-z][A-Za-z `',]+)!").unwrap());
+    Lazy::new(|| Regex::new(r"^You have slain (?P<tgt>[A-Za-z][A-Za-z `',-]+)!").unwrap());
 
 // "Y was slain by X!" / "Y has been slain by X!" — reversed order.
 pub static RE_SLAIN_BY: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z`', ]*?) (?:was|has been) slain by (?P<killer>[A-Za-z][A-Za-z `',]+?)!?\s*$").unwrap()
+    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z`', -]*?) (?:was|has been) slain by (?P<killer>[A-Za-z][A-Za-z `',-]+?)!?\s*$").unwrap()
 });
 
 // "X died." — entity died with no explicit killer.
 pub static RE_DIED: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',]+) died\.$").unwrap());
+    Lazy::new(|| Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',-]+) died\.$").unwrap());
 
 // "X tries to VERB Y, but [Y] dodge/parry/miss/block/riposte/INVULNERABLE/absorb…"
 // Both src and tgt may be multi-word.  Miss type is the first keyword after "but".
@@ -183,7 +183,7 @@ pub static RE_MISS: Lazy<Regex> = Lazy::new(|| {
         // "tr(?:y|ies)": first-person lines use "You try to slash X, but miss!"
         // — a previous "tries?" only matched "trie(s)", silently dropping
         // every player-side miss.
-        r"^(?P<src>[A-Za-z][A-Za-z`', ]*?) tr(?:y|ies) to \w+ (?P<tgt>[A-Za-z][A-Za-z `',]*?),",
+        r"^(?P<src>[A-Za-z][A-Za-z`', -]*?) tr(?:y|ies) to \w+ (?P<tgt>[A-Za-z][A-Za-z `',-]*?),",
         r" but .*?(?P<miss>dodge[sd]?|parr(?:ied|ies|y)|miss(?:ed|es)?|block(?:ed|s)?|",
         r"ripost(?:ed|es)?|INVULNERABLE|absorbs?)"
     ))
@@ -194,23 +194,23 @@ pub static RE_MISS: Lazy<Regex> = Lazy::new(|| {
 // "YOUR magical skin absorbs the damage of Y's thorns."
 pub static RE_ABSORB_SKIN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"^(?:(?P<tgt>[A-Za-z][A-Za-z`']*)'s|YOUR) magical skin absorbs the damage of ",
-        r"(?P<src>[A-Za-z][A-Za-z`', ]*?)'s .+$"
+        r"^(?:(?P<tgt>[A-Za-z][A-Za-z`'-]*)'s|YOUR) magical skin absorbs the damage of ",
+        r"(?P<src>[A-Za-z][A-Za-z`', -]*?)'s .+$"
     ))
     .unwrap()
 });
 
 // "X has shielded [itself/herself/himself] from N points of damage."  (Rune absorption)
 pub static RE_ABSORB_RUNE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) has shielded \w+ from \d+ points? of damage\.")
+    Regex::new(r"^(?P<tgt>[A-Za-z][A-Za-z `',-]*?) has shielded \w+ from \d+ points? of damage\.")
         .unwrap()
 });
 
 // "NPC resisted your Spell!"  or  "NPC resisted Player's Spell!"
 pub static RE_RESIST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"^(?P<tgt>[A-Za-z][A-Za-z `',]*?) resisted ",
-        r"(?:your|(?P<src>[A-Za-z][A-Za-z`']*)'s) ",
+        r"^(?P<tgt>[A-Za-z][A-Za-z `',-]*?) resisted ",
+        r"(?:your|(?P<src>[A-Za-z][A-Za-z`'-]*)'s) ",
         r"(?P<spell>[A-Za-z][A-Za-z `'.-]+?)!$"
     ))
     .unwrap()
@@ -284,7 +284,7 @@ pub fn parse_copper(s: &str) -> u32 {
 pub static RE_WHO: Lazy<Regex> = Lazy::new(|| {
     // Classes may be full names ("Warrior Monk") or slash-separated short codes ("PAL/MNK/BER").
     Regex::new(
-        r"^\[(?P<lvl>\d+) (?P<classes>[A-Za-z][A-Za-z /]+?)\] (?P<name>[A-Za-z][A-Za-z`']+) \(",
+        r"^\[(?P<lvl>\d+) (?P<classes>[A-Za-z][A-Za-z /]+?)\] (?P<name>[A-Za-z][A-Za-z`'-]+) \(",
     )
     .unwrap()
 });
@@ -511,6 +511,47 @@ pub static RE_CHAT: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^(?P<speaker>[A-Za-z`'-]+) (?P<verb>[a-z][^,]*), '(?P<msg>.*)'$")
         .expect("valid regex")
 });
+
+/// Entry into an INSTANCED zone — the game suffixes these with "(Refined)",
+/// which plain zone entries never carry:
+///
+///   You have entered The City of Guk 4 (Refined).
+///   You have entered Nagafen's Lair - Group 4 (Refined).
+///   You have entered Nagafen's Lair.                    <- NOT an instance
+///
+/// The capture is the full instance name; strip_instance_label tidies it for
+/// display. Creation/invite chatter ("has asked you to join the instance:")
+/// deliberately does not match — those fire before the player is actually
+/// inside, and sometimes before the attempt even succeeds.
+pub static RE_INSTANCE_ENTER: Lazy<Regex> = Lazy::new(|| {
+    // `<zone>[ - Group] <tier digit> (<Tier name>).` — the tier NAME is an
+    // open set (Awakened/Adaptive/Fused/Refined observed, one per tier
+    // digit), so match the shape, not a word list: anchoring on the literal
+    // "(Refined)" made every other difficulty invisible, discovered when a
+    // tier-2 Plane of Hate produced no segment.
+    Regex::new(r"^You have entered (.+ \d+ \([A-Za-z ]+\))\.\s*$").expect("valid regex")
+});
+
+/// Display label for an instance: the zone text without the "(Refined)"
+/// marker the game appends to every instanced entry.
+pub fn instance_label(zone: &str) -> String {
+    match zone.rfind(" (") {
+        Some(i) if zone.ends_with(')') => zone[..i].to_string(),
+        _ => zone.to_string(),
+    }
+}
+
+/// The log owner creating an instance — the only line that carries the
+/// instance NUMBER, and the only signal at all for zones whose entry line
+/// has no tier suffix (Plane of Sky enters as plain "You have entered The
+/// Plane of Sky."). Captures (creator, zone, number).
+pub static RE_INSTANCE_CREATE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^Player ([A-Za-z]+) creating instance (.+?) (\d+)\.\s*$").expect("valid regex")
+});
+
+/// Any zone entry at all, for confirming a pending instance creation.
+pub static RE_ZONE_ANY: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^You have entered (.+?)\.\s*$").expect("valid regex"));
 
 /// A chat message that marks a raid boundary: `(kind, label)`, or None.
 ///
@@ -1489,5 +1530,124 @@ mod raid_mark_tests {
         assert_eq!(raid_mark("raid start now?"), None);
         assert_eq!(raid_mark("raid start in 5 minutes"), None);
         assert_eq!(raid_mark("raid ending soon folks"), None);
+    }
+}
+
+#[cfg(test)]
+mod hyphenated_name_tests {
+    use super::*;
+
+    /// Cazic-Thule was completely invisible: every name class matched
+    /// letters, backticks, apostrophes and spaces — no hyphen — so an entire
+    /// god fight produced no meter, no viewer and no stream. Lines here are
+    /// verbatim from the log of the night it was noticed.
+    #[test]
+    fn a_hyphenated_mob_exists_in_every_direction() {
+        let caps = RE_MELEE
+            .captures("Zyro kicks Cazic-Thule for 48 points of damage.")
+            .expect("player -> mob");
+        assert_eq!(&caps["tgt"], "Cazic-Thule");
+
+        let caps = RE_MELEE
+            .captures("Cazic-Thule slashes Zyro for 654 points of damage.")
+            .expect("mob -> player");
+        assert_eq!(&caps["src"], "Cazic-Thule");
+
+        let caps = RE_MELEE
+            .captures("You slash Cazic-Thule for 62 points of damage.")
+            .expect("you -> mob");
+        assert_eq!(&caps["tgt"], "Cazic-Thule");
+
+        let caps = RE_MISS
+            .captures("You try to slash Cazic-Thule, but miss!")
+            .expect("you miss mob");
+        assert_eq!(&caps["tgt"], "Cazic-Thule");
+
+        let caps = RE_MISS
+            .captures("Cazic-Thule tries to slash Zyro, but Zyro parries!")
+            .expect("mob misses player");
+        assert_eq!(&caps["src"], "Cazic-Thule");
+
+        let caps = RE_CAST
+            .captures("Cazic-Thule begins casting Rain of Fear.")
+            .expect("mob casts");
+        assert_eq!(&caps["src"], "Cazic-Thule");
+
+        let caps = RE_SLAIN_BY
+            .captures("Cazic-Thule has been slain by Zyro!")
+            .expect("mob dies");
+        assert_eq!(&caps["tgt"], "Cazic-Thule");
+
+        let caps = RE_SLAY_HAS
+            .captures("Zyro has slain Cazic-Thule!")
+            .expect("player slays mob");
+        assert_eq!(&caps["tgt"], "Cazic-Thule");
+    }
+}
+
+#[cfg(test)]
+mod instance_tests {
+    use super::*;
+
+    /// Every instanced-entry shape from a real log matches; plain zones and
+    /// the invite line (fires before you are inside) do not.
+    #[test]
+    fn instanced_entries_match_and_plain_zones_do_not() {
+        for (line, want) in [
+            (
+                "You have entered The City of Guk 4 (Refined).",
+                "The City of Guk 4 (Refined)",
+            ),
+            (
+                "You have entered Befallen 4 (Refined).",
+                "Befallen 4 (Refined)",
+            ),
+            (
+                "You have entered Nagafen's Lair - Group 4 (Refined).",
+                "Nagafen's Lair - Group 4 (Refined)",
+            ),
+            // The other three tiers of the same ladder — anchoring on
+            // "(Refined)" alone made these invisible.
+            (
+                "You have entered The Plane of Hate 2 (Adaptive).",
+                "The Plane of Hate 2 (Adaptive)",
+            ),
+            (
+                "You have entered The Ruins of Old Guk 3 (Fused).",
+                "The Ruins of Old Guk 3 (Fused)",
+            ),
+            (
+                "You have entered The Ruins of Old Paineel 1 (Awakened).",
+                "The Ruins of Old Paineel 1 (Awakened)",
+            ),
+        ] {
+            let caps = RE_INSTANCE_ENTER
+                .captures(line)
+                .unwrap_or_else(|| panic!("no match: {line}"));
+            assert_eq!(&caps[1], want);
+        }
+        for line in [
+            "You have entered Nagafen's Lair.",
+            "You have entered East Freeport.",
+            "Raimier has asked you to join the instance: The Ruins of Old Paineel - Group 4 (Refined).",
+        ] {
+            assert!(RE_INSTANCE_ENTER.captures(line).is_none(), "{line}");
+        }
+    }
+
+    #[test]
+    fn labels_drop_the_refined_marker() {
+        assert_eq!(
+            instance_label("The City of Guk 4 (Refined)"),
+            "The City of Guk 4"
+        );
+        assert_eq!(
+            instance_label("The Plane of Hate 2 (Adaptive)"),
+            "The Plane of Hate 2"
+        );
+        assert_eq!(
+            instance_label("Nagafen's Lair - Group 4 (Refined)"),
+            "Nagafen's Lair - Group 4"
+        );
     }
 }

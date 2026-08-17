@@ -113,6 +113,16 @@ pub fn run(
     // Most recent Burnout-family cast: (caster, log-ts). The pet that "goes
     // berserk" within the correlation window belongs to this caster.
     let mut pending_pet_buff: Option<(String, u32)> = None;
+    // Instanced zone currently occupied — consecutive re-entries into the
+    // SAME instance (a corpse run, popping out to sell) must not cut a new
+    // segment; only arriving somewhere different does.
+    let mut current_instance: Option<String> = None;
+    // An instance the log owner just created: (zone, instance number, log ts).
+    // The creation line is the only place the NUMBER exists — and for zones
+    // whose entry line carries no tier suffix (Plane of Sky), the only
+    // instance signal at all. The marker is cut at the ENTRY that follows,
+    // so a creation that is never entered marks nothing.
+    let mut pending_instance: Option<(String, u32, u32)> = None;
     // Most recent pet-summon cast: the never-before-seen generated-name pet
     // whose first attack lands within the window belongs to this caster.
     // Covers classes without a Burnout tell (enchanter, necro).
@@ -165,6 +175,65 @@ pub fn run(
         // Session boundary: player just logged in.
         if line == "Welcome to EverQuest Legends!" {
             emit(&event_tx, CombatEvent::Login { ts: current_ts });
+        }
+
+        // Entering an instance divides the pull list, exactly like a called
+        // raid start — it rides the same marker event (kind "instance"), so
+        // no new wire format and no deploy-order constraint.
+        // The log owner creating an instance: remember it and clear the
+        // same-zone dedupe — a FRESH instance of the same zone and tier has
+        // an identical entry line, and only this number tells them apart.
+        if let Some(caps) = crate::patterns::RE_INSTANCE_CREATE.captures(line) {
+            if caps[1].eq_ignore_ascii_case(&player_name) {
+                pending_instance = Some((
+                    caps[2].to_string(),
+                    caps[3].parse().unwrap_or(0),
+                    current_ts,
+                ));
+                current_instance = None;
+            }
+        }
+
+        if let Some(caps) = crate::patterns::RE_INSTANCE_ENTER.captures(line) {
+            let zone = caps[1].to_string();
+            if current_instance.as_deref() != Some(zone.as_str()) {
+                current_instance = Some(zone.clone());
+                let mut label = crate::patterns::instance_label(&zone);
+                // The entry confirming our own creation carries its number —
+                // the "session id" that distinguishes tonight's instance from
+                // a fresh one of the same zone an hour later.
+                if let Some((pzone, num, pts)) = pending_instance.take() {
+                    if zone.starts_with(&pzone) && current_ts.saturating_sub(pts) < 600 {
+                        label = format!("{label} #{num}");
+                    }
+                }
+                emit(
+                    &event_tx,
+                    CombatEvent::RaidMark {
+                        ts: current_ts,
+                        kind: "instance".to_string(),
+                        label,
+                    },
+                );
+            }
+        } else if let Some((pzone, num, pts)) = pending_instance.clone() {
+            // Zones without a tier suffix (Plane of Sky) enter as PLAIN
+            // text — the pending creation is the only way to know this
+            // entry is an instance at all.
+            if let Some(caps) = crate::patterns::RE_ZONE_ANY.captures(line) {
+                if caps[1].starts_with(&pzone) && current_ts.saturating_sub(pts) < 600 {
+                    pending_instance = None;
+                    current_instance = Some(caps[1].to_string());
+                    emit(
+                        &event_tx,
+                        CombatEvent::RaidMark {
+                            ts: current_ts,
+                            kind: "instance".to_string(),
+                            label: format!("{} #{num}", &caps[1]),
+                        },
+                    );
+                }
+            }
         }
 
         // Raid boundary called in chat. Checked before the combat patterns
@@ -2000,6 +2069,99 @@ mod tests {
         assert_eq!(marks[0].1, "raid_start");
         assert_eq!(marks[1].1, "raid_end");
         assert!(marks[1].0 > marks[0].0, "end comes after start");
+    }
+
+    /// The creation line carries the instance NUMBER — a fresh instance of
+    /// the same zone gets its own segment, and a suffix-less zone (Plane of
+    /// Sky) gets one at all. Only the log owner's creations count.
+    #[test]
+    fn integration_instance_ids_cut_fresh_segments() {
+        let marks: Vec<String> = run_events(
+            &[
+                // Own creation + tiered entry: labelled with the id.
+                "[Sun Aug 02 20:00:00 2026] Player Izzin creating instance The Plane of Hate 5255.",
+                "[Sun Aug 02 20:00:30 2026] You have entered The Plane of Hate 2 (Adaptive).",
+                // Re-entry, same instance: silent.
+                "[Sun Aug 02 20:20:00 2026] You have entered The Plane of Hate 2 (Adaptive).",
+                // FRESH instance of the same zone+tier: new number, new segment.
+                "[Sun Aug 02 21:00:00 2026] Player Izzin creating instance The Plane of Hate 6001.",
+                "[Sun Aug 02 21:00:30 2026] You have entered The Plane of Hate 2 (Adaptive).",
+                // Suffix-less instance zone: creation is the only signal.
+                "[Sun Aug 02 22:00:00 2026] Player Izzin creating instance The Plane of Sky 8546.",
+                "[Sun Aug 02 22:00:40 2026] You have entered The Plane of Sky.",
+                // Someone ELSE creating marks nothing.
+                "[Sun Aug 02 22:30:00 2026] Player Raimier creating instance Befallen 9999.",
+                "[Sun Aug 02 22:35:00 2026] You have entered East Freeport.",
+            ],
+            "Izzin",
+        )
+        .into_iter()
+        .filter_map(|e| match e {
+            CombatEvent::RaidMark { kind, label, .. } if kind == "instance" => Some(label),
+            _ => None,
+        })
+        .collect();
+        assert_eq!(
+            marks,
+            vec![
+                "The Plane of Hate 2 #5255".to_string(),
+                "The Plane of Hate 2 #6001".to_string(),
+                "The Plane of Sky #8546".to_string(),
+            ]
+        );
+    }
+
+    /// Only the log owner's own chat cuts a marker — a guildmate typing the
+    /// phrase must not be able to divide someone else's timeline.
+    #[test]
+    fn integration_chat_markers_are_owner_only() {
+        let marks: Vec<String> = run_events(
+            &[
+                "[Sun Aug 02 20:00:00 2026] Kermitzalot tells the raid, 'raid start'",
+                "[Sun Aug 02 20:01:00 2026] You say to your guild, 'raid start -- Vox D3'",
+            ],
+            "Izzin",
+        )
+        .into_iter()
+        .filter_map(|e| match e {
+            CombatEvent::RaidMark { kind, label, .. } if kind == "raid_start" => Some(label),
+            _ => None,
+        })
+        .collect();
+        assert_eq!(
+            marks,
+            vec!["Vox D3".to_string()],
+            "only the owner's call counts"
+        );
+    }
+
+    /// Instances divide the timeline; corpse-running back into the SAME one
+    /// does not. Plain zones never cut.
+    #[test]
+    fn integration_instances_cut_once_each() {
+        let marks: Vec<(String, String)> = run_events(
+            &[
+                "[Sun Aug 02 20:00:00 2026] You have entered The City of Guk 4 (Refined).",
+                "[Sun Aug 02 20:30:00 2026] You have entered East Freeport.",
+                "[Sun Aug 02 20:31:00 2026] You have entered The City of Guk 4 (Refined).",
+                "[Sun Aug 02 21:00:00 2026] You have entered Befallen 4 (Refined).",
+            ],
+            "Izzin",
+        )
+        .into_iter()
+        .filter_map(|e| match e {
+            CombatEvent::RaidMark { kind, label, .. } => Some((kind, label)),
+            _ => None,
+        })
+        .collect();
+        assert_eq!(
+            marks,
+            vec![
+                ("instance".to_string(), "The City of Guk 4".to_string()),
+                ("instance".to_string(), "Befallen 4".to_string()),
+            ],
+            "one marker per DISTINCT instance; the sell-trip re-entry is silent"
+        );
     }
 
     #[test]

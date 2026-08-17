@@ -217,6 +217,16 @@ pub enum CombatEvent {
     /// log-second. Viewers use these to keep encounter windows open.
     #[serde(rename = "hb")]
     Heartbeat { ts: u32 },
+    /// Any event kind this build does not know about.
+    ///
+    /// Without this, a server one version behind a client rejected the WHOLE
+    /// batch when a single unknown kind appeared in it — combat events
+    /// included — and did so silently. New kinds now degrade: the unknown
+    /// event is carried as this and skipped by consumers, everything else in
+    /// the batch survives. Never constructed by the parser; only ever
+    /// produced by deserializing a newer peer's output.
+    #[serde(other)]
+    Unknown,
 }
 
 impl CombatEvent {
@@ -247,6 +257,9 @@ impl CombatEvent {
             | Self::ItemMerge { ts, .. }
             | Self::Cc { ts, .. }
             | Self::Heartbeat { ts } => *ts,
+            // No timestamp travels with an unrecognised kind; zero sorts it
+            // before everything without inventing a time.
+            Self::Unknown => 0,
         }
     }
 }
@@ -467,5 +480,33 @@ mod raid_tag_tests {
         assert!(json.contains(r#""k":"raid_mark""#), "{json}");
         assert!(json.contains(r#""kind":"raid_start""#), "{json}");
         assert!(json.contains(r#""label":"Vox D3""#), "{json}");
+    }
+}
+
+#[cfg(test)]
+mod unknown_kind_tests {
+    use super::*;
+
+    /// The failure this prevents, verbatim: a batch holding one event kind
+    /// from a newer peer used to fail deserialization WHOLE — every combat
+    /// event in it silently discarded by the older side.
+    #[test]
+    fn a_batch_with_an_unknown_kind_keeps_its_known_events() {
+        let json = r#"{"seq":7,"events":[
+            {"k":"melee","ts":100,"mob":1,"src":"Izzin","tgt":"a rat","dmg":9,"typ":"slash"},
+            {"k":"time_travel","ts":101,"whatever":"future data"},
+            {"k":"login","ts":102}
+        ]}"#;
+        let batch: EventBatch = serde_json::from_str(json).expect("batch must survive");
+        assert_eq!(batch.events.len(), 3);
+        assert!(matches!(batch.events[0], CombatEvent::Melee { dmg: 9, .. }));
+        assert!(matches!(batch.events[1], CombatEvent::Unknown));
+        assert!(matches!(batch.events[2], CombatEvent::Login { ts: 102 }));
+    }
+
+    /// Unknown carries no time and must not invent one.
+    #[test]
+    fn unknown_has_no_timestamp() {
+        assert_eq!(CombatEvent::Unknown.ts(), 0);
     }
 }

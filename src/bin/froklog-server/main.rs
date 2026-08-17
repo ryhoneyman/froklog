@@ -1389,7 +1389,8 @@ async fn home_handler(
          <p class=\"foot\">Rows open the private view \u{2014} anyone with that link can \
          watch and curate. <b>public link</b> is the read-only one, safe to share.<br>\
          This page&rsquo;s address is itself a key: treat it like a password.</p>\
-         </div></body></html>"
+         </div><script>try{{localStorage.setItem('froklogHome',location.href)}}catch(e){{}}</script>\
+         </body></html>"
     );
     Html(html).into_response()
 }
