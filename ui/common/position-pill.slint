@@ -109,14 +109,18 @@ export component PositionPill inherits HorizontalLayout {
         border-color: Theme.border;
         background: reset-touch.has-hover ? Theme.bg-hover : Theme.bg-elevated;
 
-        Text {
-            text: "\u{21BA}";
-            color: Theme.text-primary;
-            font-size: Theme.font-size-md;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            width: 100%;
-            height: 100%;
+        // Real vector icon instead of the U+21BA glyph — same reasoning as
+        // the lock icons above: plain "Segoe UI" doesn't carry this glyph
+        // on Windows (renders blank there, though Linux's fallback fonts
+        // happen to cover it), and Slint's text renderer doesn't do
+        // OS-level font fallback.
+        Image {
+            source: @image-url("icons/reset.svg");
+            colorize: Theme.text-primary;
+            width: 16px;
+            height: 16px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
         }
 
         reset-touch := TouchArea {

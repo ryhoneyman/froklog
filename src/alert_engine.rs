@@ -130,7 +130,7 @@ pub mod alert_engine {
             }
             for ev in new_events {
                 if let Some(ref text) = ev.tts_text {
-                    self.try_speak(text, &ev.tts_priority);
+                    self.try_speak(text, &ev.tts_priority, ev.is_test);
                 }
 
                 if !ev.message.is_empty() {
@@ -191,6 +191,7 @@ pub mod alert_engine {
                             tts_priority: VoicePriority::default(),
                             treatment: Treatment::default(),
                             priority: VoicePriority::default(),
+                            is_test: false,
                         },
                         phase: AlertPhase::Hold,
                         phase_started: now,
@@ -264,7 +265,7 @@ pub mod alert_engine {
             Duration::from_secs_f32(scaled.clamp(floor, self.hold_secs))
         }
 
-        fn try_speak(&mut self, text: &str, priority: &VoicePriority) {
+        fn try_speak(&mut self, text: &str, priority: &VoicePriority, is_test: bool) {
             use crate::config::TtsAudioMode;
 
             let (enabled, speed, mode, re, ro, ra) = {
@@ -279,14 +280,19 @@ pub mod alert_engine {
                 )
             };
 
-            if !enabled {
-                return;
-            }
-            match priority {
-                VoicePriority::Emergency if !re => return,
-                VoicePriority::Operational if !ro => return,
-                VoicePriority::Ambient if !ra => return,
-                _ => {}
+            // Test-button events bypass the mute settings entirely — same
+            // reasoning as `preview_sound_label` ignoring "Sound enabled": a
+            // muted/disabled setting shouldn't make Test look silently broken.
+            if !is_test {
+                if !enabled {
+                    return;
+                }
+                match priority {
+                    VoicePriority::Emergency if !re => return,
+                    VoicePriority::Operational if !ro => return,
+                    VoicePriority::Ambient if !ra => return,
+                    _ => {}
+                }
             }
 
             if self.tts.is_none() {

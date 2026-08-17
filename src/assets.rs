@@ -36,6 +36,13 @@ pub fn downloaded_voices_dir() -> PathBuf {
     data_dir().join("voices")
 }
 
+/// Local cache of the repo-hosted `dynamic-config.json` (see
+/// `trigger_presets::download_dynamic_config`) — mutable user-fetched data,
+/// same category as `downloaded_voices_dir()`.
+pub fn dynamic_config_path() -> PathBuf {
+    data_dir().join("dynamic-config.json")
+}
+
 /// Sidecar file `extract_spell_icons` (spell_icons.rs) writes into
 /// `icons_dir()` alongside the extracted PNGs: one
 /// `filename<TAB>source<TAB>spell_name<TAB>all_spell_names` line per icon,

@@ -3,6 +3,7 @@ import { Button } from "../common/buttons.slint";
 import { ComboBoxField } from "../common/combo-box.slint";
 import { TextField } from "../common/text-field.slint";
 import { LabeledField } from "../common/labeled-field.slint";
+import { PresetPickerButton, PatternPreset } from "../common/preset-picker.slint";
 
 // Edit body for a single trigger condition, embedded in the Settings
 // drawer — was ConditionEditWindow (ui/dialogs/condition_edit_dialog.slint)
@@ -24,6 +25,11 @@ export component ConditionPanel inherits VerticalLayout {
 
     in-out property <string> match-type: "Regex";
     in-out property <string> pattern;
+    // Log-line presets only make sense against the raw line (Match mode) —
+    // Chat mode's pattern matches just the extracted message text, which
+    // none of the built-in line patterns are shaped for.
+    property <bool> show-presets: root.is-match && root.match-type == "Regex";
+    in property <[PatternPreset]> pattern-presets;
 
     in-out property <string> chat-channel: "Any";
     property <bool> is-custom-channel: root.chat-channel == "Custom channel";
@@ -78,8 +84,23 @@ export component ConditionPanel inherits VerticalLayout {
                 value <=> root.match-type;
             }
         }
-        LabeledField {
-            label: root.is-chat ? "Message pattern (blank matches any message)" : "Pattern";
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Text {
+                    text: root.is-chat ? "Message pattern (blank matches any message)" : "Pattern";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-size-sm;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                if root.show-presets: PresetPickerButton {
+                    presets: root.pattern-presets;
+                    picked(p) => { root.pattern = p; }
+                }
+            }
             TextField {
                 placeholder: root.is-chat
                     ? "e.g. help  or  (?P<item>.+) plz"

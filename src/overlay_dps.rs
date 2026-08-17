@@ -652,6 +652,11 @@ pub mod overlay_dps {
                             "dps meter: showing placeholder (force_show={})",
                             state.force_show
                         );
+                        crate::overlay_draw::overlay_draw::apply_saved_position(
+                            &ui,
+                            &state.handle,
+                            crate::overlay_registry::overlay_registry::OverlayKind::Meter,
+                        );
                         let _ = ui.show();
                         state.visible = true;
                         crate::overlay_draw::overlay_draw::hide_from_taskbar(weak.clone());
@@ -696,6 +701,11 @@ pub mod overlay_dps {
                     tracing::info!(
                         "dps meter: showing (real data, force_show={})",
                         state.force_show
+                    );
+                    crate::overlay_draw::overlay_draw::apply_saved_position(
+                        &ui,
+                        &state.handle,
+                        crate::overlay_registry::overlay_registry::OverlayKind::Meter,
                     );
                     let _ = ui.show();
                     state.visible = true;

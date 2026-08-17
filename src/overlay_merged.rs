@@ -53,6 +53,20 @@ pub mod overlay_merged {
         Color::from_rgb_u8(r, g, b)
     }
 
+    /// Below one minute, seconds; below one hour, minutes; at/above one
+    /// hour, hours — see overlay_history.rs's copy of this fn for why each
+    /// tier rounds instead of floor/ceil.
+    fn format_time_ago(secs_ago: f32) -> String {
+        let mins = secs_ago / 60.0;
+        if secs_ago < 60.0 {
+            format!("{}s", secs_ago as u64)
+        } else if mins < 60.0 {
+            format!("{}m", mins.round() as u64)
+        } else {
+            format!("{}h", (mins / 60.0).round() as u64)
+        }
+    }
+
     fn load_icon_image(filename: &str) -> Option<slint::Image> {
         let exe = std::env::current_exe().ok()?;
         let path = exe.parent()?.join("icons").join(filename);
@@ -231,6 +245,11 @@ pub mod overlay_merged {
                 }
                 if !state.visible {
                     tracing::info!("merged overlay: showing (force_show={})", state.force_show);
+                    crate::overlay_draw::overlay_draw::apply_saved_position(
+                        &ui,
+                        &state.handle,
+                        crate::overlay_registry::overlay_registry::OverlayKind::Merged,
+                    );
                     let _ = ui.show();
                     state.visible = true;
                     crate::overlay_draw::overlay_draw::hide_from_taskbar(weak.clone());
@@ -292,7 +311,7 @@ pub mod overlay_merged {
                                 message: message.as_str().into(),
                                 message_color: color_from_hex(message_color, DEFAULT_TEXT_RGB),
                                 border_color: color_from_hex(border_color, DEFAULT_BORDER_RGB),
-                                time_label: format!("{}s", *secs_ago as u64).into(),
+                                time_label: format_time_ago(*secs_ago).into(),
                                 row_alpha: (*secs_ago / FADE_IN_SECS).clamp(0.0, 1.0),
                             }
                         },

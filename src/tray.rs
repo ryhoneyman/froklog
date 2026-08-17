@@ -199,10 +199,35 @@ pub mod tray {
         // (Slint builds the window adapter, and applies this hook, there —
         // not deferred until `.show()`), so Settings opts out via
         // `suppress_utility_window_hint` around its own `::new()` call.
+        // Force X11 (via XWayland on an actual Wayland session) instead of
+        // letting winit auto-select native Wayland. Three independently
+        // confirmed Wayland gaps — softbuffer hardcoding an alpha-less pixel
+        // format, winit's Wayland `set_window_level` being a literal no-op,
+        // and `xdg_toplevel` having no window-position-query capability at
+        // the protocol level at all — none of which exist on X11 with a
+        // real compositor running (confirmed live: this dev box's own
+        // Xrdp/xfwm4 X11 session already renders transparency correctly
+        // with the unmodified renderer, and winit's X11 `set_window_level`
+        // uses real `_NET_WM_STATE_ABOVE` EWMH calls, not a stub). XWayland
+        // is enabled by default on every mainstream compositor (GNOME, KDE,
+        // Sway, Hyprland) for legacy-app compatibility, so this reuses the
+        // X11-specific code this app already has and already exercises
+        // (`overlay_draw.rs`'s `true_window_position`/`skip_taskbar`)
+        // instead of a from-scratch Wayland-native layer-shell rewrite —
+        // see memory/project_wayland_overlay_investigation.md for the full
+        // investigation this decision came out of.
         #[cfg(target_os = "linux")]
         {
-            use winit::platform::x11::{WindowAttributesExtX11, WindowType};
-            slint::BackendSelector::new()
+            use slint::winit_030::EventLoopBuilder;
+            use winit::platform::x11::{
+                EventLoopBuilderExtX11, WindowAttributesExtX11, WindowType,
+            };
+
+            let mut x11_event_loop_builder: EventLoopBuilder =
+                winit::event_loop::EventLoop::with_user_event();
+            x11_event_loop_builder.with_x11();
+            let x11_result = slint::BackendSelector::new()
+                .with_winit_event_loop_builder(x11_event_loop_builder)
                 .with_winit_window_attributes_hook(|attrs| {
                     if crate::overlay_draw::overlay_draw::utility_window_hint_suppressed() {
                         attrs
@@ -210,8 +235,27 @@ pub mod tray {
                         attrs.with_x11_window_type(vec![WindowType::Utility])
                     }
                 })
-                .select()
-                .expect("select winit backend with window-attributes hook");
+                .select();
+
+            // No XWayland available (rare on mainstream desktops) — fall
+            // back to normal auto-detection (native Wayland) rather than
+            // crashing outright. Known-imperfect-but-functional beats not
+            // starting at all.
+            if let Err(err) = x11_result {
+                tracing::warn!(
+                    "failed to force X11 backend ({err}), falling back to auto-detected backend"
+                );
+                slint::BackendSelector::new()
+                    .with_winit_window_attributes_hook(|attrs| {
+                        if crate::overlay_draw::overlay_draw::utility_window_hint_suppressed() {
+                            attrs
+                        } else {
+                            attrs.with_x11_window_type(vec![WindowType::Utility])
+                        }
+                    })
+                    .select()
+                    .expect("select winit backend with window-attributes hook");
+            }
         }
 
         // tray-icon's GTK/appindicator backend needs GTK initialized on

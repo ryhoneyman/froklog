@@ -1,4 +1,4 @@
-// Phase 2 — window chrome, sidebar nav, Save/Cancel wiring for the Settings
+// Phase 2 — window chrome, sidebar nav, Save/Close wiring for the Settings
 // dialog, replacing the SysTabControl32 tab strip in
 // overlay_config_win.rs's original 8-tab dialog (since folded down to 6 —
 // the DPS Meter and Windows tabs were both merged into Overlays; see
@@ -13,6 +13,7 @@ import { Button } from "common/buttons.slint";
 import { ScrollArea } from "common/scroll-area.slint";
 import { ModalScrim } from "common/modal-scrim.slint";
 import { IconOption } from "common/icon-combo-box.slint";
+import { PatternPreset } from "common/preset-picker.slint";
 import { GeneralTab } from "tabs/general_tab.slint";
 import { LoggingTab } from "tabs/logging_tab.slint";
 import { TriggersTab } from "tabs/triggers_tab.slint";
@@ -47,7 +48,14 @@ export component SettingsWindow inherits Window {
     ];
 
     callback save();
-    callback cancel();
+    // Fired only from the pending-changes dialog below — there's no
+    // standalone Close button any more (see that dialog's doc comment for
+    // why); the sole way to close Settings is the native titlebar X, which
+    // Rust's `on_close_requested` hook intercepts to decide between closing
+    // outright and opening this dialog.
+    callback save-and-close-settings();
+    callback discard-and-close-settings();
+    in-out property <bool> pending-changes-open: false;
     // Whether any Save-gated field (see "Dirty tracking" below) has changed
     // since the last load/Save — drives the Save button's enabled state so
     // it only lights up when there's actually something to persist. Reset
@@ -85,6 +93,9 @@ export component SettingsWindow inherits Window {
     in property <string> import-status <=> general-tab.import-status;
     in property <bool> import-in-progress <=> general-tab.import-in-progress;
     callback import-spell-icons <=> general-tab.import-spell-icons;
+    in property <string> dynamic-config-status <=> general-tab.dynamic-config-status;
+    in property <bool> dynamic-config-in-progress <=> general-tab.dynamic-config-in-progress;
+    callback download-dynamic-config <=> general-tab.download-dynamic-config;
 
     // ── Logging tab ──────────────────────────────────────────────────────
     in property <[string]> log-profile-rows <=> logging-tab.log-profile-rows;
@@ -227,6 +238,7 @@ export component SettingsWindow inherits Window {
     in-out property <string> cond-type <=> condition-panel.cond-type;
     in-out property <string> match-type <=> condition-panel.match-type;
     in-out property <string> pattern <=> condition-panel.pattern;
+    in property <[PatternPreset]> pattern-presets <=> condition-panel.pattern-presets;
     in-out property <string> chat-channel <=> condition-panel.chat-channel;
     in-out property <string> chat-custom-channel <=> condition-panel.chat-custom-channel;
     in-out property <string> cond-var-name <=> condition-panel.var-name;
@@ -380,36 +392,49 @@ export component SettingsWindow inherits Window {
     // display via `sync_window_position` — so a drag can light Save up
     // even though that particular field is already saved; clicking Save
     // then is a harmless no-op re-write of the same value.)
-    changed server-url => { root.dirty = true; }
-    changed password => { root.dirty = true; }
-    changed start-font-size => { root.dirty = true; }
-    changed max-font-size => { root.dirty = true; }
-    changed fly-ms => { root.dirty = true; }
-    changed hold-secs => { root.dirty = true; }
-    changed alpha => { root.dirty = true; }
-    changed history-font-size => { root.dirty = true; }
-    changed history-idle-secs => { root.dirty = true; }
-    changed history-max-entries => { root.dirty = true; }
-    changed history-width => { root.dirty = true; }
-    changed merged-start-font-size => { root.dirty = true; }
-    changed merged-max-font-size => { root.dirty = true; }
-    changed merged-fly-ms => { root.dirty = true; }
-    changed merged-hold-secs => { root.dirty = true; }
-    changed merged-alpha => { root.dirty = true; }
-    changed merged-history-font-size => { root.dirty = true; }
-    changed merged-history-idle-secs => { root.dirty = true; }
-    changed merged-history-max-entries => { root.dirty = true; }
-    changed meter-max-rows => { root.dirty = true; }
-    changed meter-idle-secs => { root.dirty = true; }
-    changed meter-font-size => { root.dirty = true; }
-    changed win-overlay-pos-x => { root.dirty = true; }
-    changed win-overlay-pos-y => { root.dirty = true; }
-    changed win-history-pos-x => { root.dirty = true; }
-    changed win-history-pos-y => { root.dirty = true; }
-    changed win-meter-pos-x => { root.dirty = true; }
-    changed win-meter-pos-y => { root.dirty = true; }
-    changed win-merged-pos-x => { root.dirty = true; }
-    changed win-merged-pos-y => { root.dirty = true; }
+    // TEMPORARY diagnostic — pinpointing a reported bug where Save
+    // correctly clears `dirty`, but the very next Settings open shows it
+    // dirty again with no user edits. `dirty-reason` records which field's
+    // `changed` handler last fired; `changed dirty` reports both the value
+    // and that reason to Rust (settings_window.rs's `on_dirty_changed`,
+    // itself temporary) so real log output can show what actually fired
+    // and when, instead of guessing from a static read of this file. Strip
+    // all of this back out to the plain `root.dirty = true;` lines once
+    // the culprit is found.
+    in-out property <string> dirty-reason;
+    callback dirty-changed(bool, string);
+    changed dirty => { root.dirty-changed(root.dirty, root.dirty-reason); }
+
+    changed server-url => { root.dirty = true; root.dirty-reason = "server-url"; }
+    changed password => { root.dirty = true; root.dirty-reason = "password"; }
+    changed start-font-size => { root.dirty = true; root.dirty-reason = "start-font-size"; }
+    changed max-font-size => { root.dirty = true; root.dirty-reason = "max-font-size"; }
+    changed fly-ms => { root.dirty = true; root.dirty-reason = "fly-ms"; }
+    changed hold-secs => { root.dirty = true; root.dirty-reason = "hold-secs"; }
+    changed alpha => { root.dirty = true; root.dirty-reason = "alpha"; }
+    changed history-font-size => { root.dirty = true; root.dirty-reason = "history-font-size"; }
+    changed history-idle-secs => { root.dirty = true; root.dirty-reason = "history-idle-secs"; }
+    changed history-max-entries => { root.dirty = true; root.dirty-reason = "history-max-entries"; }
+    changed history-width => { root.dirty = true; root.dirty-reason = "history-width"; }
+    changed merged-start-font-size => { root.dirty = true; root.dirty-reason = "merged-start-font-size"; }
+    changed merged-max-font-size => { root.dirty = true; root.dirty-reason = "merged-max-font-size"; }
+    changed merged-fly-ms => { root.dirty = true; root.dirty-reason = "merged-fly-ms"; }
+    changed merged-hold-secs => { root.dirty = true; root.dirty-reason = "merged-hold-secs"; }
+    changed merged-alpha => { root.dirty = true; root.dirty-reason = "merged-alpha"; }
+    changed merged-history-font-size => { root.dirty = true; root.dirty-reason = "merged-history-font-size"; }
+    changed merged-history-idle-secs => { root.dirty = true; root.dirty-reason = "merged-history-idle-secs"; }
+    changed merged-history-max-entries => { root.dirty = true; root.dirty-reason = "merged-history-max-entries"; }
+    changed meter-max-rows => { root.dirty = true; root.dirty-reason = "meter-max-rows"; }
+    changed meter-idle-secs => { root.dirty = true; root.dirty-reason = "meter-idle-secs"; }
+    changed meter-font-size => { root.dirty = true; root.dirty-reason = "meter-font-size"; }
+    changed win-overlay-pos-x => { root.dirty = true; root.dirty-reason = "win-overlay-pos-x"; }
+    changed win-overlay-pos-y => { root.dirty = true; root.dirty-reason = "win-overlay-pos-y"; }
+    changed win-history-pos-x => { root.dirty = true; root.dirty-reason = "win-history-pos-x"; }
+    changed win-history-pos-y => { root.dirty = true; root.dirty-reason = "win-history-pos-y"; }
+    changed win-meter-pos-x => { root.dirty = true; root.dirty-reason = "win-meter-pos-x"; }
+    changed win-meter-pos-y => { root.dirty = true; root.dirty-reason = "win-meter-pos-y"; }
+    changed win-merged-pos-x => { root.dirty = true; root.dirty-reason = "win-merged-pos-x"; }
+    changed win-merged-pos-y => { root.dirty = true; root.dirty-reason = "win-merged-pos-y"; }
 
     VerticalLayout {
         HorizontalLayout {
@@ -492,11 +517,6 @@ export component SettingsWindow inherits Window {
                 spacing: Theme.space-sm;
                 alignment: end;
 
-                Button {
-                    text: "Cancel";
-                    primary: false;
-                    clicked => { root.cancel(); }
-                }
                 Button {
                     text: "Save";
                     primary: true;
@@ -639,6 +659,66 @@ export component SettingsWindow inherits Window {
                     download(name) => { root.voice-catalog-download(name); }
                     delete(name) => { root.voice-catalog-delete(name); }
                     close => { root.drawer-back(); }
+                }
+            }
+        }
+    }
+
+    // Guards the titlebar X against silently discarding Save-gated edits
+    // (server URL, password, font sizes, overlay positions, etc. — see
+    // "Dirty tracking" above) now that there's no separate Close button
+    // whose very label used to make that discard-on-close behavior obvious.
+    // Rust's `on_close_requested` hook vetoes the close and sets
+    // `pending-changes-open` instead whenever `dirty` is true; "Keep
+    // Editing" is handled right here since it's pure UI state, while the
+    // other two round-trip through Rust because they need to actually
+    // close (and, for Save, persist) the window.
+    ModalScrim { active: root.pending-changes-open; }
+    if root.pending-changes-open: Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 380px;
+        height: 168px;
+        background: Theme.bg-elevated;
+        border-radius: Theme.radius-md;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        VerticalLayout {
+            padding: Theme.space-lg;
+            spacing: Theme.space-md;
+
+            Text {
+                text: "Unsaved Changes";
+                color: Theme.text-primary;
+                font-size: Theme.font-size-lg;
+                font-weight: 700;
+            }
+            Text {
+                text: "You have changes that haven't been saved yet.";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                alignment: end;
+
+                Button {
+                    text: "Keep Editing";
+                    primary: false;
+                    clicked => { root.pending-changes-open = false; }
+                }
+                Button {
+                    text: "Discard";
+                    primary: false;
+                    clicked => { root.discard-and-close-settings(); }
+                }
+                Button {
+                    text: "Save & Close";
+                    primary: true;
+                    clicked => { root.save-and-close-settings(); }
                 }
             }
         }

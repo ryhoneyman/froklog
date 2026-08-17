@@ -384,6 +384,11 @@ pub mod engine {
         pub treatment: Treatment,
         /// Visual queue priority — see `Action::Overlay`'s `priority` field.
         pub priority: VoicePriority,
+        /// Set for events produced by the Triggers tab's Test button, so the
+        /// alert engine can play them regardless of the TTS-enabled/per-priority
+        /// read-toggle mute settings — matches how sound preview buttons already
+        /// ignore "Sound enabled" (see `preview_sound_label`).
+        pub is_test: bool,
     }
 
     // ── Compiled runtime types ────────────────────────────────────────────────
@@ -573,6 +578,7 @@ pub mod engine {
                     &caps,
                     &mut self.vars,
                     now,
+                    false,
                 );
                 new_events.extend(events);
                 new_pending.extend(pending);
@@ -593,7 +599,7 @@ pub mod engine {
             let caps = CaptureMap::default();
             let sound_seq: Vec<Cell<usize>> = actions.iter().map(|_| Cell::new(0)).collect();
             let (events, pending) =
-                execute_actions(actions, &sound_seq, &caps, &mut self.vars, now);
+                execute_actions(actions, &sound_seq, &caps, &mut self.vars, now, true);
             tracing::info!(
                 "test trigger: produced {} immediate event(s), {} pending (delayed) action(s)",
                 events.len(),
@@ -634,6 +640,7 @@ pub mod engine {
         caps: &CaptureMap,
         vars: &mut HashMap<String, String>,
         now: Instant,
+        is_test: bool,
     ) -> (Vec<OverlayEvent>, Vec<PendingAction>) {
         let mut new_events = Vec::new();
         let mut new_pending = Vec::new();
@@ -659,6 +666,7 @@ pub mod engine {
                             tts_priority: priority.clone(),
                             treatment: Treatment::default(),
                             priority: VoicePriority::default(),
+                            is_test,
                         });
                     }
                 }
@@ -683,6 +691,7 @@ pub mod engine {
                         tts_priority: VoicePriority::default(),
                         treatment: *treatment,
                         priority: priority.clone(),
+                        is_test,
                     };
                     if *delay_secs <= 0.0 {
                         new_events.push(event);
@@ -712,6 +721,7 @@ pub mod engine {
                             tts_priority: VoicePriority::default(),
                             treatment: Treatment::default(),
                             priority: VoicePriority::default(),
+                            is_test,
                         };
                         if *delay_secs <= 0.0 {
                             new_events.push(event);

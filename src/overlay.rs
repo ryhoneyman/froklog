@@ -345,6 +345,11 @@ pub mod overlay {
                         state.force_show,
                         active.map(|a| a.is_placeholder).unwrap_or(false)
                     );
+                    crate::overlay_draw::overlay_draw::apply_saved_position(
+                        &ui,
+                        &state.handle,
+                        crate::overlay_registry::overlay_registry::OverlayKind::Alert,
+                    );
                     let _ = ui.show();
                     state.visible = true;
                     crate::overlay_draw::overlay_draw::hide_from_taskbar(weak.clone());
@@ -495,21 +500,39 @@ pub mod overlay {
         let resolved = resolve_sound_path(path);
         let volume = SOUND_VOLUME_PERCENT.load(Ordering::Relaxed) as f32 / 100.0;
         std::thread::spawn(move || {
-            let Ok((_stream, handle)) = rodio::OutputStream::try_default() else {
-                return;
+            let (_stream, handle) = match rodio::OutputStream::try_default() {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("sound: failed to open default audio output device: {e:?}");
+                    return;
+                }
             };
-            let Ok(sink) = rodio::Sink::try_new(&handle) else {
-                return;
+            let sink = match rodio::Sink::try_new(&handle) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("sound: failed to create audio sink: {e:?}");
+                    return;
+                }
             };
             sink.set_volume(volume);
-            let Ok(file) = std::fs::File::open(&resolved) else {
-                return;
+            let file = match std::fs::File::open(&resolved) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!("sound: failed to open {resolved:?}: {e:?}");
+                    return;
+                }
             };
-            let Ok(source) = rodio::Decoder::new(std::io::BufReader::new(file)) else {
-                return;
+            let source = match rodio::Decoder::new(std::io::BufReader::new(file)) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("sound: failed to decode {resolved:?}: {e:?}");
+                    return;
+                }
             };
+            tracing::warn!("sound: playing {resolved:?}, handing to audio sink");
             sink.append(source);
             sink.sleep_until_end();
+            tracing::warn!("sound: {resolved:?} finished playing");
         });
     }
 

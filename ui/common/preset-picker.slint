@@ -1,0 +1,119 @@
+import { Theme } from "../theme.slint";
+import { ScrollArea } from "scroll-area.slint";
+
+// One row in the flattened preset list. Rust groups the built-in patterns
+// by category and flattens them into this single list (rather than a
+// nested model, which Slint's `for` can't iterate) — `is-header` rows are
+// a non-clickable category caption, everything else is a selectable
+// preset whose `pattern` gets written into the caller's Pattern field.
+// Uniform row height (see `item-height` below) keeps `content-height` a
+// plain multiplication, same trick `ComboBoxField` uses for its own popup.
+export struct PatternPreset {
+    label: string,
+    pattern: string,
+    is-header: bool,
+}
+
+// "Presets ▾" button for the Condition editor's Pattern field — lets users
+// pick a known-good built-in regex (EQ death/combat/loot/chat lines,
+// statically compiled into the binary) instead of writing one from
+// scratch. Picking a preset just overwrites `pattern` in the caller, same
+// as typing; it stays fully editable afterward.
+export component PresetPickerButton inherits Rectangle {
+    in property <[PatternPreset]> presets;
+    in property <bool> enabled: true;
+    callback picked(string);
+
+    property <length> item-height: 30px;
+    property <length> list-height: min(root.presets.length * root.item-height, 280px);
+
+    width: 104px;
+    height: 30px;
+    background: root.enabled ? Theme.bg-elevated : Theme.bg-panel;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: touch.has-hover ? Theme.accent : Theme.border;
+
+    animate border-color { duration: 100ms; }
+
+    HorizontalLayout {
+        padding-left: Theme.space-sm;
+        padding-right: Theme.space-sm;
+        spacing: 4px;
+
+        Text {
+            text: "\u{2726}";
+            color: root.enabled ? Theme.accent : Theme.text-disabled;
+            font-size: Theme.font-size-sm;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "Presets";
+            color: root.enabled ? Theme.text-primary : Theme.text-disabled;
+            font-size: Theme.font-size-sm;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: "\u{25be}";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { popup.show(); }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: 320px;
+        height: root.list-height;
+
+        Rectangle {
+            background: Theme.bg-elevated;
+            border-radius: Theme.radius-sm;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            ScrollArea {
+                content-height: max(root.presets.length, 1) * root.item-height;
+
+                VerticalLayout {
+                    for preset in root.presets: Rectangle {
+                        height: root.item-height;
+                        background: preset.is-header ? Theme.bg-panel : (item-touch.has-hover ? Theme.bg-hover : transparent);
+
+                        HorizontalLayout {
+                            padding-left: Theme.space-sm;
+                            padding-right: Theme.space-sm;
+
+                            Text {
+                                text: preset.label;
+                                color: preset.is-header ? Theme.accent : Theme.text-primary;
+                                font-size: preset.is-header ? Theme.font-size-sm : Theme.font-size-md;
+                                font-weight: preset.is-header ? 700 : 400;
+                                letter-spacing: preset.is-header ? 0.5px : 0px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                        }
+
+                        item-touch := TouchArea {
+                            enabled: !preset.is-header;
+                            clicked => {
+                                root.picked(preset.pattern);
+                                popup.close();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

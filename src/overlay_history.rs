@@ -165,6 +165,21 @@ pub mod overlay_history {
         slint::Image::load_from_path(&path).ok()
     }
 
+    /// Below one minute, seconds; below one hour, minutes; at/above one
+    /// hour, hours — each tier rounded to the nearest unit rather than
+    /// floor/ceil, so the label stays stable at the row's ~1s refresh
+    /// instead of flickering between e.g. "3m"/"4m" right at a boundary.
+    fn format_time_ago(secs_ago: f32) -> String {
+        let mins = secs_ago / 60.0;
+        if secs_ago < 60.0 {
+            format!("{}s", secs_ago as u64)
+        } else if mins < 60.0 {
+            format!("{}m", mins.round() as u64)
+        } else {
+            format!("{}h", (mins / 60.0).round() as u64)
+        }
+    }
+
     fn color_from_hex(hex: &str, default_rgb: (u8, u8, u8)) -> Color {
         let (r, g, b) = parse_hex_color(hex)
             .map(|c| {
@@ -269,6 +284,11 @@ pub mod overlay_history {
                 }
                 if !state.visible {
                     tracing::info!("history overlay: showing (force_show={})", state.force_show);
+                    crate::overlay_draw::overlay_draw::apply_saved_position(
+                        &ui,
+                        &state.handle,
+                        crate::overlay_registry::overlay_registry::OverlayKind::History,
+                    );
                     let _ = ui.show();
                     state.visible = true;
                     crate::overlay_draw::overlay_draw::hide_from_taskbar(weak.clone());
@@ -293,7 +313,7 @@ pub mod overlay_history {
                                 message: message.as_str().into(),
                                 message_color: color_from_hex(message_color, DEFAULT_TEXT_RGB),
                                 border_color: color_from_hex(border_color, DEFAULT_BORDER_RGB),
-                                time_label: format!("{}s", *secs_ago as u64).into(),
+                                time_label: format_time_ago(*secs_ago).into(),
                                 row_alpha: (*secs_ago / FADE_IN_SECS).clamp(0.0, 1.0),
                             }
                         },

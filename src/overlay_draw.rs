@@ -144,6 +144,49 @@ pub mod overlay_draw {
             .with_winit_window(|w| w.set_window_level(winit::window::WindowLevel::AlwaysOnTop));
     }
 
+    // ── Position reapplication on show ───────────────────────────────────────
+    //
+    // Every overlay window calls `set_position()` exactly once, at window
+    // creation (`create_alert_window` etc.), using whatever `Config` held at
+    // startup. That's the *only* place any of them ever tell the OS "put me
+    // here" — after that, the app just trusts the window manager to keep
+    // remembering where the window is across every later `.hide()`/`.show()`
+    // cycle (e.g. Settings' "Hide All Overlays" / "Show All Overlays", or the
+    // normal alert/DPS-meter queue-driven show/hide). A window created before
+    // its very first real position (i.e. `Config`'s `x`/`y` were still the
+    // `-1`/`-1` "unset" sentinel, true for any overlay that's never been
+    // dragged or explicitly positioned yet) never got a real `set_position`
+    // call at all — the WM auto-placed it wherever its own default landed
+    // (observed: dead-centered). A later drag moves it live and saves the
+    // real coordinates to `Config` correctly, but since nothing re-asserts
+    // position on the *next* show, the WM's remap during Hide All → Show All
+    // (still within the same run, so window creation never happens again to
+    // pick up the new value) snaps it right back to that same default —
+    // confirmed live: dragging, hiding, and showing again re-centered the
+    // window, while a full app restart (which re-reads `Config` at creation
+    // time, now with real coordinates) placed it correctly. Re-applying the
+    // saved position on every hidden→visible transition — not just the first
+    // one — closes that gap regardless of whether the position came from
+    // `Config` at startup or from a drag earlier in the same run.
+    pub fn apply_saved_position<W>(
+        window: &W,
+        handle: &std::sync::Arc<crate::tray::tray::AppHandle>,
+        kind: crate::overlay_registry::overlay_registry::OverlayKind,
+    ) where
+        W: slint::ComponentHandle,
+    {
+        let (x, y) = {
+            let cfg = handle.config.lock().unwrap();
+            let win = kind.config(&cfg);
+            (win.x, win.y)
+        };
+        if x >= 0 && y >= 0 {
+            window.window().set_position(slint::WindowPosition::Logical(
+                slint::LogicalPosition::new(x as f32, y as f32),
+            ));
+        }
+    }
+
     // ── Focus-stealing on show ──────────────────────────────────────────────
     //
     // Every overlay window cycles `.hide()`/`.show()` as alerts come and go
@@ -205,6 +248,52 @@ pub mod overlay_draw {
     #[cfg(not(target_os = "windows"))]
     fn set_no_activate_now(_window: &slint::Window) {}
 
+    // ── True (non-cached) position query ────────────────────────────────────
+    //
+    // `overlay_shell::handle_drag_end` needs the window's actual on-screen
+    // position right after an interactive `drag_window()` move finishes.
+    // Winit's own `Window::position()` is a cache maintained by processing
+    // `ConfigureNotify` events through the ordinary event loop — but on
+    // X11/xfwm4, the `ConfigureNotify` trailing an EWMH-driven interactive
+    // move isn't drained by that ordinary event loop at all; it only gets
+    // processed as a side effect of the *next* `drag_window()` call's own
+    // internal message pump. Left alone, `position()` reads back stale
+    // (specifically: frozen at wherever the window was *before* the drag
+    // that just happened) indefinitely, not just briefly — confirmed live
+    // against xfwm4 (2026-08-16): dragging window A to a new spot and
+    // reading `position()` afterward — even after a multi-second wait with
+    // no other interaction — kept returning A's pre-drag coordinates, and a
+    // save at that point would silently persist the wrong value forever
+    // (each drag's config write lands one full drag behind the real
+    // position, exactly matching the "one drag behind" signature
+    // `overlay_shell` had previously fixed for a *different*, shorter-lived
+    // staleness window — see its own doc comment for that history).
+    //
+    // Bypassing winit's cache and asking the X server directly via
+    // `TranslateCoordinates` (the same primitive `XTranslateCoordinates`
+    // wraps) sidesteps the problem entirely: it's a synchronous round trip
+    // to the server for the window's *current* geometry, not a locally
+    // cached value that depends on which events winit has gotten around to
+    // processing.
+    /// Physical (unscaled) pixel position of `window`, read directly from
+    /// the OS instead of through winit's cache. `None` if unsupported on
+    /// this platform/backend (Wayland, any query failure) — callers should
+    /// fall back to `Window::position()` in that case.
+    pub fn true_window_position(window: &slint::Window) -> Option<(i32, i32)> {
+        #[cfg(target_os = "linux")]
+        {
+            use slint::winit_030::WinitWindowAccessor;
+            window
+                .with_winit_window(linux_x11::query_position)
+                .flatten()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window;
+            None
+        }
+    }
+
     #[cfg(target_os = "linux")]
     mod linux_x11 {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -259,6 +348,25 @@ pub mod overlay_draw {
             )?;
             conn.flush()?;
             Ok(())
+        }
+
+        /// Same short-lived-connection approach as `send_skip_taskbar`, but a
+        /// query instead of a state change: asks the X server to translate
+        /// the window's own origin (0, 0) into root-window (i.e. screen)
+        /// coordinates, which is exactly the window's on-screen position.
+        pub(super) fn query_position(winit_window: &winit::window::Window) -> Option<(i32, i32)> {
+            let handle = winit_window.window_handle().ok()?;
+            let RawWindowHandle::Xlib(xlib) = handle.as_raw() else {
+                return None;
+            };
+            translate_to_root(xlib.window as u32).ok()
+        }
+
+        fn translate_to_root(window_id: u32) -> Result<(i32, i32), Box<dyn std::error::Error>> {
+            let (conn, screen_num) = XCBConnection::connect(None)?;
+            let root = conn.setup().roots[screen_num].root;
+            let reply = conn.translate_coordinates(window_id, root, 0, 0)?.reply()?;
+            Ok((reply.dst_x as i32, reply.dst_y as i32))
         }
     }
 }

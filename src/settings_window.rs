@@ -31,6 +31,7 @@ pub mod settings_window {
     use crate::overlay_draw::overlay_draw::parse_hex_color;
     use crate::overlay_registry::overlay_registry::OverlayKind;
     use crate::tray::tray::{copy_to_clipboard, AppHandle};
+    use crate::trigger_presets::effective_presets;
     use crate::triggers::engine::{
         Action, ChatChannel, Condition, ConditionLogic, MatchType, SoundMode, Treatment,
         TriggerConfig, TriggerDef, VarOp, VoicePriority,
@@ -233,6 +234,7 @@ pub mod settings_window {
             SettingsWindow::new().expect("create settings window")
         });
         window.set_current_tab(initial_tab);
+        window.set_pattern_presets(ModelRc::new(VecModel::from(build_pattern_preset_rows())));
 
         let trigger_cfg = Rc::new(RefCell::new(TriggerConfig::load()));
         let panel_stack: Rc<RefCell<Vec<PanelFrame>>> = Rc::new(RefCell::new(Vec::new()));
@@ -241,33 +243,52 @@ pub mod settings_window {
         refresh_trigger_rows(&window, &trigger_cfg);
         wire_callbacks(&window, &handle, &trigger_cfg, &panel_stack);
 
-        // Route the native titlebar close button through the same cleanup
-        // as Cancel, since it doesn't fire `on_cancel` on its own. Used to
-        // also veto the close while a nested dialog was open — no longer
-        // needed now that add/edit flows are an embedded drawer inside this
+        // The titlebar X is the only way to close Settings now (see
+        // settings_shell.slint's pending-changes dialog doc comment) — if
+        // any Save-gated field is dirty, veto the close and pop that dialog
+        // instead of silently discarding the edit; otherwise close for real.
+        // Also used to discard an in-progress drawer edit (trigger/
+        // condition/action/etc.) — no separate veto needed for that any
+        // more now that add/edit flows are an embedded drawer inside this
         // same window rather than a second top-level window that could be
-        // orphaned (see common/modal-scrim.slint's doc comment); closing
-        // Settings while the drawer is open now just discards the
-        // in-progress edit, same as Cancel already does for the tabs.
+        // orphaned (see common/modal-scrim.slint's doc comment).
         {
             let handle = Arc::clone(&handle);
+            let weak = window.as_weak();
             window.window().on_close_requested(move || {
-                handle.settings_open.store(false, Ordering::Relaxed);
-                // Show All Windows is a Settings-session convenience for
-                // positioning overlays, not a state meant to persist once
-                // Settings itself is gone — turn it back off (and let the
-                // overlays return to their normal enabled/idle-driven
-                // visibility) whenever Settings closes, however it closes.
-                handle.force_show_windows.store(false, Ordering::Relaxed);
-                SETTINGS_WINDOW.with(|c| {
-                    c.borrow_mut().take();
-                });
+                let w = weak.upgrade().unwrap();
+                if w.get_dirty() {
+                    w.set_pending_changes_open(true);
+                    return slint::CloseRequestResponse::KeepWindowShown;
+                }
+                finish_close_bookkeeping(&handle);
                 slint::CloseRequestResponse::HideWindow
             });
         }
 
         SETTINGS_WINDOW.with(|c| *c.borrow_mut() = Some(window.as_weak()));
+        tracing::info!("open_settings: about to show, dirty={}", window.get_dirty());
         window.show().expect("show settings window");
+
+        // load_config's population above sets dirty-gated fields (e.g.
+        // start-font-size) whose `changed` notifications Slint defers until
+        // the window's first render, which happens inside/after `show()`
+        // above — resetting `dirty` before that point gets silently
+        // clobbered back to `true` once the deferred notifications flush.
+        // Queue the real reset for the next event-loop tick so it runs
+        // after that flush instead of racing it.
+        {
+            let weak = window.as_weak();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    tracing::info!(
+                        "open_settings: deferred dirty reset, was dirty={}",
+                        w.get_dirty()
+                    );
+                    w.set_dirty(false);
+                }
+            });
+        }
     }
 
     // ── Load Config -> Slint properties ───────────────────────────────────────
@@ -329,6 +350,8 @@ pub mod settings_window {
         // General tab.
         window.set_import_status("".into());
         window.set_import_in_progress(false);
+        window.set_dynamic_config_status("".into());
+        window.set_dynamic_config_in_progress(false);
 
         // Logging tab.
         refresh_log_profiles(window, &cfg);
@@ -436,12 +459,16 @@ pub mod settings_window {
         refresh_sound_packages(window, &cfg.sound_package);
         refresh_sound_labels(window, &cfg.sound_package);
 
-        // Every `set_*` above just walked the Save-gated fields through
-        // their `changed` handlers, which flip `dirty` true on any value
-        // change from the freshly-constructed window's defaults — undo
-        // that here so Save starts out disabled until the user actually
-        // changes something.
-        window.set_dirty(false);
+        // Every `set_*` above walks the Save-gated fields through their
+        // `changed` handlers, which flip `dirty` true on any value change
+        // from the freshly-constructed window's defaults. Resetting `dirty`
+        // here doesn't stick, though: Slint defers at least some of those
+        // `changed` notifications (confirmed via logging — e.g.
+        // start-font-size's fired 8ms after `show()`, not during this
+        // synchronous population) until the window's first render, which
+        // happens inside/after `show()`. The real reset lives in
+        // `open_settings`, deferred via `invoke_from_event_loop` so it runs
+        // after that first-render flush instead of being clobbered by it.
     }
 
     /// Refreshes the log-profile list, Auto-detect checkbox, and "Currently
@@ -744,6 +771,25 @@ pub mod settings_window {
         }
     }
 
+    // Shared by every path that actually closes Settings (the titlebar X
+    // when not dirty, and the pending-changes dialog's Save & Close /
+    // Discard buttons when it is) — everything except the window's own
+    // `.hide()`/the native `HideWindow` response, since the titlebar-X path
+    // gets that for free by returning it to Slint instead of calling it
+    // directly.
+    fn finish_close_bookkeeping(handle: &Arc<AppHandle>) {
+        handle.settings_open.store(false, Ordering::Relaxed);
+        // Show All Windows is a Settings-session convenience for
+        // positioning overlays, not a state meant to persist once Settings
+        // itself is gone — turn it back off (and let the overlays return to
+        // their normal enabled/idle-driven visibility) whenever Settings
+        // closes, however it closes.
+        handle.force_show_windows.store(false, Ordering::Relaxed);
+        SETTINGS_WINDOW.with(|c| {
+            c.borrow_mut().take();
+        });
+    }
+
     // ── Callback wiring ────────────────────────────────────────────────────────
 
     fn wire_callbacks(
@@ -752,6 +798,12 @@ pub mod settings_window {
         trigger_cfg: &Rc<RefCell<TriggerConfig>>,
         panel_stack: &Rc<RefCell<Vec<PanelFrame>>>,
     ) {
+        // TEMPORARY diagnostic — see settings_shell.slint's `dirty-reason`
+        // doc comment for what this is chasing and why it should come back
+        // out once the culprit's found.
+        window.on_dirty_changed(|dirty, reason| {
+            tracing::info!("settings dirty-changed: dirty={dirty} last-field={reason:?}");
+        });
         window.on_drawer_back({
             let weak = window.as_weak();
             let stack = panel_stack.clone();
@@ -1457,21 +1509,34 @@ pub mod settings_window {
                 save_config(&w, &handle, &trigger_cfg.borrow());
                 // Save persists the whole form at once, so it's back in
                 // sync with Config regardless of which field(s) triggered
-                // `dirty` — unlike Cancel/the titlebar X, Save doesn't close
-                // the window; the user closes Settings from its own X.
+                // `dirty` — unlike closing, Save doesn't close the window;
+                // the user closes Settings from its own titlebar X.
+                tracing::info!("on_save: save_config done, resetting dirty to false");
                 w.set_dirty(false);
             }
         });
-        window.on_cancel({
+        // Pending-changes dialog's two closing choices (see
+        // settings_shell.slint's doc comment on that dialog) — "Keep
+        // Editing" is handled Slint-side only, it never reaches Rust.
+        window.on_save_and_close_settings({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let trigger_cfg = trigger_cfg.clone();
+            move || {
+                let w = weak.upgrade().unwrap();
+                save_config(&w, &handle, &trigger_cfg.borrow());
+                w.set_dirty(false);
+                finish_close_bookkeeping(&handle);
+                let _ = w.hide();
+            }
+        });
+        window.on_discard_and_close_settings({
             let weak = window.as_weak();
             let handle = Arc::clone(handle);
             move || {
-                handle.settings_open.store(false, Ordering::Relaxed);
-                handle.force_show_windows.store(false, Ordering::Relaxed);
-                SETTINGS_WINDOW.with(|c| {
-                    c.borrow_mut().take();
-                });
-                let _ = weak.upgrade().unwrap().hide();
+                let w = weak.upgrade().unwrap();
+                finish_close_bookkeeping(&handle);
+                let _ = w.hide();
             }
         });
 
@@ -1713,6 +1778,39 @@ pub mod settings_window {
                                 )
                             };
                             w.set_import_status(status.into());
+                        }
+                    });
+                });
+            }
+        });
+
+        window.on_download_dynamic_config({
+            let weak = window.as_weak();
+            move || {
+                let w = weak.upgrade().unwrap();
+                w.set_dynamic_config_in_progress(true);
+                w.set_dynamic_config_status("Downloading…".into());
+                let weak2 = weak.clone();
+                std::thread::spawn(move || {
+                    let result = crate::trigger_presets::download_dynamic_config();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak2.upgrade() {
+                            w.set_dynamic_config_in_progress(false);
+                            match result {
+                                Ok(count) => {
+                                    w.set_pattern_presets(ModelRc::new(VecModel::from(
+                                        build_pattern_preset_rows(),
+                                    )));
+                                    w.set_dynamic_config_status(
+                                        format!("Up to date — {count} presets loaded.").into(),
+                                    );
+                                }
+                                Err(e) => {
+                                    w.set_dynamic_config_status(
+                                        format!("Download failed: {e}").into(),
+                                    );
+                                }
+                            }
                         }
                     });
                 });
@@ -2545,6 +2643,31 @@ pub mod settings_window {
     }
 
     // ── Condition panel ────────────────────────────────────────────────────────
+
+    // Flattens PATTERN_PRESETS into the picker's row list, inserting one
+    // non-clickable header row per category (in the order categories first
+    // appear) — see PatternPreset's doc comment in preset-picker.slint for
+    // why this is a flat list rather than a nested model.
+    fn build_pattern_preset_rows() -> Vec<PatternPreset> {
+        let mut rows = Vec::new();
+        let mut last_category = String::new();
+        for preset in effective_presets() {
+            if preset.category != last_category {
+                rows.push(PatternPreset {
+                    label: preset.category.clone().into(),
+                    pattern: "".into(),
+                    is_header: true,
+                });
+                last_category = preset.category.clone();
+            }
+            rows.push(PatternPreset {
+                label: preset.label.into(),
+                pattern: preset.pattern.into(),
+                is_header: false,
+            });
+        }
+        rows
+    }
 
     fn push_condition_panel(
         window: &SettingsWindow,

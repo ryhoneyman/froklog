@@ -36,4 +36,6 @@ pub mod sound_packages;
 #[cfg(feature = "tray")]
 pub mod spell_icons;
 #[cfg(feature = "tray")]
+pub mod trigger_presets;
+#[cfg(feature = "tray")]
 pub mod tts;

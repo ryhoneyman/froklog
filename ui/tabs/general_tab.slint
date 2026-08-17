@@ -15,6 +15,10 @@ export component GeneralTab inherits VerticalLayout {
     in property <bool> import-in-progress;
     callback import-spell-icons();
 
+    in property <string> dynamic-config-status;
+    in property <bool> dynamic-config-in-progress;
+    callback download-dynamic-config();
+
     Text {
         text: "General";
         color: Theme.text-primary;
@@ -46,6 +50,39 @@ export component GeneralTab inherits VerticalLayout {
             }
             Text {
                 text: root.import-status;
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+
+    Card {
+        Text {
+            text: "Dynamic Configuration";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-md;
+            font-weight: 600;
+        }
+        Text {
+            text: "Downloads the latest maintained condition presets, so new ones show up in the Presets picker without waiting for an app update.";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            alignment: start;
+
+            Button {
+                text: root.dynamic-config-in-progress ? "Downloading…" : "Download Latest Configuration";
+                enabled: !root.dynamic-config-in-progress;
+                clicked => { root.download-dynamic-config(); }
+            }
+            Text {
+                text: root.dynamic-config-status;
                 color: Theme.text-secondary;
                 font-size: Theme.font-size-sm;
                 vertical-alignment: center;
