@@ -367,7 +367,10 @@ pub mod overlay_shell {
     }
 
     /// Bounds on an interactively-resized overlay width (logical px).
+    /// Linux-only: the native-resize path elsewhere lets the OS bound it.
+    #[cfg(target_os = "linux")]
     const RESIZE_MIN_W: i32 = 160;
+    #[cfg(target_os = "linux")]
     const RESIZE_MAX_W: i32 = 2000;
 
     #[cfg(target_os = "linux")]
