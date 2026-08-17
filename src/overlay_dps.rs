@@ -522,6 +522,19 @@ pub mod overlay_dps {
             }
         });
 
+        window.on_resize_requested({
+            let weak = window.as_weak();
+            let handle = Arc::clone(&handle);
+            move || {
+                overlay_shell::overlay_shell::begin_width_resize(
+                    weak.clone(),
+                    Arc::clone(&handle),
+                    OverlayKind::Meter,
+                    |w, px| w.set_win_width(px),
+                );
+            }
+        });
+
         window.on_tab_clicked({
             let weak = window.as_weak();
             move |tab| {

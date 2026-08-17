@@ -232,6 +232,19 @@ pub mod overlay_history {
             }
         });
 
+        window.on_resize_requested({
+            let weak = window.as_weak();
+            let handle = Arc::clone(&handle);
+            move || {
+                overlay_shell::overlay_shell::begin_width_resize(
+                    weak.clone(),
+                    Arc::clone(&handle),
+                    OverlayKind::History,
+                    |w, px| w.set_win_width(px),
+                );
+            }
+        });
+
         let weak = window.as_weak();
         let timer = slint::Timer::default();
         timer.start(

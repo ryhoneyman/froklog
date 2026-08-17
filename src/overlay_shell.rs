@@ -317,6 +317,120 @@ pub mod overlay_shell {
         });
     }
 
+    /// Starts a width resize from an overlay's right-edge grip. Linux runs
+    /// the same poll-loop shape as `begin_drag` — but no regime probe: the
+    /// window's ORIGIN never moves during a width resize, so window-relative
+    /// pointer readings are trustworthy under both the frozen-frame
+    /// compositor and a rebasing X server. Elsewhere it hands off to the
+    /// OS-native interactive resize.
+    ///
+    /// `apply` pushes the new logical width into the window's `win-width`
+    /// property for instant feedback; the config field is updated in memory
+    /// each step (so the tick loop's own `win-width` push agrees mid-drag)
+    /// and persisted once on release.
+    pub fn begin_width_resize<W>(
+        weak: Weak<W>,
+        handle: Arc<AppHandle>,
+        kind: OverlayKind,
+        apply: impl Fn(&W, i32) + 'static,
+    ) where
+        W: ComponentHandle + 'static,
+    {
+        #[cfg(target_os = "linux")]
+        {
+            let anchors = weak.upgrade().and_then(|w| {
+                let (lx, _, down) = crate::overlay_draw::overlay_draw::pointer_local(w.window())?;
+                if !down {
+                    return None;
+                }
+                Some((lx, w.window().size().width as i32))
+            });
+            if let Some((anchor_x, anchor_w)) = anchors {
+                width_resize_step(weak, handle, kind, anchor_x, anchor_w, apply, 0);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = &apply;
+            if let Some(w) = weak.upgrade() {
+                use slint::winit_030::WinitWindowAccessor;
+                let _ = w.window().with_winit_window(|ww| {
+                    let _ = ww.drag_resize_window(winit::window::ResizeDirection::East);
+                });
+                // Native resize has finished (drag_resize_window blocks on
+                // Windows) — persist what the OS left us with.
+                let scale = w.window().scale_factor();
+                let logical = (w.window().size().width as f32 / scale).round() as i32;
+                save_width(kind, &handle, logical);
+            }
+        }
+    }
+
+    /// Bounds on an interactively-resized overlay width (logical px).
+    const RESIZE_MIN_W: i32 = 160;
+    const RESIZE_MAX_W: i32 = 2000;
+
+    #[cfg(target_os = "linux")]
+    fn width_resize_step<W>(
+        weak: Weak<W>,
+        handle: Arc<AppHandle>,
+        kind: OverlayKind,
+        anchor_x: i32,
+        anchor_w: i32,
+        apply: impl Fn(&W, i32) + 'static,
+        elapsed_ms: u64,
+    ) where
+        W: ComponentHandle + 'static,
+    {
+        slint::Timer::single_shot(Duration::from_millis(POLL_INTERVAL_MS), move || {
+            let Some(w) = weak.upgrade() else { return };
+            let Some((lx, _, down)) = crate::overlay_draw::overlay_draw::pointer_local(w.window())
+            else {
+                return;
+            };
+            let scale = w.window().scale_factor();
+            let new_phys = anchor_w + (lx - anchor_x);
+            let logical =
+                ((new_phys as f32 / scale).round() as i32).clamp(RESIZE_MIN_W, RESIZE_MAX_W);
+            if let Some(field) = width_field(kind) {
+                let mut cfg = handle.config.lock().unwrap();
+                *field(&mut cfg) = logical;
+            }
+            apply(&w, logical);
+            if down && elapsed_ms < DRAG_MAX_MS {
+                width_resize_step(
+                    weak,
+                    handle,
+                    kind,
+                    anchor_x,
+                    anchor_w,
+                    apply,
+                    elapsed_ms + POLL_INTERVAL_MS,
+                );
+            } else {
+                save_width(kind, &handle, logical);
+            }
+        });
+    }
+
+    /// Which config field holds `kind`'s width — `None` for overlays without
+    /// a width setting.
+    #[allow(clippy::type_complexity)]
+    fn width_field(kind: OverlayKind) -> Option<fn(&mut crate::config::Config) -> &mut i32> {
+        match kind {
+            OverlayKind::Meter => Some(|cfg| &mut cfg.meter_width),
+            OverlayKind::History => Some(|cfg| &mut cfg.overlay_history_width),
+            _ => None,
+        }
+    }
+
+    fn save_width(kind: OverlayKind, handle: &Arc<AppHandle>, width: i32) {
+        let Some(field) = width_field(kind) else { return };
+        let mut cfg = handle.config.lock().unwrap();
+        *field(&mut cfg) = width;
+        cfg.save();
+    }
+
     fn save_position(kind: OverlayKind, handle: &Arc<AppHandle>, pos: (f32, f32)) {
         let (x, y) = {
             let mut cfg = handle.config.lock().unwrap();
