@@ -405,6 +405,7 @@ pub mod settings_window {
         window.set_meter_idle_secs(cfg.meter_idle_secs.to_string().into());
         window.set_meter_font_size(cfg.meter_font_size.to_string().into());
         window.set_meter_width(cfg.meter_width.to_string().into());
+        window.set_meter_share_bars(cfg.meter_share_bars);
 
         // Voice tab.
         window.set_tts_enabled(cfg.tts_enabled);
@@ -691,6 +692,7 @@ pub mod settings_window {
         cfg.meter_idle_secs = parse_or(&window.get_meter_idle_secs(), cfg.meter_idle_secs);
         cfg.meter_font_size = parse_or(&window.get_meter_font_size(), cfg.meter_font_size);
         cfg.meter_width = parse_or(&window.get_meter_width(), cfg.meter_width);
+        cfg.meter_share_bars = window.get_meter_share_bars();
 
         cfg.tts_enabled = window.get_tts_enabled();
         cfg.tts_speed = match window.get_tts_speed().as_str() {

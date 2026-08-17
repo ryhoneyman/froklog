@@ -145,6 +145,7 @@ export component SettingsWindow inherits Window {
     in-out property <string> meter-idle-secs <=> appearance-tab.meter-idle-secs;
     in-out property <string> meter-font-size <=> appearance-tab.meter-font-size;
     in-out property <string> meter-width <=> appearance-tab.meter-width;
+    in-out property <bool> meter-share-bars <=> appearance-tab.meter-share-bars;
     in-out property <bool> force-show-active <=> appearance-tab.force-show-active;
     callback show-all-windows <=> appearance-tab.show-all-windows;
     in-out property <bool> win-overlay-enabled <=> appearance-tab.alert-enabled;
@@ -429,6 +430,7 @@ export component SettingsWindow inherits Window {
     changed meter-idle-secs => { root.dirty = true; root.dirty-reason = "meter-idle-secs"; }
     changed meter-font-size => { root.dirty = true; root.dirty-reason = "meter-font-size"; }
     changed meter-width => { root.dirty = true; root.dirty-reason = "meter-width"; }
+    changed meter-share-bars => { root.dirty = true; root.dirty-reason = "meter-share-bars"; }
     changed win-overlay-pos-x => { root.dirty = true; root.dirty-reason = "win-overlay-pos-x"; }
     changed win-overlay-pos-y => { root.dirty = true; root.dirty-reason = "win-overlay-pos-y"; }
     changed win-history-pos-x => { root.dirty = true; root.dirty-reason = "win-history-pos-x"; }

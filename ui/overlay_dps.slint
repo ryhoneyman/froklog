@@ -17,6 +17,16 @@ export struct MeterRow {
     class-color: color,
     amount-label: string,
     rate-label: string,
+    // Share-bar fields, rendered only while `share-bars` is on: fraction of
+    // the group total (0..1), its "NN%" label, and up to three class
+    // colors — one per class of an EQ Legends multiclass character; a
+    // classic single-class character renders a solid bar.
+    share: float,
+    share-label: string,
+    bar-class-count: int,
+    bar-c0: color,
+    bar-c1: color,
+    bar-c2: color,
 }
 
 // One row of the mob picker. `id` mirrors overlay_dps.rs's
@@ -27,6 +37,67 @@ export struct MobPickerEntry {
     label: string,
     dot-color: color,
     selected: bool,
+}
+
+// A draggable column divider with pane-splitter semantics. Anchors the
+// drag in WINDOW coordinates (absolute-position + mouse-x): the divider
+// moves with the boundary it drags, so element-relative deltas oscillate.
+//
+// Two modes:
+// - single-sided (default): only the RIGHT column resizes; the stretchy
+//   Name column absorbs the slack. Used for the Name|Dmg boundary.
+// - two-sided: the boundary TRANSFERS width between its two neighbors —
+//   pointer right = left column grows, right column shrinks — so every
+//   other column keeps both its width and its position. Used between
+//   adjacent fixed columns, which is what makes a divider feel like it
+//   moves only that boundary.
+component ColDivider inherits TouchArea {
+    in-out property <int> right-value;
+    in property <length> right-current;
+    in property <int> right-min: 30;
+    in property <int> right-max: 400;
+    in property <bool> two-sided: false;
+    in-out property <int> left-value;
+    in property <length> left-current;
+    in property <int> left-min: 30;
+    in property <int> left-max: 400;
+    callback edited();
+    callback commit();
+    property <int> start-right: 0;
+    property <int> start-left: 0;
+    property <length> press-wx: 0;
+    width: 6px;
+    mouse-cursor: col-resize;
+    moved => {
+        if (self.two-sided) {
+            // Pointer travel, clamped so BOTH neighbors stay within bounds.
+            self.left-value = self.start-left + max(
+                max(self.left-min - self.start-left, self.start-right - self.right-max),
+                min(round((self.absolute-position.x + self.mouse-x - self.press-wx) / 1px),
+                    min(self.left-max - self.start-left, self.start-right - self.right-min)));
+            self.right-value = self.start-right - (self.left-value - self.start-left);
+        } else {
+            self.right-value = max(self.right-min, min(self.right-max, self.start-right
+                - round((self.absolute-position.x + self.mouse-x - self.press-wx) / 1px)));
+        }
+        self.edited();
+    }
+    pointer-event(ev) => {
+        if (ev.kind == PointerEventKind.down) {
+            self.press-wx = self.absolute-position.x + self.mouse-x;
+            self.start-right = round(self.right-current / 1px);
+            self.start-left = round(self.left-current / 1px);
+        }
+        if (ev.kind == PointerEventKind.up) {
+            self.commit();
+        }
+    }
+    Rectangle {
+        width: 1px;
+        height: 100%;
+        x: (parent.width - self.width) / 2;
+        background: root.has-hover || root.pressed ? #8fd48a88 : #ffffff14;
+    }
 }
 
 export component DpsMeterWindow inherits OverlayShell {
@@ -43,6 +114,10 @@ export component DpsMeterWindow inherits OverlayShell {
     callback tab-clicked(int);
 
     in property <string> amount-col-label: "Dmg";
+    // Ported from the Linux interim client's meter: a proportional
+    // class-colored fill behind each row plus a % column. Off = the
+    // classic trimmed rows, pixel-identical to before this existed.
+    in property <bool> share-bars: false;
     in property <string> rate-col-label: "DPS";
 
     in property <[MeterRow]> rows;
@@ -61,7 +136,21 @@ export component DpsMeterWindow inherits OverlayShell {
     callback clear-stats();
     callback copy-clicked();
 
-    property <length> col-w: 52px;
+    // Per-column widths, drag-adjustable via the header dividers and
+    // persisted to config (0 = auto: the historical 52px / 5x-font
+    // defaults).
+    in-out property <int> amount-w-px: 0;
+    in-out property <int> rate-w-px: 0;
+    in-out property <int> bar-w-px: 0;
+    in-out property <int> sec-w-px: 0;
+    property <length> amount-w: amount-w-px <= 0 ? 52px : amount-w-px * 1px;
+    property <length> rate-w: rate-w-px <= 0 ? 52px : rate-w-px * 1px;
+    property <length> bar-w: bar-w-px <= 0 ? row-font-size * 5 : bar-w-px * 1px;
+    property <length> sec-w: sec-w-px <= 0 ? 52px : sec-w-px * 1px;
+    // live = a width changed mid-drag (update in memory); commit = drag
+    // ended (persist to disk).
+    callback col-widths-changed(int, int, int, int);
+    callback col-widths-commit();
 
     // Drag-to-move — see overlay_alert.slint's comment on the same
     // property/callback for why this exists and how it works. Placed as
@@ -203,27 +292,83 @@ export component DpsMeterWindow inherits OverlayShell {
                         horizontal-stretch: 1;
                         vertical-alignment: center;
                     }
+                    ColDivider {
+                        // Name|Dmg: single-sided — the stretchy Name column
+                        // absorbs the slack.
+                        right-value <=> root.amount-w-px;
+                        right-current: root.amount-w;
+                        edited => { root.col-widths-changed(root.amount-w-px, root.rate-w-px, root.bar-w-px, root.sec-w-px); }
+                        commit => { root.col-widths-commit(); }
+                    }
                     Text {
                         text: root.amount-col-label;
                         color: #96969a;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.amount-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
+                    }
+                    ColDivider {
+                        two-sided: true;
+                        left-value <=> root.amount-w-px;
+                        left-current: root.amount-w;
+                        right-value <=> root.rate-w-px;
+                        right-current: root.rate-w;
+                        edited => { root.col-widths-changed(root.amount-w-px, root.rate-w-px, root.bar-w-px, root.sec-w-px); }
+                        commit => { root.col-widths-commit(); }
                     }
                     Text {
                         text: root.rate-col-label;
                         color: #96969a;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.rate-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
+                    }
+                    if root.share-bars: HorizontalLayout {
+                        ColDivider {
+                            two-sided: true;
+                            left-value <=> root.rate-w-px;
+                            left-current: root.rate-w;
+                            right-min: 40;
+                            right-value <=> root.bar-w-px;
+                            right-current: root.bar-w;
+                            edited => { root.col-widths-changed(root.amount-w-px, root.rate-w-px, root.bar-w-px, root.sec-w-px); }
+                            commit => { root.col-widths-commit(); }
+                        }
+                        Text {
+                            text: "%";
+                            color: #96969a;
+                            font-size: root.row-font-size;
+                            width: root.bar-w;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if root.share-bars: ColDivider {
+                        two-sided: true;
+                        left-min: 40;
+                        left-value <=> root.bar-w-px;
+                        left-current: root.bar-w;
+                        right-value <=> root.sec-w-px;
+                        right-current: root.sec-w;
+                        edited => { root.col-widths-changed(root.amount-w-px, root.rate-w-px, root.bar-w-px, root.sec-w-px); }
+                        commit => { root.col-widths-commit(); }
+                    }
+                    if !root.share-bars: ColDivider {
+                        two-sided: true;
+                        left-value <=> root.rate-w-px;
+                        left-current: root.rate-w;
+                        right-value <=> root.sec-w-px;
+                        right-current: root.sec-w;
+                        edited => { root.col-widths-changed(root.amount-w-px, root.rate-w-px, root.bar-w-px, root.sec-w-px); }
+                        commit => { root.col-widths-commit(); }
                     }
                     Text {
                         text: "Sec";
                         color: #96969a;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.sec-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
@@ -264,29 +409,69 @@ export component DpsMeterWindow inherits OverlayShell {
                         overflow: elide;
                         vertical-alignment: center;
                     }
+                    Rectangle { width: 6px; }
                     Text {
                         text: row.amount-label;
                         color: i == 0 ? #ffe18c : #e1e1e6;
                         font-weight: i == 0 ? 700 : 400;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.amount-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
+                    Rectangle { width: 6px; }
                     Text {
                         text: row.rate-label;
                         color: i == 0 ? #ffe18c : #e1e1e6;
                         font-weight: i == 0 ? 700 : 400;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.rate-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
+                    // The interim client's bar cell: a short rounded track
+                    // (5x font wide, 0.8x font tall, vertically centered),
+                    // class-colored proportional fill, "NN%" inside.
+                    if root.share-bars: Rectangle { width: 6px; }
+                    if root.share-bars: Rectangle {
+                        width: root.bar-w;
+                        Rectangle {
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width;
+                            height: root.row-font-size * 0.8;
+                            border-radius: 2px;
+                            background: #ffffff0c;
+                            clip: true;
+                            Rectangle {
+                                x: 0;
+                                y: 0;
+                                width: parent.width * row.share;
+                                height: parent.height;
+                                // The interim client's classGradient stop
+                                // recipe: 2 classes at (0,.35,.65,1), 3 at
+                                // (0,.25,.40,.60,.75,1); one class = solid.
+                                background: row.bar-class-count <= 1 ? row.bar-c0
+                                    : row.bar-class-count == 2
+                                        ? @linear-gradient(90deg, row.bar-c0 0%, row.bar-c0 35%, row.bar-c1 65%, row.bar-c1 100%)
+                                        : @linear-gradient(90deg, row.bar-c0 0%, row.bar-c0 25%, row.bar-c1 40%, row.bar-c1 60%, row.bar-c2 75%, row.bar-c2 100%);
+                            }
+                        }
+                        Text {
+                            text: row.share-label;
+                            color: #ebebf0;
+                            font-size: root.row-font-size - 4px;
+                            width: parent.width - 3px;
+                            height: parent.height;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle { width: 6px; }
                     Text {
                         text: root.elapsed-label;
                         color: #96969a;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.sec-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
@@ -318,24 +503,27 @@ export component DpsMeterWindow inherits OverlayShell {
                         color: white;
                         font-weight: 700;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.amount-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
+                    Rectangle { width: 6px; }
                     Text {
                         text: root.footer-rate-label;
                         color: white;
                         font-weight: 700;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.rate-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
+                    if root.share-bars: Rectangle { width: root.bar-w + 6px; }
+                    Rectangle { width: 6px; }
                     Text {
                         text: root.elapsed-label;
                         color: #96969a;
                         font-size: root.row-font-size;
-                        width: root.col-w;
+                        width: root.sec-w;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }

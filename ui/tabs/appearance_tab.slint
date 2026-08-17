@@ -2,6 +2,7 @@ import { Theme } from "../theme.slint";
 import { Card, SettingsCard } from "../common/card.slint";
 import { LabeledField } from "../common/labeled-field.slint";
 import { NumberInput } from "../common/number-input.slint";
+import { Checkbox } from "../common/checkbox.slint";
 import { ComboBoxField } from "../common/combo-box.slint";
 import { Button } from "../common/buttons.slint";
 
@@ -86,6 +87,7 @@ export component AppearanceTab inherits VerticalLayout {
     in-out property <string> meter-idle-secs;
     in-out property <string> meter-font-size;
     in-out property <string> meter-width;
+    in-out property <bool> meter-share-bars;
     in-out property <bool> meter-enabled;
     in-out property <bool> meter-locked;
     in-out property <string> meter-pos-x;
@@ -260,5 +262,6 @@ export component AppearanceTab inherits VerticalLayout {
             NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.meter-idle-secs; enabled: root.meter-enabled; }
             NumberInput { label: "Width"; unit: "px"; zero-hint: "Auto"; value <=> root.meter-width; enabled: root.meter-enabled; }
         }
+        Checkbox { text: "Share bars (class-colored % of group total per row)"; checked <=> root.meter-share-bars; enabled: root.meter-enabled; }
     }
 }

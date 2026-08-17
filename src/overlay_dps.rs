@@ -17,12 +17,15 @@
 #[allow(clippy::module_inception)]
 pub mod overlay_dps {
     use std::cell::Cell;
+    use std::collections::HashMap;
     use std::rc::Rc;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
+    use once_cell::sync::Lazy;
     use slint::{Color, ComponentHandle, ModelRc, VecModel};
+    use std::sync::Mutex;
 
     use crate::overlay_registry::overlay_registry::OverlayKind;
     use crate::overlay_shell;
@@ -91,8 +94,14 @@ pub mod overlay_dps {
     struct RowData {
         name: String,
         color: (u8, u8, u8),
+        /// One entry per class (EQ Legends multiclass = up to 3), for the
+        /// gradient bar. Empty = class unknown.
+        colors: Vec<(u8, u8, u8)>,
         total: u64,
         rate: u64,
+        /// Fraction of the GROUP total (all contributors, not just the rows
+        /// that fit on screen), for the share bar.
+        share: f32,
     }
 
     fn tab_entries(
@@ -237,6 +246,10 @@ pub mod overlay_dps {
     ) -> Vec<RowData> {
         let mut sorted = entries.to_vec();
         sorted.sort_by_key(|(_, s)| std::cmp::Reverse(tab.total_of(s)));
+        // Group total BEFORE truncation — a row's share is its slice of the
+        // whole fight, matching the footer's cumulative total, not just the
+        // rows that fit on screen.
+        let group_total: u64 = sorted.iter().map(|(_, s)| tab.total_of(s)).sum();
         sorted.truncate(max_rows);
 
         sorted
@@ -244,17 +257,20 @@ pub mod overlay_dps {
             .map(|(name, s)| {
                 let total = tab.total_of(s);
                 let rate = (total as f64 / elapsed).round() as u64;
-                let code = cs
-                    .player_classes
-                    .get(name)
-                    .and_then(|c| c.first())
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
+                let classes = resolve_classes(cs, name);
+                let colors: Vec<(u8, u8, u8)> =
+                    classes.iter().take(3).map(|c| class_color(c)).collect();
                 RowData {
                     name: name.clone(),
-                    color: class_color(code),
+                    color: colors.first().copied().unwrap_or_else(|| class_color("")),
+                    colors,
                     total,
                     rate,
+                    share: if group_total > 0 {
+                        total as f32 / group_total as f32
+                    } else {
+                        0.0
+                    },
                 }
             })
             .collect()
@@ -324,6 +340,46 @@ pub mod overlay_dps {
             (hex & 0xFF) as u8,
         )
     }
+
+    // ── Last-seen class cache ────────────────────────────────────────────
+    //
+    // `CombatState.player_classes` only fills from /who output, so until
+    // the player runs /who in a session every row renders in the default
+    // gray. This sidecar remembers each name's last known classes across
+    // restarts (classes-cache.toml beside config.toml); a fresh /who
+    // observation overwrites the entry. Only written when an entry actually
+    // changes — steady state does no disk IO.
+    static CLASS_CACHE: Lazy<Mutex<HashMap<String, Vec<String>>>> = Lazy::new(|| {
+        Mutex::new(
+            std::fs::read_to_string(crate::config::classes_cache_path())
+                .ok()
+                .and_then(|s| toml::from_str(&s).ok())
+                .unwrap_or_default(),
+        )
+    });
+
+    /// Live classes win and refresh the cache; unknown names fall back to
+    /// their cached classes (empty if never seen).
+    fn resolve_classes(cs: &CombatState, name: &str) -> Vec<String> {
+        let mut cache = CLASS_CACHE.lock().unwrap();
+        match cs.player_classes.get(name) {
+            Some(live) if !live.is_empty() => {
+                if cache.get(name) != Some(live) {
+                    cache.insert(name.to_string(), live.clone());
+                    if let Ok(body) = toml::to_string(&*cache) {
+                        let path = crate::config::classes_cache_path();
+                        if let Some(dir) = path.parent() {
+                            let _ = std::fs::create_dir_all(dir);
+                        }
+                        let _ = std::fs::write(path, body);
+                    }
+                }
+                live.clone()
+            }
+            _ => cache.get(name).cloned().unwrap_or_default(),
+        }
+    }
+
 
     fn fmt_k(n: u64) -> String {
         if n >= 1_000_000 {
@@ -395,6 +451,11 @@ pub mod overlay_dps {
         force_show: bool,
         locked: bool,
         width: i32,
+        share_bars: bool,
+        amount_w: i32,
+        rate_w: i32,
+        bar_w: i32,
+        sec_w: i32,
         tick_count: u64,
     }
 
@@ -413,6 +474,11 @@ pub mod overlay_dps {
                 force_show: handle.force_show_windows.load(Ordering::Relaxed),
                 locked: cfg.overlay_meter.locked,
                 width: cfg.meter_width,
+                share_bars: cfg.meter_share_bars,
+                amount_w: cfg.meter_amount_w,
+                rate_w: cfg.meter_rate_w,
+                bar_w: cfg.meter_bar_w,
+                sec_w: cfg.meter_sec_w,
                 tick_count: 0,
             }
         }
@@ -424,6 +490,11 @@ pub mod overlay_dps {
             self.idle_secs = cfg.meter_idle_secs;
             self.locked = cfg.overlay_meter.locked;
             self.width = cfg.meter_width;
+            self.share_bars = cfg.meter_share_bars;
+            self.amount_w = cfg.meter_amount_w;
+            self.rate_w = cfg.meter_rate_w;
+            self.bar_w = cfg.meter_bar_w;
+            self.sec_w = cfg.meter_sec_w;
             drop(cfg);
             let new_force_show = self.handle.force_show_windows.load(Ordering::Relaxed);
             if new_force_show != self.force_show {
@@ -437,12 +508,31 @@ pub mod overlay_dps {
         }
     }
 
+    /// `colors[i]` at the bar's alpha, clamped to the last entry (or the
+    /// unknown-class gray for an empty list).
+    fn bar_col(colors: &[(u8, u8, u8)], i: usize) -> Color {
+        let (r, g, b) = colors
+            .get(i.min(colors.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or((70, 70, 80));
+        Color::from_argb_u8(200, r, g, b)
+    }
+
     fn to_meter_row(r: &RowData) -> MeterRow {
         MeterRow {
             name: r.name.as_str().into(),
             class_color: Color::from_rgb_u8(r.color.0, r.color.1, r.color.2),
             amount_label: fmt_k(r.total).into(),
             rate_label: fmt_k(r.rate).into(),
+            share: r.share,
+            share_label: format!("{:.0}%", r.share * 100.0).into(),
+            // Fill colors, alpha pre-applied; the .slint side blends them
+            // with the interim client's gradient stop recipe when 2–3
+            // classes are present (EQ Legends multiclass).
+            bar_class_count: r.colors.len().min(3) as i32,
+            bar_c0: bar_col(&r.colors, 0),
+            bar_c1: bar_col(&r.colors, 1),
+            bar_c2: bar_col(&r.colors, 2),
         }
     }
 
@@ -524,6 +614,26 @@ pub mod overlay_dps {
                     OverlayKind::Meter,
                 );
                 dragging.set(false);
+            }
+        });
+
+        // Header column dividers: live drags update config in memory (so
+        // the tick loop's own property pushes agree mid-drag); the commit
+        // on release persists to disk.
+        window.on_col_widths_changed({
+            let handle = Arc::clone(&handle);
+            move |amount_w, rate_w, bar_w, sec_w| {
+                let mut cfg = handle.config.lock().unwrap();
+                cfg.meter_amount_w = amount_w;
+                cfg.meter_rate_w = rate_w;
+                cfg.meter_bar_w = bar_w;
+                cfg.meter_sec_w = sec_w;
+            }
+        });
+        window.on_col_widths_commit({
+            let handle = Arc::clone(&handle);
+            move || {
+                handle.config.lock().unwrap().save();
             }
         });
 
@@ -633,6 +743,11 @@ pub mod overlay_dps {
                 ui.set_locked(state.locked);
                 ui.set_force_show(state.force_show);
                 ui.set_win_width(state.width);
+                ui.set_share_bars(state.share_bars);
+                ui.set_amount_w_px(state.amount_w);
+                ui.set_rate_w_px(state.rate_w);
+                ui.set_bar_w_px(state.bar_w);
+                ui.set_sec_w_px(state.sec_w);
                 // Locked means click-through for real on Linux (input
                 // shape) — except while Show All Windows has the drag
                 // TouchArea re-enabled, when the window must stay clickable.
