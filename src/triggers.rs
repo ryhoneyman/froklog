@@ -517,6 +517,16 @@ pub mod engine {
         }
 
         fn process_line(&mut self, line: &str) {
+            // Match against the line with the `[Day Mon DD hh:mm:ss YYYY] `
+            // prefix removed, so patterns can anchor on the message itself
+            // (`^You slash ...`). Anchoring matters: without it, a pattern
+            // like `You have slain (.+)!` also fires when someone merely
+            // *pastes* such a line into chat, because the quoted text is part
+            // of the raw line too. Unanchored patterns (all the built-in
+            // presets) match identically with or without the prefix, so this
+            // only *adds* expressiveness. Lines without the prefix (spliced
+            // test input, foreign formats) pass through unchanged.
+            let line = strip_eq_timestamp(line);
             self.lines_processed += 1;
             if self.lines_processed.is_multiple_of(500) {
                 tracing::info!(
@@ -883,6 +893,17 @@ pub mod engine {
         }
     }
 
+    /// The log line with its `[Fri Feb 27 22:00:07 2026] ` prefix removed —
+    /// the same fixed-width strip the parser does (`parser.rs`, using
+    /// `patterns::TS_LEN`). Lines without the prefix pass through unchanged.
+    fn strip_eq_timestamp(line: &str) -> &str {
+        if line.len() > crate::patterns::TS_LEN && line.starts_with('[') {
+            &line[crate::patterns::TS_LEN..]
+        } else {
+            line
+        }
+    }
+
     /// Runs a compiled Exact/Regex/Glob pattern against `text`, returning the
     /// captures on a match. Shared by `Match` (against the raw line) and
     /// `Chat` (against just the extracted message).
@@ -1125,6 +1146,90 @@ pub mod engine {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        fn overlay_trigger(pattern: &str) -> TriggerConfig {
+            TriggerConfig {
+                triggers: vec![TriggerDef {
+                    name: "t".into(),
+                    enabled: true,
+                    condition_logic: ConditionLogic::default(),
+                    conditions: vec![Condition::Match {
+                        match_type: MatchType::Regex,
+                        pattern: pattern.into(),
+                    }],
+                    actions: vec![Action::Overlay {
+                        icon: String::new(),
+                        color: String::new(),
+                        message: "{1}".into(),
+                        message_color: String::new(),
+                        border_color: String::new(),
+                        delay_secs: 0.0,
+                        treatment: Treatment::default(),
+                        priority: VoicePriority::default(),
+                    }],
+                }],
+                ..Default::default()
+            }
+        }
+
+        fn fired(cfg: &TriggerConfig, line: &str) -> usize {
+            let out = Arc::new(Mutex::new(Vec::new()));
+            let engine = TriggerEngine::new(cfg, Arc::clone(&out));
+            engine.process_line(line);
+            let n = out.lock().unwrap().len();
+            n
+        }
+
+        #[test]
+        fn anchored_pattern_matches_past_the_timestamp_prefix() {
+            let cfg = overlay_trigger(r"^You slash .+ for (\d+) points of damage\. \(Critical\)");
+            assert_eq!(
+                fired(
+                    &cfg,
+                    "[Sun Aug 17 08:35:01 2026] You slash a decaying skeleton for 300 points of damage. (Critical)"
+                ),
+                1,
+                "anchored pattern must fire on a timestamped line"
+            );
+        }
+
+        #[test]
+        fn anchored_pattern_ignores_chat_pasted_copies() {
+            let cfg = overlay_trigger(r"^You slash .+ for (\d+) points of damage\. \(Critical\)");
+            assert_eq!(
+                fired(
+                    &cfg,
+                    "[Sun Aug 17 08:35:01 2026] Soandso says, 'You slash a rat for 300 points of damage. (Critical)'"
+                ),
+                0,
+                "a chat-quoted copy of the line must not fire an anchored pattern"
+            );
+        }
+
+        #[test]
+        fn unanchored_preset_still_matches_after_the_strip() {
+            let cfg = overlay_trigger(r"You have slain (?P<tgt>.+)!");
+            assert_eq!(
+                fired(
+                    &cfg,
+                    "[Sun Aug 17 08:35:01 2026] You have slain a decaying skeleton!"
+                ),
+                1,
+                "existing unanchored presets must keep firing"
+            );
+        }
+
+        #[test]
+        fn line_without_timestamp_passes_through_unchanged() {
+            let cfg = overlay_trigger(r"^You slash .+ \(Critical\)");
+            assert_eq!(
+                fired(
+                    &cfg,
+                    "You slash a decaying skeleton for 300 points of damage. (Critical)"
+                ),
+                1
+            );
+        }
 
         #[test]
         fn migrate_legacy_sound_folds_into_sounds() {
