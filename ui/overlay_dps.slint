@@ -30,7 +30,12 @@ export struct MobPickerEntry {
 }
 
 export component DpsMeterWindow inherits OverlayShell {
-    width: 320px;
+    // Window width in px, pushed from config (`meter_width`) by the Rust
+    // tick loop; <= 0 falls back to the historical fixed width. Driving the
+    // root's width (rather than resizing the winit window) keeps height
+    // content-driven exactly as before.
+    in property <int> win-width: 0;
+    width: win-width <= 0 ? 320px : win-width * 1px;
     height: panel.preferred-height;
 
     in property <[string]> tab-labels: ["DPS", "Tank", "Heal", "Recv"];

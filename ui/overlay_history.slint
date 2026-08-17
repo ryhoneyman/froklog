@@ -27,7 +27,11 @@ export struct HistoryRow {
 }
 
 export component HistoryOverlayWindow inherits OverlayShell {
-    width: 320px;
+    // Same contract as DpsMeterWindow.win-width: pushed from config
+    // (`overlay_history_width`, whose Settings field already existed but
+    // was never applied); 0 = "Auto" = the historical 320px.
+    in property <int> win-width: 0;
+    width: win-width <= 0 ? 320px : win-width * 1px;
     // Content-driven, not a fixed guess: both entry count
     // (overlay_history_max_entries) and font size
     // (overlay_history_font_size) are user-configurable, so the window

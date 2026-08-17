@@ -394,6 +394,7 @@ pub mod overlay_dps {
         visible: bool,
         force_show: bool,
         locked: bool,
+        width: i32,
         tick_count: u64,
     }
 
@@ -411,6 +412,7 @@ pub mod overlay_dps {
                 visible: false,
                 force_show: handle.force_show_windows.load(Ordering::Relaxed),
                 locked: cfg.overlay_meter.locked,
+                width: cfg.meter_width,
                 tick_count: 0,
             }
         }
@@ -421,6 +423,7 @@ pub mod overlay_dps {
             self.max_rows = cfg.meter_max_rows.max(1);
             self.idle_secs = cfg.meter_idle_secs;
             self.locked = cfg.overlay_meter.locked;
+            self.width = cfg.meter_width;
             drop(cfg);
             let new_force_show = self.handle.force_show_windows.load(Ordering::Relaxed);
             if new_force_show != self.force_show {
@@ -611,6 +614,7 @@ pub mod overlay_dps {
                 state.sync_config();
                 ui.set_locked(state.locked);
                 ui.set_force_show(state.force_show);
+                ui.set_win_width(state.width);
                 // Locked means click-through for real on Linux (input
                 // shape) — except while Show All Windows has the drag
                 // TouchArea re-enabled, when the window must stay clickable.

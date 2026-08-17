@@ -105,6 +105,7 @@ pub mod overlay_history {
         visible: bool,
         force_show: bool,
         locked: bool,
+        width: i32,
         icon_cache: std::collections::HashMap<String, Option<slint::Image>>,
         tick_count: u64,
     }
@@ -122,6 +123,7 @@ pub mod overlay_history {
                 visible: false,
                 force_show: handle.force_show_windows.load(Ordering::Relaxed),
                 locked: cfg.overlay_history.locked,
+                width: cfg.overlay_history_width,
                 icon_cache: std::collections::HashMap::new(),
                 tick_count: 0,
             }
@@ -146,6 +148,7 @@ pub mod overlay_history {
             self.max_entries = cfg.overlay_history_max_entries.max(1);
             self.idle_secs = cfg.overlay_history_idle_secs;
             self.locked = cfg.overlay_history.locked;
+            self.width = cfg.overlay_history_width;
             drop(cfg);
             let new_force_show = self.handle.force_show_windows.load(Ordering::Relaxed);
             if new_force_show != self.force_show {
@@ -251,6 +254,7 @@ pub mod overlay_history {
                 state.sync_config();
                 ui.set_locked(state.locked);
                 ui.set_force_show(state.force_show);
+                ui.set_win_width(state.width);
                 // Locked means click-through for real on Linux (input
                 // shape) — except while Show All Windows has the drag
                 // TouchArea re-enabled, when the window must stay clickable.

@@ -85,6 +85,7 @@ export component AppearanceTab inherits VerticalLayout {
     in-out property <string> meter-max-rows;
     in-out property <string> meter-idle-secs;
     in-out property <string> meter-font-size;
+    in-out property <string> meter-width;
     in-out property <bool> meter-enabled;
     in-out property <bool> meter-locked;
     in-out property <string> meter-pos-x;
@@ -257,7 +258,7 @@ export component AppearanceTab inherits VerticalLayout {
         HorizontalLayout {
             spacing: Theme.space-md;
             NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.meter-idle-secs; enabled: root.meter-enabled; }
-            Rectangle { horizontal-stretch: 1; }
+            NumberInput { label: "Width"; unit: "px"; zero-hint: "Auto"; value <=> root.meter-width; enabled: root.meter-enabled; }
         }
     }
 }
