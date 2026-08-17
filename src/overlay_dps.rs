@@ -505,18 +505,17 @@ pub mod overlay_dps {
             let handle = Arc::clone(&handle);
             let dragging = Rc::clone(&dragging);
             move || {
-                let Some(w) = weak.upgrade() else { return };
+                // On Windows `begin_drag` blocks for the native move loop,
+                // so this brackets the drag exactly as before; on Linux the
+                // manual move is timer-driven and returns immediately (same
+                // as `drag_window()` already did there).
                 dragging.set(true);
-                use slint::winit_030::WinitWindowAccessor;
-                let _ = w.window().with_winit_window(|winit_window| {
-                    let _ = winit_window.drag_window();
-                });
-                dragging.set(false);
-                overlay_shell::overlay_shell::handle_drag_end(
+                overlay_shell::overlay_shell::begin_drag(
                     weak.clone(),
                     Arc::clone(&handle),
                     OverlayKind::Meter,
                 );
+                dragging.set(false);
             }
         });
 
@@ -612,6 +611,13 @@ pub mod overlay_dps {
                 state.sync_config();
                 ui.set_locked(state.locked);
                 ui.set_force_show(state.force_show);
+                // Locked means click-through for real on Linux (input
+                // shape) — except while Show All Windows has the drag
+                // TouchArea re-enabled, when the window must stay clickable.
+                crate::overlay_draw::overlay_draw::sync_click_through(
+                    ui.window(),
+                    state.locked && !state.force_show,
+                );
 
                 let cs = state.handle.combat_state.load();
                 // Drop a stale pin before resolving — a pinned mob that fell

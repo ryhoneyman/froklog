@@ -232,7 +232,24 @@ pub mod tray {
                     if crate::overlay_draw::overlay_draw::utility_window_hint_suppressed() {
                         attrs
                     } else {
-                        attrs.with_x11_window_type(vec![WindowType::Utility])
+                        // Override-redirect: the WM never manages these
+                        // windows, which is what actually keeps them above a
+                        // fullscreen game on compositors that ignore
+                        // `_NET_WM_STATE_ABOVE` for managed X11 windows
+                        // (confirmed live on COSMIC, where the game is a
+                        // native Wayland surface outside the X11 stack
+                        // entirely and even wmctrl's ADD_ABOVE is dropped —
+                        // an override-redirect window rides the compositor's
+                        // unmanaged-surface layer instead, same as menus and
+                        // tooltips, and provably stays over the game).
+                        // Trade-off: no WM services — interactive move is
+                        // reimplemented in overlay_shell::begin_drag, and
+                        // stacking upkeep is a direct raise in
+                        // reassert_topmost. The Utility type hint stays for
+                        // anything that still reads it.
+                        attrs
+                            .with_x11_window_type(vec![WindowType::Utility])
+                            .with_override_redirect(true)
                     }
                 })
                 .select();
