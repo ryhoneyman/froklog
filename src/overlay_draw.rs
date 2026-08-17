@@ -140,8 +140,62 @@ pub mod overlay_draw {
     // drift directly via winit, independent of Slint's one-shot tracking.
     pub fn reassert_topmost(window: &slint::Window) {
         use slint::winit_030::WinitWindowAccessor;
+        // Linux: overlays are override-redirect (see tray::run's window-
+        // attributes hook), so the EWMH level request behind
+        // `set_window_level` has no window manager to act on it — restack
+        // directly at the X server instead.
+        #[cfg(target_os = "linux")]
+        let _ = window.with_winit_window(linux_x11::raise);
+        #[cfg(not(target_os = "linux"))]
         let _ = window
             .with_winit_window(|w| w.set_window_level(winit::window::WindowLevel::AlwaysOnTop));
+    }
+
+    // ── Locked = click-through (Linux) ──────────────────────────────────────
+    //
+    // "Locked" historically only disabled the drag TouchArea — the window
+    // still swallowed every click over its pixels, so a locked meter sitting
+    // on the game blocked mouse input to the game under it. On X11 the input
+    // shape makes locked mean what users expect: clicks pass through to the
+    // game. Deduplicated per window because the overlay tick loops re-apply
+    // state every tick and each X call opens a short-lived connection.
+    #[cfg(target_os = "linux")]
+    pub fn sync_click_through(window: &slint::Window, passthrough: bool) {
+        use slint::winit_030::WinitWindowAccessor;
+        use std::collections::HashMap;
+        thread_local! {
+            static APPLIED: std::cell::RefCell<HashMap<u64, bool>> =
+                std::cell::RefCell::new(HashMap::new());
+        }
+        let _ = window.with_winit_window(|w| {
+            let key = u64::from(w.id());
+            let stale = APPLIED.with(|a| a.borrow().get(&key) != Some(&passthrough));
+            if stale {
+                linux_x11::set_input_passthrough(w, passthrough);
+                APPLIED.with(|a| {
+                    a.borrow_mut().insert(key, passthrough);
+                });
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn sync_click_through(_window: &slint::Window, _passthrough: bool) {}
+
+    /// Window-relative pointer position and button-1 state, for the manual
+    /// drag loop (see `linux_x11::pointer_local` for why window-relative is
+    /// load-bearing). `None` off-Linux or on any query failure.
+    pub fn pointer_local(window: &slint::Window) -> Option<(i32, i32, bool)> {
+        #[cfg(target_os = "linux")]
+        {
+            use slint::winit_030::WinitWindowAccessor;
+            window.with_winit_window(linux_x11::pointer_local).flatten()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window;
+            None
+        }
     }
 
     // ── Position reapplication on show ───────────────────────────────────────
@@ -300,6 +354,96 @@ pub mod overlay_draw {
         use x11rb::connection::Connection;
         use x11rb::protocol::xproto::{self, ConnectionExt as _, EventMask};
         use x11rb::xcb_ffi::XCBConnection;
+
+        fn window_xid(winit_window: &winit::window::Window) -> Option<u32> {
+            let handle = winit_window.window_handle().ok()?;
+            let RawWindowHandle::Xlib(xlib) = handle.as_raw() else {
+                return None;
+            };
+            Some(xlib.window as u32)
+        }
+
+        /// Directly restacks the window to the top. For override-redirect
+        /// windows there is no window manager to ask — `_NET_WM_STATE_ABOVE`
+        /// client messages go nowhere — so stacking upkeep is a plain
+        /// `ConfigureWindow(stack_mode=Above)`, which the X server applies
+        /// itself for unmanaged windows.
+        pub(super) fn raise(winit_window: &winit::window::Window) {
+            let Some(xid) = window_xid(winit_window) else {
+                return;
+            };
+            let go = || -> Result<(), Box<dyn std::error::Error>> {
+                let (conn, _) = XCBConnection::connect(None)?;
+                conn.configure_window(
+                    xid,
+                    &xproto::ConfigureWindowAux::new().stack_mode(xproto::StackMode::ABOVE),
+                )?;
+                conn.flush()?;
+                Ok(())
+            };
+            if let Err(e) = go() {
+                tracing::warn!("raise: failed to restack overlay: {e}");
+            }
+        }
+
+        /// Makes the window invisible to pointer input (`passthrough=true`,
+        /// every click lands on whatever is underneath — the real meaning of
+        /// "locked") or restores normal input. Uses the X Shape extension's
+        /// input shape: an empty rectangle list removes the window from
+        /// hit-testing entirely; resetting with a `None` mask restores the
+        /// default full-window shape.
+        pub(super) fn set_input_passthrough(winit_window: &winit::window::Window, passthrough: bool) {
+            use x11rb::protocol::shape::{self, ConnectionExt as _};
+            let Some(xid) = window_xid(winit_window) else {
+                return;
+            };
+            let go = || -> Result<(), Box<dyn std::error::Error>> {
+                let (conn, _) = XCBConnection::connect(None)?;
+                if passthrough {
+                    conn.shape_rectangles(
+                        shape::SO::SET,
+                        shape::SK::INPUT,
+                        xproto::ClipOrdering::UNSORTED,
+                        xid,
+                        0,
+                        0,
+                        &[],
+                    )?;
+                } else {
+                    conn.shape_mask(shape::SO::SET, shape::SK::INPUT, xid, 0, 0, x11rb::NONE)?;
+                }
+                conn.flush()?;
+                Ok(())
+            };
+            if let Err(e) = go() {
+                tracing::warn!("set_input_passthrough({passthrough}): {e}");
+            }
+        }
+
+        /// Window-relative pointer position and whether button 1 is held.
+        /// Used by `overlay_shell::begin_drag`'s manual move loop — an
+        /// override-redirect window can't use the WM's interactive move
+        /// (`_NET_WM_MOVERESIZE` needs a managed window), so the drag polls
+        /// the pointer and moves the window itself.
+        ///
+        /// Window-relative, NOT root coordinates, and the distinction is the
+        /// whole bug class: under XWayland, "root" pointer coordinates are
+        /// synthesized as window-position + surface-local, and during a
+        /// button-held grab COSMIC keeps delivering surface-local coords in
+        /// the frame frozen at press — so every move this drag makes feeds
+        /// straight back into the next root-coordinate reading and the
+        /// window accelerates away exponentially (observed live: pointer
+        /// deltas +2, +8, +14, +23, +36 … in lockstep with our own moves).
+        /// Asking the server for coords relative to the dragged window
+        /// subtracts the current window position right back out, cancelling
+        /// XWayland's addition and recovering the stable frozen frame.
+        pub(super) fn pointer_local(winit_window: &winit::window::Window) -> Option<(i32, i32, bool)> {
+            let xid = window_xid(winit_window)?;
+            let (conn, _) = XCBConnection::connect(None).ok()?;
+            let reply = conn.query_pointer(xid).ok()?.reply().ok()?;
+            let button1 = u16::from(reply.mask) & u16::from(xproto::ButtonMask::M1) != 0;
+            Some((i32::from(reply.win_x), i32::from(reply.win_y), button1))
+        }
 
         pub(super) fn skip_taskbar(winit_window: &winit::window::Window) {
             let Ok(handle) = winit_window.window_handle() else {

@@ -214,6 +214,9 @@ gtk = { version = "0.18", optional = true }
 x11rb = { version = "0.13", optional = true, default-features = false, features = [
     "allow-unsafe-code",
     "dl-libxcb",
+    # Input-shape click-through for locked override-redirect overlays
+    # (overlay_draw::linux_x11::set_input_passthrough).
+    "shape",
 ] }
 # Reads the raw X11 window ID out of the winit-created overlay windows, to
 # hand to x11rb above. Version matches winit's own `rwh_06` dependency

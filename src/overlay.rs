@@ -283,12 +283,7 @@ pub mod overlay {
             let weak = window.as_weak();
             let handle = Arc::clone(&handle);
             move || {
-                let Some(w) = weak.upgrade() else { return };
-                use slint::winit_030::WinitWindowAccessor;
-                let _ = w.window().with_winit_window(|winit_window| {
-                    let _ = winit_window.drag_window();
-                });
-                overlay_shell::overlay_shell::handle_drag_end(
+                overlay_shell::overlay_shell::begin_drag(
                     weak.clone(),
                     Arc::clone(&handle),
                     OverlayKind::Alert,
@@ -318,6 +313,13 @@ pub mod overlay {
                 state.sync_config();
                 ui.set_locked(state.locked);
                 ui.set_force_show(state.force_show);
+                // Locked means click-through for real on Linux (input
+                // shape) — except while Show All Windows has the drag
+                // TouchArea re-enabled, when the window must stay clickable.
+                crate::overlay_draw::overlay_draw::sync_click_through(
+                    ui.window(),
+                    state.locked && !state.force_show,
+                );
                 let fly_ms = state.engine.fly_ms();
                 // Only drain/advance the shared alert queue while this
                 // window is the active alert presentation — see
