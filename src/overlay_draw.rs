@@ -234,7 +234,10 @@ pub mod overlay_draw {
             let win = kind.config(&cfg);
             (win.x, win.y)
         };
-        if x >= 0 && y >= 0 {
+        // Same sentinel contract as the creation sites: only (-1, -1) means
+        // "never positioned" — negative coordinates are real positions on
+        // multi-monitor layouts.
+        if (x, y) != (-1, -1) {
             window.window().set_position(slint::WindowPosition::Logical(
                 slint::LogicalPosition::new(x as f32, y as f32),
             ));

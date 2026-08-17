@@ -268,7 +268,12 @@ pub mod overlay {
             let cfg = handle.config.lock().unwrap();
             (cfg.overlay_alert.x, cfg.overlay_alert.y)
         };
-        if cfg_x_y.0 >= 0 && cfg_x_y.1 >= 0 {
+        // (-1, -1) is the never-positioned sentinel; any OTHER value is a
+        // real saved position — including negative coordinates, which are
+        // routine on multi-monitor layouts (a monitor left of or above the
+        // primary) and whenever a window is nudged past a screen's top/left
+        // edge. Gating on >= 0 silently discarded those on every restart.
+        if cfg_x_y != (-1, -1) {
             window.window().set_position(slint::WindowPosition::Logical(
                 slint::LogicalPosition::new(cfg_x_y.0 as f32, cfg_x_y.1 as f32),
             ));
