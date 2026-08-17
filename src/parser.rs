@@ -238,13 +238,16 @@ pub fn run(
 
         // Raid boundary called in chat. Checked before the combat patterns
         // because a chat line can quote anything, including something that
-        // looks like a hit ("Zyro says, 'you slash it for 90'").
+        // looks like a hit ("Zyro says, 'you slash it for 90'"). Only the log
+        // owner's own speech can set a marker — the raid leader's own client
+        // is the one bracketing the raid on this stream, and gating on the
+        // literal "You" speaker (regardless of which verb/channel carried it)
+        // means another player's chat can never spoof one: their quoted text
+        // always lands after their own name+verb preamble, never at
+        // line-start.
         if let Some(caps) = crate::patterns::RE_CHAT.captures(line) {
-            // Only the LOG OWNER's own chat sets a marker — outgoing lines
-            // all start with "You ". A guildmate typing the magic words must
-            // not be able to cut this timeline.
-            if line.starts_with("You ") {
-                if let Some((kind, label)) = crate::patterns::raid_mark(&caps[1]) {
+            if &caps["speaker"] == "You" {
+                if let Some((kind, label)) = crate::patterns::raid_mark(&caps["msg"]) {
                     emit(
                         &event_tx,
                         CombatEvent::RaidMark {
@@ -2034,17 +2037,20 @@ mod tests {
         out
     }
 
-    /// The whole path a raid macro takes: a line you actually type in game
-    /// becomes the event the server turns into a marker — a guildmate
-    /// wondering aloud when the raid starts does not, and since markers
-    /// became owner-only, neither does the raid leader calling it.
+    /// The whole path a raid macro takes: a line you could actually type in
+    /// game becomes the event the server turns into a marker. A guildmate
+    /// wondering aloud when the raid starts does not — and neither does
+    /// someone else's genuine raid call, because only the log owner's own
+    /// speech can move the marker: that's the one thing nobody else can
+    /// spoof, regardless of which channel/verb carried it.
     #[test]
     fn integration_chat_macro_marks_a_raid() {
         let marks: Vec<(u32, String)> = run_events(
             &[
                 "[Sun Aug 02 20:00:00 2026] You say to your guild, 'raid start'",
                 "[Sun Aug 02 20:00:05 2026] Zyro tells General:1, 'when does the raid start?'",
-                "[Sun Aug 02 22:30:00 2026] You tell your raid, 'raid end'",
+                "[Sun Aug 02 20:10:00 2026] Kermitzalot tells the raid, 'raid end'",
+                "[Sun Aug 02 22:30:00 2026] You shout, 'raid end'",
             ],
             "Izzin",
         )
@@ -2054,7 +2060,12 @@ mod tests {
             _ => None,
         })
         .collect();
-        assert_eq!(marks.len(), 2, "the question is not a marker: {marks:?}");
+        assert_eq!(
+            marks.len(),
+            2,
+            "only Izzin's own two calls are markers — the question and Kermitzalot's \
+             genuine call are both someone else's speech: {marks:?}"
+        );
         assert_eq!(marks[0].1, "raid_start");
         assert_eq!(marks[1].1, "raid_end");
         assert!(marks[1].0 > marks[0].0, "end comes after start");

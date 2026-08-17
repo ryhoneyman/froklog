@@ -1,0 +1,51 @@
+import { Theme } from "../theme.slint";
+
+// Themed single-line input, replacing Win32 EDIT controls (mk_edit).
+export component TextField inherits Rectangle {
+    in property <string> placeholder;
+    in property <bool> read-only: false;
+    in property <bool> password: false;
+    in property <bool> enabled: true;
+    in-out property <string> text <=> input.text;
+
+    callback edited(string);
+
+    height: 30px;
+    background: root.enabled ? Theme.bg-elevated : Theme.bg-panel;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.border;
+
+    animate border-color { duration: 100ms; }
+
+    input := TextInput {
+        x: Theme.space-sm;
+        width: parent.width - 2 * Theme.space-sm;
+        height: 100%;
+        vertical-alignment: center;
+        color: root.enabled ? Theme.text-primary : Theme.text-disabled;
+        font-size: Theme.font-size-md;
+        read-only: root.read-only || !root.enabled;
+        input-type: root.password ? InputType.password : InputType.text;
+        edited => { root.edited(self.text); }
+    }
+
+    if input.text == "" && !input.has-focus: Text {
+        x: Theme.space-sm;
+        // Explicit width + elide, matching `input` above — without a width
+        // binding this leaf Text sizes itself to its own full natural
+        // width (Slint's default `overflow: clip` only clips *to the
+        // element's own box*, which was exactly the text's size here, so
+        // nothing actually got clipped). Harmless on narrower rendering
+        // (Windows' real Segoe UI) but long placeholders like the action
+        // editor's message-field hint visibly spilled past the field's
+        // right edge under Linux's wider fallback font.
+        width: parent.width - 2 * Theme.space-sm;
+        text: root.placeholder;
+        color: Theme.text-disabled;
+        font-size: Theme.font-size-md;
+        vertical-alignment: center;
+        height: 100%;
+        overflow: elide;
+    }
+}

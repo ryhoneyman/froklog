@@ -1,0 +1,64 @@
+import { Theme } from "../theme.slint";
+
+// Replaces Win32 trackbar controls (mk_trackbar), e.g. the Sounds tab's
+// volume slider. Absolute positioning (click/drag anywhere on the track
+// jumps the handle there), not relative-drag like ScrollArea's thumb.
+export component Slider inherits Rectangle {
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in-out property <float> value: 0;
+
+    height: 22px;
+    property <float> ratio: (root.value - root.minimum) / max(0.0001, root.maximum - root.minimum);
+    property <length> handle-size: 14px;
+    // Single source of truth for both the handle's position and where the
+    // fill terminates, so they can't drift apart (previously the fill used
+    // the full track width while the handle used track-width-minus-its-
+    // own-diameter — two different bases that only matched at the
+    // midpoint and diverged toward either end).
+    property <length> handle-x: (root.width - handle-size) * root.ratio;
+
+    track := Rectangle {
+        x: 0px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.bg-elevated;
+        clip: true;
+
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: root.handle-x + root.handle-size / 2;
+            height: parent.height;
+            background: Theme.accent;
+        }
+    }
+
+    handle := Rectangle {
+        x: root.handle-x;
+        y: (parent.height - self.height) / 2;
+        width: root.handle-size;
+        height: root.handle-size;
+        border-radius: self.width / 2;
+        background: drag.pressed ? Theme.accent-pressed : Theme.accent;
+
+        animate background { duration: 100ms; }
+    }
+
+    drag := TouchArea {
+        width: parent.width;
+        height: parent.height;
+
+        moved => {
+            if self.pressed {
+                root.value = clamp(
+                    root.minimum + (self.mouse-x / root.width) * (root.maximum - root.minimum),
+                    root.minimum,
+                    root.maximum,
+                );
+            }
+        }
+    }
+}

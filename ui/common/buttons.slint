@@ -1,0 +1,45 @@
+import { Theme } from "../theme.slint";
+
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: true;
+    in property <bool> enabled: true;
+    // Overridable for fixed-width icon buttons (e.g. the Play Sound row's
+    // ▶/✕ buttons) — the default space-md padding on both sides is sized
+    // for text buttons that auto-grow around it, and eats almost all of a
+    // small fixed-width square button, leaving barely any room for the
+    // glyph to center in.
+    in property <length> h-padding: Theme.space-md;
+    in property <length> font-size: Theme.font-size-md;
+    callback clicked();
+
+    height: 34px;
+    border-radius: Theme.radius-sm;
+    border-width: root.primary ? 0px : 1px;
+    border-color: Theme.border;
+    background: root.primary
+        ? (touch.pressed ? Theme.accent-pressed : touch.has-hover ? Theme.accent-hover : Theme.accent)
+        : (touch.has-hover ? Theme.bg-hover : Theme.bg-elevated);
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    animate background { duration: 100ms; }
+
+    HorizontalLayout {
+        padding-left: root.h-padding;
+        padding-right: root.h-padding;
+        alignment: center;
+
+        Text {
+            text: root.text;
+            color: root.primary ? Theme.on-accent : Theme.text-primary;
+            font-size: root.font-size;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}

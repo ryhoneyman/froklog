@@ -1,0 +1,75 @@
+import { Theme } from "../theme.slint";
+import { Button } from "../common/buttons.slint";
+import { TextField } from "../common/text-field.slint";
+import { LabeledField } from "../common/labeled-field.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { Checkbox } from "../common/checkbox.slint";
+
+// Add/Edit body for a log profile (name, log file path, game/server/player
+// identity), embedded in the Settings drawer instead of a standalone window
+// — was LogProfileEditWindow (ui/dialogs/log_profile_edit_dialog.slint)
+// before the drawer migration.
+export component LogProfilePanel inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in-out property <string> profile-name;
+    in-out property <string> file-path;
+    in-out property <string> game;
+    in property <[string]> game-options;
+    in-out property <string> server;
+    in-out property <string> player;
+    in-out property <bool> public-streaming;
+
+    callback browse();
+    callback ok();
+    callback cancel();
+
+    LabeledField {
+        label: "Profile name";
+        TextField { text <=> root.profile-name; }
+    }
+
+    LabeledField {
+        label: "Log file";
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+            TextField { text <=> root.file-path; read-only: true; }
+            Button { text: "Browse\u{2026}"; primary: false; clicked => { root.browse(); } }
+        }
+    }
+
+    LabeledField {
+        label: "Game";
+        ComboBoxField { options: root.game-options; value <=> root.game; }
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-md;
+        LabeledField {
+            label: "Server";
+            TextField { placeholder: "Auto from log filename"; text <=> root.server; }
+        }
+        LabeledField {
+            label: "Player";
+            TextField { placeholder: "Auto from log filename"; text <=> root.player; }
+        }
+    }
+
+    Checkbox { text: "Allow public streaming for this profile"; checked <=> root.public-streaming; }
+
+    Rectangle { vertical-stretch: 1; }
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        alignment: end;
+        Button { text: "Cancel"; primary: false; clicked => { root.cancel(); } }
+        Button {
+            text: "OK";
+            primary: true;
+            enabled: root.profile-name != "" && root.file-path != "";
+            clicked => { root.ok(); }
+        }
+    }
+}

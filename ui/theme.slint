@@ -1,0 +1,86 @@
+// Design tokens for the Slint UI. The existing Win32 Settings dialog
+// (overlay_config_win.rs) never implemented a dark theme — it uses stock
+// system colors (COLOR_BTNFACE etc.) — so this palette is a new choice, not
+// a port. The accent green is sampled from assets/froklog-green.png (the
+// tray's "connected" icon state), which also lines up closely with the
+// existing Druid class color (#64a03c) in the web UI's class map.
+//
+// The overlay windows (alert/history/DPS meter) *do* have real existing
+// colors (default text/border white-on-black, per-trigger custom colors,
+// the EQ class color map below) — those are ported verbatim, not invented.
+export global Theme {
+    // Surfaces, darkest to lightest.
+    out property <color> bg-app: #15171a;
+    out property <color> bg-panel: #1c1f23;
+    out property <color> bg-elevated: #262a2f;
+    out property <color> bg-hover: #2f343a;
+    out property <color> border: #33383e;
+
+    // Opt-in per-card background washes, for calling out one specific card
+    // rather than every Card. NOTE: Color.mix(other, factor) weights SELF by
+    // factor (self*factor + other*(1-factor)) — the opposite of CSS's
+    // mix-color convention — so these are <hue>.mix(bg-panel, 0.1), not the
+    // other way around. Getting that backwards once produced ~92% accent
+    // (nearly the raw button/checkbox green) instead of a subtle tint.
+    out property <color> bg-card-tint-green: accent.mix(bg-panel, 0.15);
+    out property <color> bg-card-tint-blue: #4682b4.mix(bg-panel, 0.1);
+    out property <color> bg-card-tint-red: #c0453e.mix(bg-panel, 0.1);
+
+    // Text.
+    out property <color> text-primary: #e8eaed;
+    out property <color> text-secondary: #9aa0a6;
+    out property <color> text-disabled: #5f6368;
+
+    // Accent (frog green).
+    out property <color> accent: #5fa050;
+    out property <color> accent-hover: #70b862;
+    out property <color> accent-pressed: #4d8a41;
+    out property <color> on-accent: #ffffff;
+
+    // Status.
+    out property <color> success: #5fa050;
+    out property <color> warning: #c8a83c;
+    out property <color> danger: #d9534f;
+
+    // Typography.
+    out property <string> font-family: "Segoe UI";
+    out property <length> font-size-sm: 12px;
+    out property <length> font-size-md: 14px;
+    out property <length> font-size-lg: 18px;
+    out property <length> font-size-xl: 24px;
+
+    // Shape & spacing.
+    out property <length> radius-sm: 4px;
+    out property <length> radius-md: 8px;
+    out property <length> radius-lg: 12px;
+    out property <length> space-xs: 4px;
+    out property <length> space-sm: 8px;
+    out property <length> space-md: 16px;
+    out property <length> space-lg: 24px;
+}
+
+// EQ class colors, matching ACT conventions — same source of truth as the
+// `CLASS_COLOR` JS object in static/stream.html, so the DPS meter overlay
+// (Phase 3) and the web UI render classes identically. Values verified
+// directly against static/stream.html's current CLASS_COLOR table — an
+// earlier version of this file used a stale set of hex values sourced from
+// an out-of-date memory snapshot; fixed while porting overlay_dps.rs.
+export global ClassColors {
+    out property <color> war: #af803c;
+    out property <color> clr: #733273;
+    out property <color> pal: #7387fa;
+    out property <color> rng: #507334;
+    out property <color> shd: #4b4b41;
+    out property <color> dru: #649150;
+    out property <color> mnk: #d2b48c;
+    out property <color> brd: #b4a032;
+    out property <color> rog: #505c55;
+    out property <color> shm: #a2a2b0;
+    out property <color> nec: #0164fa;
+    out property <color> wiz: #af0a32;
+    out property <color> mag: #960a0a;
+    out property <color> enc: #0a32c8;
+    out property <color> bst: #826432;
+    out property <color> ber: #be6414;
+    out property <color> unknown: #464650;
+}

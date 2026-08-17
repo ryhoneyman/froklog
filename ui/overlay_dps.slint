@@ -1,0 +1,382 @@
+import { OverlayShell } from "common/overlay-shell.slint";
+
+// Phase 3.3 — real DPS/Tank/Heal/Heal-Received meter overlay window,
+// replacing overlay_dps.rs's WS_EX_LAYERED popup. Structurally a twin of
+// overlay_history.slint: a panel with content-driven height (row count
+// AND font size are both effectively dynamic — row count from live
+// combat data, font size from `meter_font_size` config), title bar with
+// 4 tabs + chrome icons, column header, ranked data rows (rank/class
+// swatch/name/amount/rate/sec), a footer showing the current mob +
+// cumulative total across every contributor (not just the ones that fit
+// on screen), and — restored from the old Win32 popup — a mob picker
+// that expands below the footer on click, listing "Auto (most recent)"
+// plus recently-seen mobs with an activity dot, letting the user pin the
+// meter to a specific mob instance.
+export struct MeterRow {
+    name: string,
+    class-color: color,
+    amount-label: string,
+    rate-label: string,
+}
+
+// One row of the mob picker. `id` mirrors overlay_dps.rs's
+// `MobPickerEntry.id: Option<u64>`, with -1 standing in for `None` (the
+// "Auto" entry) since Slint has no optional-int type.
+export struct MobPickerEntry {
+    id: int,
+    label: string,
+    dot-color: color,
+    selected: bool,
+}
+
+export component DpsMeterWindow inherits OverlayShell {
+    width: 320px;
+    height: panel.preferred-height;
+
+    in property <[string]> tab-labels: ["DPS", "Tank", "Heal", "Recv"];
+    in-out property <int> active-tab: 0;
+    callback tab-clicked(int);
+
+    in property <string> amount-col-label: "Dmg";
+    in property <string> rate-col-label: "DPS";
+
+    in property <[MeterRow]> rows;
+    in property <string> elapsed-label: "0s";
+    in property <length> row-font-size: 11px;
+
+    in property <string> mob-label: "Auto: (no mob)";
+    in property <string> footer-total-label;
+    in property <string> footer-rate-label;
+    callback mob-picker-clicked();
+    in property <bool> picker-open: false;
+    in property <[MobPickerEntry]> picker-entries;
+    callback pick-mob(int);
+
+    callback open-settings();
+    callback clear-stats();
+    callback copy-clicked();
+
+    property <length> col-w: 52px;
+
+    // Drag-to-move — see overlay_alert.slint's comment on the same
+    // property/callback for why this exists and how it works. Placed as
+    // `panel`'s first child (underneath everything else in z-order), so the
+    // tab/gear/trash/copy/mob-picker TouchAreas declared later still get
+    // priority in their own areas and only empty space (title bar gaps,
+    // column header, data rows) falls through to dragging.
+    // See common/overlay-shell.slint's doc comment for why this trio can't
+    // just be inherited from `OverlayShell` like the window-level flags.
+    in property <bool> locked: false;
+    // See overlay_alert.slint's comment on the same property for why
+    // Show All Windows overrides Locked here.
+    in property <bool> force-show: false;
+    callback drag-requested();
+
+    panel := Rectangle {
+        background: #0c0c11d7;
+        border-radius: 6px;
+        clip: true;
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: !root.locked || root.force-show;
+            changed pressed => {
+                if self.pressed {
+                    root.drag-requested();
+                }
+            }
+        }
+
+        VerticalLayout {
+            // ── Title bar: tabs + gear/trash/copy chrome icons ──────────────
+            Rectangle {
+                height: 28px;
+                background: #161e1eeb;
+
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+
+                    HorizontalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+
+                        for label[i] in root.tab-labels: Rectangle {
+                            width: 42px;
+
+                            Text {
+                                text: label;
+                                color: root.active-tab == i ? white : #96969a;
+                                font-weight: root.active-tab == i ? 700 : 400;
+                                font-size: 12px;
+                                x: 4px;
+                                width: parent.width - 4px;
+                                height: 100%;
+                                vertical-alignment: center;
+                            }
+
+                            TouchArea {
+                                clicked => {
+                                    root.active-tab = i;
+                                    root.tab-clicked(i);
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        alignment: end;
+
+                        Rectangle {
+                            width: 22px;
+                            height: 100%;
+                            Text {
+                                text: "\u{E713}";
+                                font-family: "Segoe MDL2 Assets";
+                                font-size: 13px;
+                                color: #96969a;
+                                width: 100%;
+                                height: 100%;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea { clicked => { root.open-settings(); } }
+                        }
+                        Rectangle {
+                            width: 22px;
+                            height: 100%;
+                            Text {
+                                text: "\u{E74D}";
+                                font-family: "Segoe MDL2 Assets";
+                                font-size: 13px;
+                                color: #96969a;
+                                width: 100%;
+                                height: 100%;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea { clicked => { root.clear-stats(); } }
+                        }
+                        Rectangle {
+                            width: 22px;
+                            height: 100%;
+                            Text {
+                                text: "\u{E8C8}";
+                                font-family: "Segoe MDL2 Assets";
+                                font-size: 13px;
+                                color: #96969a;
+                                width: 100%;
+                                height: 100%;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea { clicked => { root.copy-clicked(); } }
+                        }
+                    }
+                }
+            }
+
+            // ── Column header ────────────────────────────────────────────
+            Rectangle {
+                height: 20px;
+                background: #121219c8;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+
+                    Rectangle { width: 20px; }
+                    Rectangle { width: 18px; }
+
+                    Text {
+                        text: "Name";
+                        color: #96969a;
+                        font-size: root.row-font-size;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.amount-col-label;
+                        color: #96969a;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.rate-col-label;
+                        color: #96969a;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "Sec";
+                        color: #96969a;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // ── Ranked data rows ─────────────────────────────────────────
+            for row[i] in root.rows: Rectangle {
+                height: content-row.preferred-height;
+                background: i == 0 ? #3c2e0adc : (mod(i, 2) == 1 ? #ffffff0a : transparent);
+
+                content-row := HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 2px;
+                    padding-bottom: 2px;
+
+                    Text {
+                        text: "\{i + 1}.";
+                        color: #78787f;
+                        font-size: root.row-font-size;
+                        width: 20px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 2px;
+                        background: row.class-color;
+                    }
+                    Rectangle { width: 6px; }
+                    Text {
+                        text: row.name;
+                        color: i == 0 ? #ffe18c : #e1e1e6;
+                        font-weight: i == 0 ? 700 : 400;
+                        font-size: root.row-font-size;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: row.amount-label;
+                        color: i == 0 ? #ffe18c : #e1e1e6;
+                        font-weight: i == 0 ? 700 : 400;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: row.rate-label;
+                        color: i == 0 ? #ffe18c : #e1e1e6;
+                        font-weight: i == 0 ? 700 : 400;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.elapsed-label;
+                        color: #96969a;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // ── Footer: current mob + cumulative total ──────────────────
+            Rectangle {
+                height: footer-row.preferred-height;
+                background: #1e222cd8;
+
+                footer-row := HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+
+                    Text {
+                        text: root.mob-label;
+                        color: #c8d2e6;
+                        font-weight: 700;
+                        font-size: root.row-font-size;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.footer-total-label;
+                        color: white;
+                        font-weight: 700;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.footer-rate-label;
+                        color: white;
+                        font-weight: 700;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.elapsed-label;
+                        color: #96969a;
+                        font-size: root.row-font-size;
+                        width: root.col-w;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+
+                TouchArea {
+                    clicked => { root.mob-picker-clicked(); }
+                }
+            }
+
+            // ── Mob picker: expands below the footer on click ───────────
+            if root.picker-open: VerticalLayout {
+                for entry[i] in root.picker-entries: Rectangle {
+                    height: picker-row.preferred-height;
+                    background: mod(i, 2) == 1 ? #ffffff0a : transparent;
+
+                    picker-row := HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        padding-top: 3px;
+                        padding-bottom: 3px;
+                        spacing: 8px;
+
+                        Rectangle {
+                            width: 10px;
+                            height: 10px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 5px;
+                            background: entry.dot-color;
+                        }
+
+                        Text {
+                            text: entry.label;
+                            color: entry.selected ? white : #c8c8d2;
+                            font-weight: entry.selected ? 700 : 400;
+                            font-size: root.row-font-size;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => { root.pick-mob(entry.id); }
+                    }
+                }
+            }
+        }
+    }
+}

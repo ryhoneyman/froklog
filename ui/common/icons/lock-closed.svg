@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <!-- Shackle -->
+  <path d="M6.75 11.5V9a5.25 5.25 0 0 1 10.5 0v2.5" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Body -->
+  <rect x="3.75" y="11.5" width="16.5" height="10.25" rx="2.5" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Keyhole -->
+  <path d="M12 14.2a1.6 1.6 0 0 0-1.15 2.7l-.15 1.5a1 1 0 0 0 2 0l-.15-1.5A1.6 1.6 0 0 0 12 14.2z" fill="currentColor"/>
+</svg>

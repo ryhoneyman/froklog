@@ -1,0 +1,263 @@
+import { Theme } from "../theme.slint";
+import { Card, SettingsCard } from "../common/card.slint";
+import { LabeledField } from "../common/labeled-field.slint";
+import { NumberInput } from "../common/number-input.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { Button } from "../common/buttons.slint";
+
+// Phase 2.3 — replaces create_appearance_panel() in overlay_config_win.rs:
+// the alert overlay's fly-in/hold/opacity timing and the history overlay's
+// size/idle-hide settings. Numeric fields are kept as strings (not int/
+// float properties) to match the source: the Win32 edits are ES_NUMBER
+// text fields parsed on Save, not live-validated per keystroke, and this
+// preserves that same "parse on save" behavior once wired to a real Config.
+//
+// The former Windows tab's per-window Enabled/Locked/Position controls
+// (née WindowBox, ui/common/window-box.slint — now deleted) were folded in
+// here too: DPS Meter's settings already lived in a card of their own on
+// this tab, and "Main Overlay"/"History Overlay"/"DPS Meter" on the old
+// Windows tab were just window-management controls for the exact same
+// three windows these cards already configure the look of. Splitting
+// "what it looks like" and "where it is / whether it's shown" across two
+// tabs meant editing one overlay meant visiting both; each card now owns
+// its window's enabled/locked/position controls directly, via SettingsCard
+// (ui/common/card.slint), which standardizes the header row (toggle,
+// title, lock + position pill, reset) and dims the field grid below it
+// when the toggle is off. Show All Overlays moved up to the top of the
+// tab, above every card, since it's a debug-all-three toggle rather than
+// something scoped to one window.
+export component AppearanceTab inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    // A toggle, not a one-shot action — the caller reflects the actual
+    // AppHandle.force_show_windows state here (including when reopening
+    // Settings while it's still active from a previous click) so this
+    // stays in sync rather than assuming it's always off at first paint.
+    in-out property <bool> force-show-active: false;
+    callback show-all-windows();
+
+    // 0 = Separate (standalone Alert + History overlays, below), 1 = Merged
+    // (Combined Alert card, above the always-visible DPS Meter card).
+    // Live — no restart needed to switch: both sets of windows already
+    // exist, this just decides which one drains trigger alerts and which
+    // one stays dormant. See overlay_registry.rs's `OverlayKind` doc
+    // comment for the mutual-exclusion reasoning. Instant-save wiring
+    // lives one level up, in settings_shell.slint, matching every other
+    // field on this tab. Also decides which cards below are visible — see
+    // the `if root.alert-style == ...` guards on the Alert/History/Combined
+    // cards further down.
+    in-out property <int> alert-style: 0;
+    property <[string]> alert-style-options: [
+        "Separate (Alert and History)", "Combined (Alert in History)",
+    ];
+
+    // ── Alert Overlay ───────────────────────────────────────────────────
+    in-out property <string> overlay-font: "Segoe UI";
+    in property <[string]> font-options: [
+        "Segoe UI", "Arial", "Consolas", "Courier New",
+        "Tahoma", "Verdana", "Times New Roman",
+    ];
+    in-out property <string> start-font-size;
+    in-out property <string> max-font-size;
+    in-out property <string> fly-ms;
+    in-out property <string> hold-secs;
+    in-out property <string> alpha;
+    in-out property <bool> alert-enabled;
+    in-out property <bool> alert-locked;
+    in-out property <string> alert-pos-x;
+    in-out property <string> alert-pos-y;
+    callback alert-reset-position();
+
+    // ── History Overlay ─────────────────────────────────────────────────
+    in-out property <string> history-font-size;
+    in-out property <string> history-idle-secs;
+    in-out property <string> history-max-entries;
+    in-out property <string> history-width;
+    in-out property <bool> history-enabled;
+    in-out property <bool> history-locked;
+    in-out property <string> history-pos-x;
+    in-out property <string> history-pos-y;
+    callback history-reset-position();
+
+    // ── DPS Meter Overlay ───────────────────────────────────────────────
+    in-out property <string> meter-max-rows;
+    in-out property <string> meter-idle-secs;
+    in-out property <string> meter-font-size;
+    in-out property <bool> meter-enabled;
+    in-out property <bool> meter-locked;
+    in-out property <string> meter-pos-x;
+    in-out property <string> meter-pos-y;
+    callback meter-reset-position();
+
+    // ── Combined Alert + History Overlay ────────────────────────────────
+    // Independent of the Alert/History Overlay cards above — own font
+    // sizes, timing, opacity, idle-hide, and max-entries, backed by their
+    // own `overlay_merged_*` config fields (not shared with the
+    // Separate-mode windows even though only one style is ever visible).
+    in-out property <bool> merged-enabled;
+    in-out property <bool> merged-locked;
+    in-out property <string> merged-pos-x;
+    in-out property <string> merged-pos-y;
+    callback merged-reset-position();
+    in-out property <string> merged-start-font-size;
+    in-out property <string> merged-max-font-size;
+    in-out property <string> merged-fly-ms;
+    in-out property <string> merged-hold-secs;
+    in-out property <string> merged-alpha;
+    in-out property <string> merged-history-font-size;
+    in-out property <string> merged-history-idle-secs;
+    in-out property <string> merged-history-max-entries;
+
+    Text {
+        text: "Overlays";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-xl;
+        font-weight: 700;
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        alignment: start;
+
+        Button {
+            text: root.force-show-active ? "Hide All Overlays" : "Show All Overlays";
+            primary: root.force-show-active;
+            clicked => { root.show-all-windows(); }
+        }
+        Text {
+            text: "unlocks + shows all overlay windows for the active alert style";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+            vertical-alignment: center;
+        }
+    }
+
+    Card {
+        Text {
+            text: "Alert Style";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-md;
+            font-weight: 600;
+        }
+        ComboBoxField {
+            options: root.alert-style-options;
+            value: root.alert-style-options[root.alert-style];
+            selected(v) => {
+                root.alert-style = v == root.alert-style-options[0] ? 0 : 1;
+            }
+        }
+    }
+
+    if root.alert-style == 0: SettingsCard {
+        title: "Alert";
+        enabled <=> root.alert-enabled;
+        locked <=> root.alert-locked;
+        pos-x <=> root.alert-pos-x;
+        pos-y <=> root.alert-pos-y;
+        reset-position => { root.alert-reset-position(); }
+
+        LabeledField {
+            label: "Font";
+            ComboBoxField { options: root.font-options; value <=> root.overlay-font; enabled: root.alert-enabled; }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Start Size"; unit: "pt"; value <=> root.start-font-size; enabled: root.alert-enabled; }
+            NumberInput { label: "Max Size"; unit: "pt"; value <=> root.max-font-size; enabled: root.alert-enabled; }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Fly-In Speed"; unit: "ms"; value <=> root.fly-ms; enabled: root.alert-enabled; }
+            NumberInput { label: "Hold Time"; unit: "s"; value <=> root.hold-secs; enabled: root.alert-enabled; }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Opacity"; unit: "/255"; value <=> root.alpha; enabled: root.alert-enabled; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    if root.alert-style == 0: SettingsCard {
+        title: "History";
+        enabled <=> root.history-enabled;
+        locked <=> root.history-locked;
+        pos-x <=> root.history-pos-x;
+        pos-y <=> root.history-pos-y;
+        reset-position => { root.history-reset-position(); }
+
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.history-font-size; enabled: root.history-enabled; }
+            NumberInput { label: "Max Entries"; value <=> root.history-max-entries; enabled: root.history-enabled; }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.history-idle-secs; enabled: root.history-enabled; }
+            NumberInput { label: "Width"; unit: "px"; zero-hint: "Auto"; value <=> root.history-width; enabled: root.history-enabled; }
+        }
+    }
+
+    if root.alert-style == 1: SettingsCard {
+        title: "Combined Alert";
+        enabled <=> root.merged-enabled;
+        locked <=> root.merged-locked;
+        pos-x <=> root.merged-pos-x;
+        pos-y <=> root.merged-pos-y;
+        reset-position => { root.merged-reset-position(); }
+
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Start Size"; unit: "pt"; value <=> root.merged-start-font-size; enabled: root.merged-enabled; }
+            NumberInput { label: "Max Size"; unit: "pt"; value <=> root.merged-max-font-size; enabled: root.merged-enabled; }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Fly-In Speed"; unit: "ms"; value <=> root.merged-fly-ms; enabled: root.merged-enabled; }
+            NumberInput { label: "Hold Time"; unit: "s"; value <=> root.merged-hold-secs; enabled: root.merged-enabled; }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Opacity"; unit: "/255"; value <=> root.merged-alpha; enabled: root.merged-enabled; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        Text {
+            text: "History Log";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+            font-weight: 600;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.merged-history-font-size; enabled: root.merged-enabled; }
+            NumberInput { label: "Max Entries"; value <=> root.merged-history-max-entries; enabled: root.merged-enabled; }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.merged-history-idle-secs; enabled: root.merged-enabled; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+
+    SettingsCard {
+        title: "DPS Meter";
+        enabled <=> root.meter-enabled;
+        locked <=> root.meter-locked;
+        pos-x <=> root.meter-pos-x;
+        pos-y <=> root.meter-pos-y;
+        reset-position => { root.meter-reset-position(); }
+
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Max Rows"; value <=> root.meter-max-rows; enabled: root.meter-enabled; }
+            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.meter-font-size; enabled: root.meter-enabled; }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.meter-idle-secs; enabled: root.meter-enabled; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}

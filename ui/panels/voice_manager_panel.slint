@@ -1,0 +1,222 @@
+import { Theme } from "../theme.slint";
+import { Button } from "../common/buttons.slint";
+import { ScrollArea } from "../common/scroll-area.slint";
+
+// One *installed* (or actively-downloading) catalog entry — struct rather
+// than parallel arrays (same reasoning as TriggerRow in trigger_panel.slint).
+// Built in Rust by voice_catalog_installed_rows() in settings_window.rs.
+export struct VoiceCatalogRow {
+    name: string,     // internal piper voice name, e.g. "en_US-ryan-medium"
+    label: string,    // display text, e.g. "Ryan (en_US, medium)"
+    installed: bool,  // false while progress >= 0 (still downloading)
+    progress: int,    // -1 = not downloading, 0..100 = download percent
+}
+
+// Curated voice-download catalog, embedded in the Settings drawer next to
+// the other panels (see settings_shell.slint's drawer markup) — opened from
+// the Voice tab's "Manage Voices..." button. One voice ships bundled
+// already (see assets::bundled_voices_dir() / config.rs's
+// default_tts_voice()); this panel is for the small extra set a user can
+// fetch on demand.
+//
+// Same add/remove interaction as the trigger condition/action lists
+// (TriggerRowGroup in trigger_panel.slint): the visible list is only
+// installed (or in-progress) voices, "+" opens a popup of what's left in
+// the catalog to download, "x" removes whichever row is selected — not a
+// Download/Delete button on every row, which reads as noisy when most rows
+// aren't installed.
+export component VoiceManagerPanel inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in property <[VoiceCatalogRow]> catalog;
+    in-out property <int> selected-index: -1;
+
+    // Catalog entries not yet installed and not currently downloading —
+    // populates the "+" popup. Parallel arrays (name/label), same
+    // convention as settings_shell.slint's tts-voice-options/-ids.
+    in property <[string]> available-names;
+    in property <[string]> available-labels;
+
+    callback download(string);
+    callback delete(string);
+    callback close();
+
+    Text {
+        text: "Manage Voices";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-xl;
+        font-weight: 700;
+    }
+    Text {
+        text: "One voice is bundled with froklog already. Add more here if you want a choice.";
+        color: Theme.text-secondary;
+        font-size: Theme.font-size-md;
+        wrap: word-wrap;
+    }
+
+    Rectangle {
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: Theme.bg-elevated;
+        clip: true;
+
+        // The ScrollArea needs an actual layout as its immediate parent —
+        // a plain Rectangle doesn't auto-size a child's width the way a
+        // layout container does.
+        VerticalLayout {
+            // Fixed height (not vertical-stretch) so the drawer's own
+            // outer ScrollArea (see settings_shell.slint) doesn't have to
+            // size around an unbounded inner one — same reasoning as
+            // TriggerRowGroup's fixed 84px condition/action list.
+            ScrollArea {
+                height: 150px;
+                content-height: rows.preferred-height;
+
+                rows := VerticalLayout {
+                    for row[i] in root.catalog: Rectangle {
+                        height: 32px;
+                        background: root.selected-index == i
+                            ? Theme.accent
+                            : (row-touch.has-hover ? Theme.bg-hover : transparent);
+                        animate background { duration: 100ms; }
+
+                        HorizontalLayout {
+                            padding-left: Theme.space-sm;
+                            padding-right: Theme.space-sm;
+                            spacing: Theme.space-sm;
+
+                            Text {
+                                text: row.label;
+                                color: root.selected-index == i ? Theme.on-accent : Theme.text-primary;
+                                font-size: Theme.font-size-md;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+
+                            if row.progress >= 0: Text {
+                                text: "\{row.progress}%";
+                                color: root.selected-index == i ? Theme.on-accent : Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        row-touch := TouchArea {
+                            // Only installed rows are selectable — nothing
+                            // to do with a still-downloading one yet.
+                            enabled: row.installed;
+                            clicked => { root.selected-index = i; }
+                        }
+                    }
+
+                    if root.catalog.length == 0: Text {
+                        text: "No voices installed beyond the bundled one.";
+                        color: Theme.text-disabled;
+                        font-size: Theme.font-size-md;
+                        height: 32px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.border; }
+
+            HorizontalLayout {
+                padding: Theme.space-xs;
+                spacing: Theme.space-xs;
+
+                add-button := Rectangle {
+                    width: 34px;
+                    height: 34px;
+                    border-radius: Theme.radius-sm;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: add-touch.has-hover ? Theme.bg-hover : Theme.bg-elevated;
+                    opacity: root.available-names.length > 0 ? 1.0 : 0.5;
+
+                    animate background { duration: 100ms; }
+
+                    Text {
+                        text: "+";
+                        color: Theme.text-primary;
+                        font-size: Theme.font-size-lg;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    add-touch := TouchArea {
+                        enabled: root.available-names.length > 0;
+                        clicked => { add-popup.show(); }
+                    }
+
+                    add-popup := PopupWindow {
+                        x: 0;
+                        y: add-button.height;
+                        width: 220px;
+                        height: min(max(root.available-names.length, 1) * 28px, 200px);
+
+                        Rectangle {
+                            background: Theme.bg-elevated;
+                            border-radius: Theme.radius-sm;
+                            border-width: 1px;
+                            border-color: Theme.border;
+
+                            ScrollArea {
+                                content-height: root.available-names.length * 28px;
+
+                                VerticalLayout {
+                                    for label[i] in root.available-labels: Rectangle {
+                                        height: 28px;
+                                        background: add-item-touch.has-hover ? Theme.bg-hover : transparent;
+
+                                        HorizontalLayout {
+                                            padding-left: Theme.space-sm;
+                                            padding-right: Theme.space-sm;
+                                            Text {
+                                                text: label;
+                                                color: Theme.text-primary;
+                                                font-size: Theme.font-size-md;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                        }
+
+                                        add-item-touch := TouchArea {
+                                            clicked => { root.download(root.available-names[i]); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    width: 34px;
+                    h-padding: Theme.space-xs;
+                    font-size: Theme.font-size-lg;
+                    text: "\u{00D7}";
+                    primary: false;
+                    enabled: root.selected-index >= 0 && root.selected-index < root.catalog.length
+                        && root.catalog[root.selected-index].installed;
+                    clicked => {
+                        root.delete(root.catalog[root.selected-index].name);
+                        root.selected-index = -1;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        alignment: end;
+        Button { text: "Close"; primary: true; clicked => { root.close(); } }
+    }
+}

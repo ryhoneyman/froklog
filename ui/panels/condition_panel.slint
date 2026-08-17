@@ -1,0 +1,147 @@
+import { Theme } from "../theme.slint";
+import { Button } from "../common/buttons.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { TextField } from "../common/text-field.slint";
+import { LabeledField } from "../common/labeled-field.slint";
+import { PresetPickerButton, PatternPreset } from "../common/preset-picker.slint";
+
+// Edit body for a single trigger condition, embedded in the Settings
+// drawer — was ConditionEditWindow (ui/dialogs/condition_edit_dialog.slint)
+// before the drawer migration. Only ever pushed on top of an open
+// TriggerPanel. Combo selections are kept as their displayed label strings
+// (not indices); Rust maps label <-> enum on push/OK.
+export component ConditionPanel inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in-out property <string> cond-type: "Match (log line)";
+    property <bool> is-match: root.cond-type == "Match (log line)";
+    property <bool> is-chat: root.cond-type == "Chat message";
+    property <bool> is-var: root.cond-type == "Variable";
+    // Match and Chat both end in a match-type + pattern pair; Chat just
+    // applies it to the chat message instead of the whole log line.
+    property <bool> uses-pattern: root.is-match || root.is-chat;
+
+    in-out property <string> match-type: "Regex";
+    in-out property <string> pattern;
+    // Log-line presets only make sense against the raw line (Match mode) —
+    // Chat mode's pattern matches just the extracted message text, which
+    // none of the built-in line patterns are shaped for.
+    property <bool> show-presets: root.is-match && root.match-type == "Regex";
+    in property <[PatternPreset]> pattern-presets;
+
+    in-out property <string> chat-channel: "Any";
+    property <bool> is-custom-channel: root.chat-channel == "Custom channel";
+    in-out property <string> chat-custom-channel;
+
+    in-out property <string> var-name;
+    in-out property <string> var-op: "isset";
+    in-out property <string> var-value;
+
+    callback ok();
+    callback cancel();
+
+    LabeledField {
+        label: "Condition type";
+        ComboBoxField {
+            options: ["Match (log line)", "Chat message", "Variable"];
+            value <=> root.cond-type;
+        }
+    }
+
+    Rectangle { height: 1px; background: Theme.border; }
+
+    if root.is-chat: VerticalLayout {
+        spacing: Theme.space-md;
+
+        LabeledField {
+            label: "Channel";
+            ComboBoxField {
+                options: [
+                    "Any", "Say", "Tell", "OOC", "Shout",
+                    "Guild", "Group", "Raid", "Auction", "Custom channel",
+                ];
+                value <=> root.chat-channel;
+            }
+        }
+        if root.is-custom-channel: LabeledField {
+            label: "Custom channel name";
+            TextField {
+                placeholder: "e.g. General:1 — matched loosely, by substring";
+                text <=> root.chat-custom-channel;
+            }
+        }
+    }
+
+    if root.uses-pattern: VerticalLayout {
+        spacing: Theme.space-md;
+
+        LabeledField {
+            label: "Match type";
+            ComboBoxField {
+                options: ["Exact (substring)", "Regex", "Glob  (* ? {name})"];
+                value <=> root.match-type;
+            }
+        }
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                Text {
+                    text: root.is-chat ? "Message pattern (blank matches any message)" : "Pattern";
+                    color: Theme.text-secondary;
+                    font-size: Theme.font-size-sm;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                if root.show-presets: PresetPickerButton {
+                    presets: root.pattern-presets;
+                    picked(p) => { root.pattern = p; }
+                }
+            }
+            TextField {
+                placeholder: root.is-chat
+                    ? "e.g. help  or  (?P<item>.+) plz"
+                    : "e.g. You have slain {target}!  or  (?P<name>.+) slain";
+                text <=> root.pattern;
+            }
+        }
+    }
+
+    if root.is-var: VerticalLayout {
+        spacing: Theme.space-md;
+
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            LabeledField {
+                label: "Variable name";
+                TextField { text <=> root.var-name; }
+            }
+            LabeledField {
+                label: "Operator";
+                ComboBoxField {
+                    options: [
+                        "isset", "equals", "gt (>)", "gte (\u{2265})",
+                        "lt (<)", "lte (\u{2264})", "matches",
+                    ];
+                    value <=> root.var-op;
+                }
+            }
+        }
+        LabeledField {
+            label: "Value";
+            TextField { text <=> root.var-value; }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; }
+
+    HorizontalLayout {
+        spacing: Theme.space-sm;
+        alignment: end;
+        Button { text: "Cancel"; primary: false; clicked => { root.cancel(); } }
+        Button { text: "OK"; primary: true; clicked => { root.ok(); } }
+    }
+}

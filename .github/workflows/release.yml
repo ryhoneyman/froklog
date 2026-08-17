@@ -1,30 +1,53 @@
 name: Release
 
+# Tag-triggered only (v*) — every-push and manual-only were both considered
+# and passed over; see memory/project_build.md and the release-packaging
+# plan this workflow implements. Publishes a GitHub Release with a Linux
+# tarball and a Windows zip of the froklog tray client. The headless
+# binaries (froklog-server/-replay/-debug/-migrate/-loggen) are not part of
+# this release — they're dev/ops tools, already covered by ci.yml.
+
 on:
   push:
-    tags:
-      - "v*"
-
-permissions:
-  contents: write
+    tags: ["v*"]
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
-  build-windows:
-    name: Build Windows binaries
+  # Fails fast if the pushed tag doesn't match Cargo.toml's version (cheap
+  # guard against shipping under the wrong version number), then runs the
+  # same fast checks ci.yml's "Test (Linux)" job does (fmt + clippy,
+  # --all-targets, no tray feature — ~5 min there, not the slower
+  # tray-feature/Windows builds ci.yml also covers). release.yml and ci.yml
+  # are independently triggered (branch push vs tag push), so without this
+  # a tag could push a commit that never actually passed ci.yml's checks —
+  # this closes that gap directly in the release pipeline's own critical
+  # path, rather than trying to make release.yml wait on a separate ci.yml
+  # run (which would need cross-workflow triggering and SHA-to-tag
+  # resolution — real complexity for the same guarantee this gets more
+  # simply, at the cost of a few extra minutes here instead).
+  validate:
+    name: Validate (version + fmt/clippy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable + Windows target
+      - name: Compare tag to Cargo.toml
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME (version $TAG_VERSION) does not match Cargo.toml's version $CARGO_VERSION" >&2
+            exit 1
+          fi
+          echo "Tag matches Cargo.toml version $CARGO_VERSION"
+
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu
-
-      - name: Install MinGW cross-compiler
-        run: sudo apt-get install -y gcc-mingw-w64-x86-64
+          components: rustfmt, clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -33,25 +56,249 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-release-
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build froklog.exe (tray client)
-        run: cargo build --release --bin froklog --target x86_64-pc-windows-gnu --features tray
-
-      - name: Build froklog-replay.exe
-        run: cargo build --release --bin froklog-replay --target x86_64-pc-windows-gnu
-
-      - name: Collect artifacts
+      - name: Fetch espeak-rs-sys
         run: |
-          mkdir dist
-          cp target/x86_64-pc-windows-gnu/release/froklog.exe dist/
-          cp target/x86_64-pc-windows-gnu/release/froklog-replay.exe dist/
+          FETCH_DIR=$(mktemp -d)
+          mkdir -p "$FETCH_DIR/src"
+          printf '%s\n' \
+            '[package]' \
+            'name = "espeak-fetch-shim"' \
+            'version = "0.0.0"' \
+            'edition = "2021"' \
+            '[dependencies]' \
+            'espeak-rs-sys = "=0.2.0"' \
+            > "$FETCH_DIR/Cargo.toml"
+          echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+          (cd "$FETCH_DIR" && cargo fetch --quiet)
+          SRC=$(find "$HOME/.cargo/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-0.2.0
+          rm -rf "$FETCH_DIR"
+          mkdir -p vendor
+          cp -r "$SRC" vendor/espeak-rs-sys
+          chmod -R u+w vendor/espeak-rs-sys
+          patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
 
-      - name: Create GitHub Release
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  # Native Linux build — same system deps as ci.yml's test-linux-tray job,
+  # plus the two fetch-* recipes, then the actual packaging recipe.
+  package-linux:
+    name: Package (Linux tray)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install just
+        uses: extractions/setup-just@v3
+
+      # Keep in sync with justfile's setup-linux-tray-deps / ci.yml's
+      # test-linux-tray "Install tray system dependencies" step.
+      - name: Install tray system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libayatana-appindicator3-dev libxdo-dev \
+            libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev \
+            libasound2-dev \
+            cmake
+
+      # Same cache key prefix as ci.yml's test-linux-tray job — both build
+      # natively on Linux with the tray feature (one debug, one release),
+      # so they share the same dependency graph and most of the same
+      # compiled artifacts (registry downloads, proc-macro/build-script
+      # output). Different keys meant this job never benefited from
+      # test-linux-tray already having warmed the cache on the same push.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-tray-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-tray-
+
+      - name: Fetch espeak-rs-sys
+        run: just fetch-espeak-rs-sys
+
+      - name: Fetch onnxruntime + default voice
+        run: |
+          just fetch-onnxruntime
+          just fetch-default-voice
+
+      - name: Package
+        run: just package-tray-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: froklog-linux-x86_64
+          path: dist/froklog-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # Native windows-latest runner (real MSVC, not cargo-xwin cross-compile
+  # from Linux) — see the release-packaging plan for why: it's the only way
+  # espeak-rs-sys's cmake build actually produces its own espeak-ng-data
+  # (data.cmake runs the just-built espeak-ng-bin as part of the build; that
+  # tool is a Windows .exe and can't execute under cross-compilation from a
+  # Linux host). This is deliberately independent of package-linux — no
+  # cross-job data borrowing needed, unlike the local dev cargo-xwin path.
+  #
+  # No justfile recipe is used here (see package-tray-linux's neighboring
+  # comment in the justfile) — this build has no local-iteration purpose to
+  # serve, so the steps are inlined directly.
+  package-windows:
+    name: Package (Windows tray)
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-windows-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-windows-
+
+      # Same fix as vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+      # everywhere else, applied via `git apply` instead of `patch -p1` —
+      # GNU patch.exe isn't guaranteed on this runner the way git is. Fetches
+      # via a throwaway shim crate + `cargo fetch`, NOT a raw `curl` to
+      # crates.io's API download endpoint — crates.io's abuse-detection
+      # blocks that pattern (confirmed on GitHub-hosted runners), while
+      # `cargo fetch` itself, going through the real registry protocol, is
+      # unaffected.
+      - name: Fetch espeak-rs-sys
+        shell: bash
+        run: |
+          FETCH_DIR=$(mktemp -d)
+          mkdir -p "$FETCH_DIR/src"
+          printf '%s\n' \
+            '[package]' \
+            'name = "espeak-fetch-shim"' \
+            'version = "0.0.0"' \
+            'edition = "2021"' \
+            '[dependencies]' \
+            'espeak-rs-sys = "=0.2.0"' \
+            > "$FETCH_DIR/Cargo.toml"
+          echo "fn main() {}" > "$FETCH_DIR/src/main.rs"
+          (cd "$FETCH_DIR" && cargo fetch --quiet)
+          CARGO_HOME_DIR="${CARGO_HOME:-$HOME/.cargo}"
+          SRC=$(find "$CARGO_HOME_DIR/registry/src" -maxdepth 1 -type d -name 'index.crates.io-*' | head -1)/espeak-rs-sys-0.2.0
+          rm -rf "$FETCH_DIR"
+          mkdir -p vendor
+          cp -r "$SRC" vendor/espeak-rs-sys
+          chmod -R u+w vendor/espeak-rs-sys
+          git -C vendor/espeak-rs-sys init -q
+          git -C vendor/espeak-rs-sys apply --whitespace=nowarn ../../vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+          rm -rf vendor/espeak-rs-sys/.git
+
+      # Same URLs/version as justfile's fetch-onnxruntime/fetch-default-voice.
+      - name: Fetch onnxruntime + default voice
+        shell: bash
+        run: |
+          mkdir -p assets/runtime/windows assets/voices
+          curl -sSL -o ort.zip \
+            "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-1.29.0.zip"
+          7z x -bd -y ort.zip -oassets/runtime/windows >/dev/null
+          rm ort.zip
+          curl -sSL -o assets/voices/en_US-amy-low.onnx \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/low/en_US-amy-low.onnx"
+          curl -sSL -o assets/voices/en_US-amy-low.onnx.json \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/low/en_US-amy-low.onnx.json"
+
+      # NOT statically linking the CRT here (no +crt-static): confirmed by a
+      # real failure — espeak-ng's C code is compiled via cmake with the
+      # DEFAULT dynamic CRT (/MD), and its .obj files reference the dynamic
+      # CRT's __imp_-prefixed import-library thunks (realloc, isspace,
+      # fopen, strdup, etc.). Statically linking Rust's own CRT while those
+      # .obj files expect the dynamic one is a hard link-time mismatch
+      # (LNK2019: unresolved external symbol __imp_*, ~29 of them). Forcing
+      # espeak-ng's cmake build to also go static would need yet another
+      # vendor patch (CMAKE_MSVC_RUNTIME_LIBRARY) for marginal benefit —
+      # simpler and more standard to just depend on the VC++ Redistributable
+      # being present, which is already extremely common on real Windows
+      # installs (see the README note below).
+      - name: Build (release)
+        shell: bash
+        run: cargo build --release --features tray --bin froklog
+
+      - name: Stage + zip
+        shell: bash
+        run: |
+          STAGE="dist/froklog-windows-x86_64"
+          rm -rf "$STAGE" && mkdir -p "$STAGE" "$STAGE/runtime" "$STAGE/voices"
+          cp target/release/froklog.exe "$STAGE/"
+          # Flatten: runtime_dir() (assets.rs) expects the .dll directly
+          # beside the exe, not nested under onnxruntime's own zip layout.
+          cp assets/runtime/windows/*/lib/onnxruntime.dll "$STAGE/runtime/"
+          cp assets/runtime/windows/*/lib/onnxruntime_providers_shared.dll "$STAGE/runtime/"
+          cp assets/voices/en_US-amy-low.onnx "$STAGE/voices/"
+          cp assets/voices/en_US-amy-low.onnx.json "$STAGE/voices/"
+          ESPEAK_DATA=$(find target -path '*/build/espeak-rs-sys-*/out/share/espeak-ng-data' -type d | head -1)
+          if [ -z "$ESPEAK_DATA" ]; then
+            echo "error: no espeak-ng-data found under target/ after a native build" >&2
+            exit 1
+          fi
+          cp -r "$ESPEAK_DATA" "$STAGE/espeak-ng-data"
+          printf '%s\r\n' \
+            'froklog (Windows tray client)' \
+            '==============================' \
+            '' \
+            'Run: froklog.exe' \
+            '' \
+            'This is a portable install: nothing gets written outside this folder' \
+            'except your own data alongside the exe (icons, sound packages,' \
+            'downloaded voices) and settings, same as any portable Windows app.' \
+            '' \
+            'Requires the Microsoft Visual C++ Redistributable (x64), already' \
+            'installed on most Windows machines. If froklog.exe fails to start' \
+            'with a missing-DLL error, install it from:' \
+            'https://aka.ms/vs/17/release/vc_redist.x64.exe' \
+            > "$STAGE/README.txt"
+          mkdir -p dist
+          (cd dist && 7z a -bd froklog-windows-x86_64.zip froklog-windows-x86_64 >/dev/null)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: froklog-windows-x86_64
+          path: dist/froklog-windows-x86_64.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [package-linux, package-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/froklog.exe
-            dist/froklog-replay.exe
+            dist/froklog-linux-x86_64.tar.gz
+            dist/froklog-windows-x86_64.zip
           generate_release_notes: true

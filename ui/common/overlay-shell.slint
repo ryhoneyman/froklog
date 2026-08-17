@@ -1,0 +1,27 @@
+// Shared chrome for every overlay window: the borderless/always-on-top
+// window flags common to all of them.
+//
+// Deliberately doesn't also declare the `locked`/`force-show`/
+// `drag-requested` contract each overlay's own drag TouchArea uses, even
+// though that trio is just as duplicated: slint_build's generated Rust API
+// for a component only exposes accessors (`set_locked`, `on_drag_requested`,
+// ...) for properties/callbacks declared directly on that component, not
+// ones it merely inherits from a base in another file — so those three
+// still have to be redeclared in each leaf `.slint` file for
+// `AlertOverlayWindow`/`HistoryOverlayWindow`/`DpsMeterWindow`'s Rust side
+// to see them. `no-frame`/`background`/`always-on-top` aren't `in`
+// properties and need no Rust accessor, so those are safe to share here.
+//
+// Also doesn't own the drag TouchArea itself: each overlay places its drag
+// catcher at a different point in its own element tree (a top-level sibling
+// covering the alert overlay's transparent canvas; the first child of
+// `panel` for history/DPS's opaque panel, so their later-declared
+// interactive rows/tabs/buttons still take priority over it for clicks in
+// their own bounds). Hoisting the TouchArea here would force one placement
+// on every overlay or need a `@children` injection point — not worth the
+// risk to DPS's mob-picker/tab click layering for a few lines of markup.
+export component OverlayShell inherits Window {
+    no-frame: true;
+    background: transparent;
+    always-on-top: true;
+}

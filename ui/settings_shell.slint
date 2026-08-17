@@ -1,0 +1,726 @@
+// Phase 2 — window chrome, sidebar nav, Save/Close wiring for the Settings
+// dialog, replacing the SysTabControl32 tab strip in
+// overlay_config_win.rs's original 8-tab dialog (since folded down to 6 —
+// the DPS Meter and Windows tabs were both merged into Overlays; see
+// ui/tabs/appearance_tab.slint's doc comment). Add/edit flows (trigger,
+// condition, action, color picker, sound label, log profile) live in an
+// embedded drawer (see the drawer markup below and ui/panels/*.slint)
+// rather than separate dialog windows — see common/modal-scrim.slint's
+// doc comment for why.
+import { Theme } from "theme.slint";
+import { SidebarItem } from "common/sidebar-item.slint";
+import { Button } from "common/buttons.slint";
+import { ScrollArea } from "common/scroll-area.slint";
+import { ModalScrim } from "common/modal-scrim.slint";
+import { IconOption } from "common/icon-combo-box.slint";
+import { PatternPreset } from "common/preset-picker.slint";
+import { GeneralTab } from "tabs/general_tab.slint";
+import { LoggingTab } from "tabs/logging_tab.slint";
+import { TriggersTab } from "tabs/triggers_tab.slint";
+import { AppearanceTab } from "tabs/appearance_tab.slint";
+import { VoiceTab } from "tabs/voice_tab.slint";
+import { SoundsTab } from "tabs/sounds_tab.slint";
+import { TriggerPanel, TriggerRow } from "panels/trigger_panel.slint";
+import { ConditionPanel } from "panels/condition_panel.slint";
+import { ActionPanel } from "panels/action_panel.slint";
+import { SoundLabelPanel } from "panels/sound_label_panel.slint";
+import { LogProfilePanel } from "panels/log_profile_panel.slint";
+import { VoiceManagerPanel, VoiceCatalogRow } from "panels/voice_manager_panel.slint";
+
+export component SettingsWindow inherits Window {
+    title: "froklog Settings";
+    // Same artwork as the systray icon's "on" state, so the taskbar/title
+    // bar icon matches what the user already associates with froklog
+    // instead of falling back to Slint's default window icon.
+    icon: @image-url("../assets/froklog-green.png");
+    background: Theme.bg-app;
+    default-font-family: Theme.font-family;
+    // Widened from 760px so the Overlays tab's per-window header row
+    // (title + Enabled/Locked + X/Y + Reset, all on one line — see
+    // appearance_tab.slint) has room to fit without clipping past the
+    // card's own right edge.
+    width: 780px;
+    height: 520px;
+
+    in-out property <int> current-tab: 0;
+    property <[string]> tab-names: [
+        "General", "Logging", "Triggers", "Overlays", "Voice", "Sounds",
+    ];
+
+    callback save();
+    // Fired only from the pending-changes dialog below — there's no
+    // standalone Close button any more (see that dialog's doc comment for
+    // why); the sole way to close Settings is the native titlebar X, which
+    // Rust's `on_close_requested` hook intercepts to decide between closing
+    // outright and opening this dialog.
+    callback save-and-close-settings();
+    callback discard-and-close-settings();
+    in-out property <bool> pending-changes-open: false;
+    // Whether any Save-gated field (see "Dirty tracking" below) has changed
+    // since the last load/Save — drives the Save button's enabled state so
+    // it only lights up when there's actually something to persist. Reset
+    // to false by Rust at the end of `load_config` (undoing the spurious
+    // `changed` firings load's own `set_*` calls trigger) and again after
+    // `save_config` runs, since Save persists every tracked field at once.
+    in-out property <bool> dirty: false;
+
+    // Drawer state, driven from Rust's `Vec<PanelFrame>` stack
+    // (settings_window.rs) — see the drawer markup below and
+    // common/modal-scrim.slint's doc comment for why an embedded drawer
+    // replaced six separate top-level dialog windows.
+    in-out property <bool> drawer-open: false;
+    // Which panel is on top of the stack: -1 = none/closed, 0=Trigger,
+    // 1=Condition, 2=Action, 3=Color, 4=SoundLabel, 5=LogProfile.
+    in-out property <int> top-panel: -1;
+    in property <[string]> drawer-crumbs: [];
+    callback drawer-back();      // Each panel's own Cancel button — pop one level, discard.
+    callback drawer-close-all(); // The drawer's own X — pop the whole stack, discard.
+    // Header breadcrumb segment clicked (0-based index into drawer-crumbs) —
+    // jumps straight back to that level, discarding everything deeper.
+    // Replaces a separate back-chevron button: with the trail itself
+    // clickable, "‹" alongside "Trigger › Sound Label" read as two
+    // different, redundant ways to go back one level; a plain trail where
+    // each name is its own way back reads as one mechanism instead.
+    callback drawer-jump(int);
+
+    callback trigger-panel-ok();
+    callback condition-panel-ok();
+    callback action-panel-ok();
+    callback sound-label-panel-ok();
+    callback log-profile-panel-ok();
+
+    // ── General tab ──────────────────────────────────────────────────────
+    in property <string> import-status <=> general-tab.import-status;
+    in property <bool> import-in-progress <=> general-tab.import-in-progress;
+    callback import-spell-icons <=> general-tab.import-spell-icons;
+    in property <string> dynamic-config-status <=> general-tab.dynamic-config-status;
+    in property <bool> dynamic-config-in-progress <=> general-tab.dynamic-config-in-progress;
+    callback download-dynamic-config <=> general-tab.download-dynamic-config;
+
+    // ── Logging tab ──────────────────────────────────────────────────────
+    in property <[string]> log-profile-rows <=> logging-tab.log-profile-rows;
+    in-out property <int> selected-log-profile-index <=> logging-tab.selected-log-profile-index;
+    in-out property <bool> auto-detect-log <=> logging-tab.auto-detect-log;
+    in property <string> watching-status <=> logging-tab.watching-status;
+    callback add-log-profile <=> logging-tab.add-log-profile;
+    callback edit-log-profile <=> logging-tab.edit-log-profile;
+    callback delete-log-profile <=> logging-tab.delete-log-profile;
+    callback set-active-log-profile <=> logging-tab.set-active-log-profile;
+    in-out property <string> server-url <=> logging-tab.server-url;
+    in property <string> url-status <=> logging-tab.url-status;
+    in property <bool> url-test-in-progress <=> logging-tab.url-test-in-progress;
+    callback test-url <=> logging-tab.test-url;
+    in property <string> stream-id <=> logging-tab.stream-id;
+    in property <bool> is-registered <=> logging-tab.is-registered;
+    in property <bool> register-in-progress <=> logging-tab.register-in-progress;
+    in-out property <string> password <=> logging-tab.password;
+    callback register-clicked <=> logging-tab.register-clicked;
+    callback copy-stream-id <=> logging-tab.copy-stream-id;
+    in-out property <bool> remote-logging <=> logging-tab.remote-logging;
+
+    // ── Triggers tab ─────────────────────────────────────────────────────
+    in property <[string]> trigger-rows <=> triggers-tab.trigger-rows;
+    in-out property <int> selected-trigger-index <=> triggers-tab.selected-trigger-index;
+    callback add-trigger <=> triggers-tab.add-trigger;
+    callback edit-trigger <=> triggers-tab.edit-trigger;
+    callback delete-trigger <=> triggers-tab.delete-trigger;
+    callback move-trigger-up <=> triggers-tab.move-trigger-up;
+    callback move-trigger-down <=> triggers-tab.move-trigger-down;
+    callback toggle-trigger <=> triggers-tab.toggle-trigger;
+    callback test-trigger <=> triggers-tab.test-trigger;
+
+    // ── Overlays tab ─────────────────────────────────────────────────────
+    in-out property <string> overlay-font <=> appearance-tab.overlay-font;
+    in property <[string]> font-options <=> appearance-tab.font-options;
+    in-out property <string> start-font-size <=> appearance-tab.start-font-size;
+    in-out property <string> max-font-size <=> appearance-tab.max-font-size;
+    in-out property <string> fly-ms <=> appearance-tab.fly-ms;
+    in-out property <string> hold-secs <=> appearance-tab.hold-secs;
+    in-out property <string> alpha <=> appearance-tab.alpha;
+    in-out property <string> history-font-size <=> appearance-tab.history-font-size;
+    in-out property <string> history-idle-secs <=> appearance-tab.history-idle-secs;
+    in-out property <string> history-max-entries <=> appearance-tab.history-max-entries;
+    in-out property <string> history-width <=> appearance-tab.history-width;
+    in-out property <string> meter-max-rows <=> appearance-tab.meter-max-rows;
+    in-out property <string> meter-idle-secs <=> appearance-tab.meter-idle-secs;
+    in-out property <string> meter-font-size <=> appearance-tab.meter-font-size;
+    in-out property <bool> force-show-active <=> appearance-tab.force-show-active;
+    callback show-all-windows <=> appearance-tab.show-all-windows;
+    in-out property <bool> win-overlay-enabled <=> appearance-tab.alert-enabled;
+    in-out property <bool> win-overlay-locked <=> appearance-tab.alert-locked;
+    in-out property <string> win-overlay-pos-x <=> appearance-tab.alert-pos-x;
+    in-out property <string> win-overlay-pos-y <=> appearance-tab.alert-pos-y;
+    callback overlay-reset-position <=> appearance-tab.alert-reset-position;
+    in-out property <bool> win-history-enabled <=> appearance-tab.history-enabled;
+    in-out property <bool> win-history-locked <=> appearance-tab.history-locked;
+    in-out property <string> win-history-pos-x <=> appearance-tab.history-pos-x;
+    in-out property <string> win-history-pos-y <=> appearance-tab.history-pos-y;
+    callback history-reset-position <=> appearance-tab.history-reset-position;
+    in-out property <bool> win-meter-enabled <=> appearance-tab.meter-enabled;
+    in-out property <bool> win-meter-locked <=> appearance-tab.meter-locked;
+    in-out property <string> win-meter-pos-x <=> appearance-tab.meter-pos-x;
+    in-out property <string> win-meter-pos-y <=> appearance-tab.meter-pos-y;
+    callback meter-reset-position <=> appearance-tab.meter-reset-position;
+    in-out property <int> alert-style <=> appearance-tab.alert-style;
+    in-out property <bool> win-merged-enabled <=> appearance-tab.merged-enabled;
+    in-out property <bool> win-merged-locked <=> appearance-tab.merged-locked;
+    in-out property <string> win-merged-pos-x <=> appearance-tab.merged-pos-x;
+    in-out property <string> win-merged-pos-y <=> appearance-tab.merged-pos-y;
+    callback merged-reset-position <=> appearance-tab.merged-reset-position;
+    in-out property <string> merged-start-font-size <=> appearance-tab.merged-start-font-size;
+    in-out property <string> merged-max-font-size <=> appearance-tab.merged-max-font-size;
+    in-out property <string> merged-fly-ms <=> appearance-tab.merged-fly-ms;
+    in-out property <string> merged-hold-secs <=> appearance-tab.merged-hold-secs;
+    in-out property <string> merged-alpha <=> appearance-tab.merged-alpha;
+    in-out property <string> merged-history-font-size <=> appearance-tab.merged-history-font-size;
+    in-out property <string> merged-history-idle-secs <=> appearance-tab.merged-history-idle-secs;
+    in-out property <string> merged-history-max-entries <=> appearance-tab.merged-history-max-entries;
+
+    // ── Voice tab ────────────────────────────────────────────────────────
+    in-out property <bool> tts-enabled <=> voice-tab.tts-enabled;
+    in-out property <string> tts-speed <=> voice-tab.tts-speed;
+    in-out property <int> tts-audio-mode <=> voice-tab.audio-mode;
+    in-out property <bool> tts-read-emergency <=> voice-tab.read-emergency;
+    in-out property <bool> tts-read-operational <=> voice-tab.read-operational;
+    in-out property <bool> tts-read-ambient <=> voice-tab.read-ambient;
+    in-out property <string> tts-voice <=> voice-tab.voice;
+    in property <[string]> tts-voice-options <=> voice-tab.voice-options;
+    // Internal voice ids, parallel-indexed to tts-voice-options — never
+    // shown in the UI (voice-tab only renders the display names), just a
+    // Rust-side lookup table so Save/instant-save can resolve the selected
+    // display name back to its id without re-querying the TTS backend
+    // (see settings_window.rs's `tts_voice_id_for_display`).
+    in property <[string]> tts-voice-ids: [];
+    callback test-voice <=> voice-tab.test-voice;
+    callback manage-voices <=> voice-tab.manage-voices;
+    in property <[VoiceCatalogRow]> voice-catalog;
+    in property <[string]> voice-catalog-available-names;
+    in property <[string]> voice-catalog-available-labels;
+    callback voice-catalog-download(string);
+    callback voice-catalog-delete(string);
+
+    // ── Sounds tab ───────────────────────────────────────────────────────
+    in-out property <bool> sound-enabled <=> sounds-tab.sound-enabled;
+    in-out property <float> sound-volume <=> sounds-tab.sound-volume;
+    in-out property <string> sound-package <=> sounds-tab.sound-package;
+    in property <[string]> sound-package-options <=> sounds-tab.sound-package-options;
+    callback new-sound-package <=> sounds-tab.new-package;
+    callback rename-sound-package <=> sounds-tab.rename-package;
+    callback delete-sound-package <=> sounds-tab.delete-package;
+    callback export-sound-package <=> sounds-tab.export-package;
+    callback import-sound-package <=> sounds-tab.import-package;
+    in property <[string]> sound-labels <=> sounds-tab.sound-labels;
+    in-out property <int> selected-label-index <=> sounds-tab.selected-label-index;
+    callback add-sound-label <=> sounds-tab.add-label;
+    callback edit-sound-label <=> sounds-tab.edit-label;
+    callback delete-sound-label <=> sounds-tab.delete-label;
+
+    // ── Drawer: Trigger panel ───────────────────────────────────────────
+    in-out property <string> trigger-name <=> trigger-panel.trigger-name;
+    in-out property <bool> trigger-enabled <=> trigger-panel.trigger-enabled;
+    in-out property <string> condition-logic <=> trigger-panel.condition-logic;
+    in property <[TriggerRow]> condition-rows <=> trigger-panel.condition-rows;
+    in-out property <int> selected-condition-index <=> trigger-panel.selected-condition-index;
+    callback add-condition <=> trigger-panel.add-condition;
+    callback edit-condition <=> trigger-panel.edit-condition;
+    callback delete-condition <=> trigger-panel.delete-condition;
+    callback move-condition-up <=> trigger-panel.move-condition-up;
+    callback move-condition-down <=> trigger-panel.move-condition-down;
+    in property <[TriggerRow]> action-rows <=> trigger-panel.action-rows;
+    in-out property <int> selected-action-index <=> trigger-panel.selected-action-index;
+    callback add-action <=> trigger-panel.add-action;
+    callback edit-action <=> trigger-panel.edit-action;
+    callback delete-action <=> trigger-panel.delete-action;
+    callback move-action-up <=> trigger-panel.move-action-up;
+    callback move-action-down <=> trigger-panel.move-action-down;
+
+    // ── Drawer: Condition panel ──────────────────────────────────────────
+    in-out property <string> cond-type <=> condition-panel.cond-type;
+    in-out property <string> match-type <=> condition-panel.match-type;
+    in-out property <string> pattern <=> condition-panel.pattern;
+    in property <[PatternPreset]> pattern-presets <=> condition-panel.pattern-presets;
+    in-out property <string> chat-channel <=> condition-panel.chat-channel;
+    in-out property <string> chat-custom-channel <=> condition-panel.chat-custom-channel;
+    in-out property <string> cond-var-name <=> condition-panel.var-name;
+    in-out property <string> var-op <=> condition-panel.var-op;
+    in-out property <string> cond-var-value <=> condition-panel.var-value;
+
+    // ── Drawer: Action panel ─────────────────────────────────────────────
+    in-out property <string> action-type <=> action-panel.action-type;
+    in-out property <string> icon-mode <=> action-panel.icon-mode;
+    in-out property <int> icon-index <=> action-panel.icon-index;
+    in property <[IconOption]> icon-options <=> action-panel.icon-options;
+    in property <[int]> icon-visible-indices <=> action-panel.icon-visible-indices;
+    in property <[string]> icon-source-labels <=> action-panel.icon-source-labels;
+    in-out property <string> icon-source-label-value <=> action-panel.icon-source-label-value;
+    in-out property <string> icon-search-text <=> action-panel.icon-search-text;
+    in-out property <float> icon-hue <=> action-panel.icon-hue;
+    in-out property <float> icon-sat <=> action-panel.icon-sat;
+    in-out property <float> icon-val <=> action-panel.icon-val;
+    in property <image> icon-sv-image <=> action-panel.icon-sv-image;
+    in property <color> icon-color-preview <=> action-panel.icon-color-preview;
+    callback icon-search-changed <=> action-panel.icon-search-changed;
+    callback icon-source-changed <=> action-panel.icon-source-changed;
+    callback icon-hsv-changed <=> action-panel.icon-hsv-changed;
+    callback icon-recent-picked <=> action-panel.icon-recent-picked;
+    in-out property <string> message <=> action-panel.message;
+    in-out property <float> message-hue <=> action-panel.message-hue;
+    in-out property <float> message-sat <=> action-panel.message-sat;
+    in-out property <float> message-val <=> action-panel.message-val;
+    in property <image> message-sv-image <=> action-panel.message-sv-image;
+    in property <color> message-color-preview <=> action-panel.message-color-preview;
+    callback message-hsv-changed <=> action-panel.message-hsv-changed;
+    callback message-recent-picked <=> action-panel.message-recent-picked;
+    in-out property <float> border-hue <=> action-panel.border-hue;
+    in-out property <float> border-sat <=> action-panel.border-sat;
+    in-out property <float> border-val <=> action-panel.border-val;
+    in property <image> border-sv-image <=> action-panel.border-sv-image;
+    in property <color> border-color-preview <=> action-panel.border-color-preview;
+    callback border-hsv-changed <=> action-panel.border-hsv-changed;
+    callback border-recent-picked <=> action-panel.border-recent-picked;
+    in property <image> hue-strip-image <=> action-panel.hue-strip-image;
+    in property <[color]> recent-colors <=> action-panel.recent-colors;
+    in-out property <string> treatment <=> action-panel.treatment;
+    in-out property <string> overlay-priority <=> action-panel.overlay-priority;
+    in-out property <string> delay-secs <=> action-panel.delay-secs;
+    in property <[string]> sound-options <=> action-panel.sound-options;
+    in property <[string]> sound-slots <=> action-panel.sound-slots;
+    callback set-sound-slot <=> action-panel.set-sound-slot;
+    callback add-sound-slot <=> action-panel.add-sound-slot;
+    callback remove-sound-slot <=> action-panel.remove-sound-slot;
+    callback test-sound-slot <=> action-panel.test-sound-slot;
+    in-out property <string> sound-mode <=> action-panel.sound-mode;
+    in-out property <string> tts-text <=> action-panel.tts-text;
+    callback test-tts <=> action-panel.test-tts;
+    in-out property <int> voice-priority <=> action-panel.voice-priority;
+    in-out property <string> action-var-name <=> action-panel.var-name;
+    in-out property <string> action-var-value <=> action-panel.var-value;
+
+    // ── Drawer: Sound label panel ────────────────────────────────────────
+    in-out property <string> label-name <=> sound-label-panel.label-name;
+    // `file-path`/`browse` are aliased to distinct root names (not bare)
+    // because LogProfilePanel also has `file-path`/`browse` — two `<=>`
+    // aliases can't share one root property/callback name. `test` doesn't
+    // collide with anything else, so it stays bare.
+    in-out property <string> sound-file-path <=> sound-label-panel.file-path;
+    callback browse-sound-file <=> sound-label-panel.browse;
+    callback test <=> sound-label-panel.test;
+
+    // ── Drawer: Log profile panel ────────────────────────────────────────
+    in-out property <string> profile-name <=> log-profile-panel.profile-name;
+    in-out property <string> log-file-path <=> log-profile-panel.file-path;
+    in-out property <string> game <=> log-profile-panel.game;
+    in property <[string]> game-options <=> log-profile-panel.game-options;
+    in-out property <string> server <=> log-profile-panel.server;
+    in-out property <string> player <=> log-profile-panel.player;
+    in-out property <bool> public-streaming <=> log-profile-panel.public-streaming;
+    callback browse-log-file <=> log-profile-panel.browse;
+
+    // ── Instant-save ─────────────────────────────────────────────────────
+    // Checkboxes, sliders, radios, and standalone pulldowns (no sibling
+    // fields they need to stay consistent with — unlike Game/Server, which
+    // combine with Player/Log File to identify one log) persist the moment
+    // they change, instead of waiting for Save. Everything else (text
+    // fields, Game/Server) still only commits on Save.
+    // Separate callbacks (not one shared one) because only remote-logging
+    // needs an engine restart to take effect. Public streaming is no
+    // longer an instant-save toggle here — it moved into the per-profile
+    // Log Profile panel (see `LogProfilePanel`'s `public-streaming`), which
+    // already persists on that panel's own OK via `mutate_log_profiles`.
+    callback instant-save-remote-logging();
+    changed remote-logging => { root.instant-save-remote-logging(); }
+
+    callback instant-save-overlay-font();
+    changed overlay-font => { root.instant-save-overlay-font(); }
+
+    callback instant-save-tts-enabled();
+    changed tts-enabled => { root.instant-save-tts-enabled(); }
+
+    callback instant-save-tts-speed();
+    changed tts-speed => { root.instant-save-tts-speed(); }
+
+    callback instant-save-tts-audio-mode();
+    changed tts-audio-mode => { root.instant-save-tts-audio-mode(); }
+
+    callback instant-save-tts-verbosity();
+    changed tts-read-emergency => { root.instant-save-tts-verbosity(); }
+    changed tts-read-operational => { root.instant-save-tts-verbosity(); }
+    changed tts-read-ambient => { root.instant-save-tts-verbosity(); }
+
+    callback instant-save-tts-voice();
+    changed tts-voice => { root.instant-save-tts-voice(); }
+
+    callback instant-save-win-overlay();
+    changed win-overlay-enabled => { root.instant-save-win-overlay(); }
+    changed win-overlay-locked => { root.instant-save-win-overlay(); }
+
+    callback instant-save-win-history();
+    changed win-history-enabled => { root.instant-save-win-history(); }
+    changed win-history-locked => { root.instant-save-win-history(); }
+
+    callback instant-save-win-meter();
+    changed win-meter-enabled => { root.instant-save-win-meter(); }
+    changed win-meter-locked => { root.instant-save-win-meter(); }
+
+    callback instant-save-win-merged();
+    changed win-merged-enabled => { root.instant-save-win-merged(); }
+    changed win-merged-locked => { root.instant-save-win-merged(); }
+
+    callback instant-save-alert-style();
+    changed alert-style => { root.instant-save-alert-style(); }
+
+    callback instant-save-sound-enabled();
+    changed sound-enabled => { root.instant-save-sound-enabled(); }
+
+    callback instant-save-sound-volume();
+    changed sound-volume => { root.instant-save-sound-volume(); }
+
+    callback instant-save-sound-package();
+    changed sound-package => { root.instant-save-sound-package(); }
+
+    callback instant-save-auto-detect-log();
+    changed auto-detect-log => { root.instant-save-auto-detect-log(); }
+
+    // ── Dirty tracking (Save-gated fields) ──────────────────────────────
+    // Everything Save actually persists (see settings_window.rs's
+    // `save_config`) that *isn't* one of the instant-save fields above —
+    // text/spinbox entries with no standalone persistence of their own.
+    // Position x/y are included here too: typing a value or clicking a
+    // Reset Position button only updates these fields, it doesn't write to
+    // Config until Save runs. (A live drag is the one exception — it
+    // persists immediately and only echoes into these same fields for
+    // display via `sync_window_position` — so a drag can light Save up
+    // even though that particular field is already saved; clicking Save
+    // then is a harmless no-op re-write of the same value.)
+    // TEMPORARY diagnostic — pinpointing a reported bug where Save
+    // correctly clears `dirty`, but the very next Settings open shows it
+    // dirty again with no user edits. `dirty-reason` records which field's
+    // `changed` handler last fired; `changed dirty` reports both the value
+    // and that reason to Rust (settings_window.rs's `on_dirty_changed`,
+    // itself temporary) so real log output can show what actually fired
+    // and when, instead of guessing from a static read of this file. Strip
+    // all of this back out to the plain `root.dirty = true;` lines once
+    // the culprit is found.
+    in-out property <string> dirty-reason;
+    callback dirty-changed(bool, string);
+    changed dirty => { root.dirty-changed(root.dirty, root.dirty-reason); }
+
+    changed server-url => { root.dirty = true; root.dirty-reason = "server-url"; }
+    changed password => { root.dirty = true; root.dirty-reason = "password"; }
+    changed start-font-size => { root.dirty = true; root.dirty-reason = "start-font-size"; }
+    changed max-font-size => { root.dirty = true; root.dirty-reason = "max-font-size"; }
+    changed fly-ms => { root.dirty = true; root.dirty-reason = "fly-ms"; }
+    changed hold-secs => { root.dirty = true; root.dirty-reason = "hold-secs"; }
+    changed alpha => { root.dirty = true; root.dirty-reason = "alpha"; }
+    changed history-font-size => { root.dirty = true; root.dirty-reason = "history-font-size"; }
+    changed history-idle-secs => { root.dirty = true; root.dirty-reason = "history-idle-secs"; }
+    changed history-max-entries => { root.dirty = true; root.dirty-reason = "history-max-entries"; }
+    changed history-width => { root.dirty = true; root.dirty-reason = "history-width"; }
+    changed merged-start-font-size => { root.dirty = true; root.dirty-reason = "merged-start-font-size"; }
+    changed merged-max-font-size => { root.dirty = true; root.dirty-reason = "merged-max-font-size"; }
+    changed merged-fly-ms => { root.dirty = true; root.dirty-reason = "merged-fly-ms"; }
+    changed merged-hold-secs => { root.dirty = true; root.dirty-reason = "merged-hold-secs"; }
+    changed merged-alpha => { root.dirty = true; root.dirty-reason = "merged-alpha"; }
+    changed merged-history-font-size => { root.dirty = true; root.dirty-reason = "merged-history-font-size"; }
+    changed merged-history-idle-secs => { root.dirty = true; root.dirty-reason = "merged-history-idle-secs"; }
+    changed merged-history-max-entries => { root.dirty = true; root.dirty-reason = "merged-history-max-entries"; }
+    changed meter-max-rows => { root.dirty = true; root.dirty-reason = "meter-max-rows"; }
+    changed meter-idle-secs => { root.dirty = true; root.dirty-reason = "meter-idle-secs"; }
+    changed meter-font-size => { root.dirty = true; root.dirty-reason = "meter-font-size"; }
+    changed win-overlay-pos-x => { root.dirty = true; root.dirty-reason = "win-overlay-pos-x"; }
+    changed win-overlay-pos-y => { root.dirty = true; root.dirty-reason = "win-overlay-pos-y"; }
+    changed win-history-pos-x => { root.dirty = true; root.dirty-reason = "win-history-pos-x"; }
+    changed win-history-pos-y => { root.dirty = true; root.dirty-reason = "win-history-pos-y"; }
+    changed win-meter-pos-x => { root.dirty = true; root.dirty-reason = "win-meter-pos-x"; }
+    changed win-meter-pos-y => { root.dirty = true; root.dirty-reason = "win-meter-pos-y"; }
+    changed win-merged-pos-x => { root.dirty = true; root.dirty-reason = "win-merged-pos-x"; }
+    changed win-merged-pos-y => { root.dirty = true; root.dirty-reason = "win-merged-pos-y"; }
+
+    VerticalLayout {
+        HorizontalLayout {
+            Rectangle {
+                width: 180px;
+                background: Theme.bg-panel;
+
+                VerticalLayout {
+                    padding: Theme.space-sm;
+                    spacing: Theme.space-xs;
+                    alignment: start;
+
+                    for name[i] in root.tab-names: SidebarItem {
+                        text: name;
+                        selected: root.current-tab == i;
+                        clicked => { root.current-tab = i; }
+                    }
+                }
+            }
+
+            Rectangle {
+                background: Theme.bg-app;
+
+                // Tabs can be taller than the window (Logging's three cards
+                // already are) — scroll instead of clipping content off the
+                // bottom. The root-level `<=>` aliases below require both
+                // tabs to be permanently instantiated siblings (Slint
+                // rejects aliasing to an id declared inside `if` — "Cannot
+                // access id" — so conditional instantiation isn't an
+                // option here). ScrollArea (ui/common/scroll-area.slint, a
+                // themed wrapper over Flickable) needs an explicit content
+                // height for the same reason std-widgets' ScrollView did —
+                // with two permanent siblings it can't infer which one's
+                // height should drive the viewport — but unlike ScrollView
+                // its scrollbar is always visible (once content overflows)
+                // and themed instead of a fixed light auto-hiding one.
+                ScrollArea {
+                    content-height: root.current-tab == 0
+                        ? general-tab.preferred-height
+                        : root.current-tab == 1
+                            ? logging-tab.preferred-height
+                            : root.current-tab == 2
+                                ? triggers-tab.preferred-height
+                                : root.current-tab == 3
+                                    ? appearance-tab.preferred-height
+                                    : root.current-tab == 4
+                                        ? voice-tab.preferred-height
+                                        : sounds-tab.preferred-height;
+
+                    general-tab := GeneralTab {
+                        visible: root.current-tab == 0;
+                    }
+                    logging-tab := LoggingTab {
+                        visible: root.current-tab == 1;
+                    }
+                    triggers-tab := TriggersTab {
+                        visible: root.current-tab == 2;
+                    }
+                    appearance-tab := AppearanceTab {
+                        visible: root.current-tab == 3;
+                    }
+                    voice-tab := VoiceTab {
+                        visible: root.current-tab == 4;
+                    }
+                    sounds-tab := SoundsTab {
+                        visible: root.current-tab == 5;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 56px;
+            background: Theme.bg-panel;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            HorizontalLayout {
+                padding: Theme.space-md;
+                spacing: Theme.space-sm;
+                alignment: end;
+
+                Button {
+                    text: "Save";
+                    primary: true;
+                    enabled: root.dirty;
+                    clicked => { root.save(); }
+                }
+            }
+        }
+    }
+
+    ModalScrim { active: root.drawer-open; }
+
+    // Settings "drawer" — replaces the six standalone dialog windows this
+    // app used to pop for add/edit flows (trigger, condition, action,
+    // color picker, sound label, log profile). Fixed-width, full-height,
+    // slides in from the right edge; going deeper (e.g. Trigger -> Action
+    // -> Color) swaps this same panel's content in place rather than
+    // opening another window, tracked by a `Vec<PanelFrame>` stack in
+    // settings_window.rs. Phase 0: scaffolding only, no panels wired in
+    // yet — nothing sets `drawer-open` so this never becomes visible.
+    Rectangle {
+        width: 560px;
+        height: 100%;
+        x: root.drawer-open ? (root.width - self.width) : root.width;
+        animate x { duration: 220ms; easing: ease-out; }
+        background: Theme.bg-panel;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        VerticalLayout {
+            Rectangle {
+                height: 48px;
+                background: Theme.bg-elevated;
+
+                HorizontalLayout {
+                    padding: Theme.space-sm;
+                    spacing: Theme.space-xs;
+
+                    // The trail itself is the only way back: each earlier
+                    // segment is a jump straight to that level, the current
+                    // (last) segment is just a bold label. No separate
+                    // back-chevron button alongside it — one navigation
+                    // mechanism, not two.
+                    HorizontalLayout {
+                        horizontal-stretch: 1;
+                        spacing: Theme.space-xs;
+                        alignment: start;
+
+                        for crumb[i] in root.drawer-crumbs: HorizontalLayout {
+                            spacing: Theme.space-xs;
+
+                            crumb-touch := TouchArea {
+                                enabled: i + 1 < root.drawer-crumbs.length;
+                                clicked => { root.drawer-jump(i); }
+                                Text {
+                                    text: crumb;
+                                    color: i + 1 < root.drawer-crumbs.length
+                                        ? (crumb-touch.has-hover ? Theme.text-primary : Theme.text-secondary)
+                                        : Theme.text-primary;
+                                    font-size: Theme.font-size-md;
+                                    font-weight: i + 1 < root.drawer-crumbs.length ? 400 : 600;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            if i + 1 < root.drawer-crumbs.length: Text {
+                                text: "\u{203a}";
+                                color: Theme.text-secondary;
+                                font-size: Theme.font-size-md;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    TouchArea {
+                        width: 24px;
+                        clicked => { root.drawer-close-all(); }
+                        Text {
+                            // U+00D7 (×), not U+2715 (✕) — the latter is a
+                            // Dingbats-block glyph real Segoe UI on Windows
+                            // doesn't cover, rendering blank there (Slint's
+                            // own text renderer doesn't do OS-level font
+                            // fallback the way native Win32 text APIs do,
+                            // so it just draws nothing instead of
+                            // substituting another font). × is plain Latin-1
+                            // and already used for this exact purpose
+                            // elsewhere (see action_panel.slint's sound-slot
+                            // remove button).
+                            text: "\u{00D7}";
+                            color: Theme.text-secondary;
+                            font-size: Theme.font-size-lg;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            ScrollArea {
+                content-height: root.top-panel == 0
+                    ? trigger-panel.preferred-height
+                    : root.top-panel == 1
+                        ? condition-panel.preferred-height
+                        : root.top-panel == 2
+                            ? action-panel.preferred-height
+                            : root.top-panel == 3
+                                ? sound-label-panel.preferred-height
+                                : root.top-panel == 4
+                                    ? log-profile-panel.preferred-height
+                                    : voice-manager-panel.preferred-height;
+
+                trigger-panel := TriggerPanel {
+                    visible: root.top-panel == 0;
+                    ok => { root.trigger-panel-ok(); }
+                    cancel => { root.drawer-back(); }
+                }
+                condition-panel := ConditionPanel {
+                    visible: root.top-panel == 1;
+                    ok => { root.condition-panel-ok(); }
+                    cancel => { root.drawer-back(); }
+                }
+                action-panel := ActionPanel {
+                    visible: root.top-panel == 2;
+                    ok => { root.action-panel-ok(); }
+                    cancel => { root.drawer-back(); }
+                }
+                sound-label-panel := SoundLabelPanel {
+                    visible: root.top-panel == 3;
+                    ok => { root.sound-label-panel-ok(); }
+                    cancel => { root.drawer-back(); }
+                }
+                log-profile-panel := LogProfilePanel {
+                    visible: root.top-panel == 4;
+                    ok => { root.log-profile-panel-ok(); }
+                    cancel => { root.drawer-back(); }
+                }
+                voice-manager-panel := VoiceManagerPanel {
+                    visible: root.top-panel == 5;
+                    catalog: root.voice-catalog;
+                    available-names: root.voice-catalog-available-names;
+                    available-labels: root.voice-catalog-available-labels;
+                    download(name) => { root.voice-catalog-download(name); }
+                    delete(name) => { root.voice-catalog-delete(name); }
+                    close => { root.drawer-back(); }
+                }
+            }
+        }
+    }
+
+    // Guards the titlebar X against silently discarding Save-gated edits
+    // (server URL, password, font sizes, overlay positions, etc. — see
+    // "Dirty tracking" above) now that there's no separate Close button
+    // whose very label used to make that discard-on-close behavior obvious.
+    // Rust's `on_close_requested` hook vetoes the close and sets
+    // `pending-changes-open` instead whenever `dirty` is true; "Keep
+    // Editing" is handled right here since it's pure UI state, while the
+    // other two round-trip through Rust because they need to actually
+    // close (and, for Save, persist) the window.
+    ModalScrim { active: root.pending-changes-open; }
+    if root.pending-changes-open: Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 380px;
+        height: 168px;
+        background: Theme.bg-elevated;
+        border-radius: Theme.radius-md;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        VerticalLayout {
+            padding: Theme.space-lg;
+            spacing: Theme.space-md;
+
+            Text {
+                text: "Unsaved Changes";
+                color: Theme.text-primary;
+                font-size: Theme.font-size-lg;
+                font-weight: 700;
+            }
+            Text {
+                text: "You have changes that haven't been saved yet.";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+                wrap: word-wrap;
+                vertical-stretch: 1;
+            }
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                alignment: end;
+
+                Button {
+                    text: "Keep Editing";
+                    primary: false;
+                    clicked => { root.pending-changes-open = false; }
+                }
+                Button {
+                    text: "Discard";
+                    primary: false;
+                    clicked => { root.discard-and-close-settings(); }
+                }
+                Button {
+                    text: "Save & Close";
+                    primary: true;
+                    clicked => { root.save-and-close-settings(); }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,22 @@
+{
+  "//": "Fetched by the client's General tab 'Download Latest Configuration' button (see src/trigger_presets.rs). Editing this file updates every client's preset picker without a code change or a release — see .github/workflows/ci.yml's paths-ignore entry for this filename, which keeps that cheap.",
+  "version": 1,
+  "presets": [
+    { "category": "Death", "label": "You slay a mob", "pattern": "You have slain (?P<tgt>.+)!" },
+    { "category": "Death", "label": "Someone else slays a mob", "pattern": "(?P<killer>.+?) has slain (?P<tgt>.+)!" },
+    { "category": "Death", "label": "A mob is slain (by anyone)", "pattern": "(?P<tgt>.+?) (?:was|has been) slain by (?P<killer>.+)!" },
+    { "category": "Death", "label": "You are slain", "pattern": "You have been slain by (?P<killer>.+)!" },
+    { "category": "Death", "label": "A mob simply died", "pattern": "(?P<tgt>.+?) died\\." },
+    { "category": "Combat", "label": "You melee a target", "pattern": "You (?:hit|slash|crush|pierce|bash|kick|punch|backstab)s? (?P<tgt>.+?) for (?P<dmg>\\d+) point" },
+    { "category": "Combat", "label": "Something melees you", "pattern": "(?P<src>.+?) (?:hits?|slashes?|crushes?|pierces?|bites?|claws?) YOU for (?P<dmg>\\d+) point" },
+    { "category": "Combat", "label": "Spell damage lands", "pattern": "(?P<src>.+?)'s (?P<spell>.+?) (?:hit|has taken effect on) (?P<tgt>.+?)(?: for (?P<dmg>\\d+) point)?" },
+    { "category": "Combat", "label": "You begin casting", "pattern": "You begin casting (?P<spell>.+)\\." },
+    { "category": "Combat", "label": "Someone heals a target", "pattern": "(?P<src>.+?) healed? (?P<tgt>.+?) for (?P<amt>\\d+) hit points?" },
+    { "category": "Chat", "label": "Someone tells you", "pattern": "(?P<src>.+?) tells? you, '(?P<msg>.+)'" },
+    { "category": "Chat", "label": "Someone says something", "pattern": "(?P<src>.+?) says?, '(?P<msg>.+)'" },
+    { "category": "Chat", "label": "Someone tells the group", "pattern": "(?P<src>.+?) tells? the group, '(?P<msg>.+)'" },
+    { "category": "Loot", "label": "You loot an item", "pattern": "You (?:have )?looted (?P<item>.+?) from (?P<mob>.+?)'s corpse" },
+    { "category": "Loot", "label": "You receive currency from a corpse", "pattern": "You receive (?P<amounts>.+?) from the corpse\\." },
+    { "category": "System", "label": "You enter a zone", "pattern": "You have entered (?P<zone>.+)\\." }
+  ]
+}

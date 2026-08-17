@@ -1,0 +1,136 @@
+import { Theme } from "../theme.slint";
+import { SlimColorPicker } from "slim-color-picker.slint";
+
+// Clickable color swatch for a single standalone color field (Text color,
+// Border color) — replaces `ColorField`, which just fired a `pick()`
+// signal for the caller to open a full drawer panel. This one owns its
+// whole editing flow itself: click the swatch, get `SlimColorPicker` in a
+// small popover anchored right under it, with a small ✕/✓ pair bottom-right
+// to cancel (revert to the hue/sat/val the popup opened with) or confirm
+// (just closes — edits already applied live via `hsv-changed`). Same picker
+// component Color Box mode embeds inline inside `IconComboBoxField` — this
+// is the other of its two homes (a floating popover instead of an inline
+// pane), reusing the exact same hue/sat/val + bitmap contract; that inline
+// embed has no popup to close so it gets no cancel/confirm pair.
+export component ColorSwatchField inherits Rectangle {
+    in-out property <float> hue: 0;
+    in-out property <float> sat: 0;
+    in-out property <float> val: 1;
+    in property <image> sv-image;
+    in property <image> hue-strip-image;
+    in property <color> preview;
+    in property <[color]> recent-colors;
+
+    callback hsv-changed();
+    callback recent-picked(color);
+
+    width: 60px;
+    height: 30px;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: touch.has-hover ? Theme.accent : Theme.border;
+    background: root.preview;
+
+    animate border-color { duration: 100ms; }
+
+    // hue/sat/val snapshot taken when the popup opens, so Cancel can revert
+    // the live edits `hsv-changed` already applied (see the comment on
+    // `on_icon_hsv_changed` and friends in settings_window.rs — there's no
+    // "OK" step upstream of this popup, changes apply the instant they're
+    // dragged).
+    property <float> opened-hue;
+    property <float> opened-sat;
+    property <float> opened-val;
+
+    touch := TouchArea {
+        clicked => {
+            root.opened-hue = root.hue;
+            root.opened-sat = root.sat;
+            root.opened-val = root.val;
+            popup.show();
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 6px;
+        width: 220px;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            background: Theme.bg-elevated;
+            border-radius: Theme.radius-sm;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            VerticalLayout {
+                padding: Theme.space-sm;
+                spacing: Theme.space-sm;
+
+                SlimColorPicker {
+                    hue <=> root.hue;
+                    sat <=> root.sat;
+                    val <=> root.val;
+                    sv-image: root.sv-image;
+                    hue-strip-image: root.hue-strip-image;
+                    recent-colors: root.recent-colors;
+                    hsv-changed => { root.hsv-changed(); }
+                    recent-picked(c) => { root.recent-picked(c); }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-xs;
+
+                    Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        border-radius: self.width / 2;
+                        background: cancel-touch.has-hover ? Theme.danger : Theme.bg-panel;
+                        border-width: 1px;
+                        border-color: Theme.danger;
+
+                        Text {
+                            text: "\u{00D7}";
+                            color: cancel-touch.has-hover ? Theme.on-accent : Theme.danger;
+                            font-size: Theme.font-size-lg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        cancel-touch := TouchArea {
+                            clicked => {
+                                root.hue = root.opened-hue;
+                                root.sat = root.opened-sat;
+                                root.val = root.opened-val;
+                                root.hsv-changed();
+                                popup.close();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        border-radius: self.width / 2;
+                        background: confirm-touch.has-hover ? Theme.success : Theme.bg-panel;
+                        border-width: 1px;
+                        border-color: Theme.success;
+
+                        Text {
+                            text: "✓";
+                            color: confirm-touch.has-hover ? Theme.on-accent : Theme.success;
+                            font-size: Theme.font-size-lg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        confirm-touch := TouchArea {
+                            clicked => { popup.close(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

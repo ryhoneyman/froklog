@@ -1,0 +1,36 @@
+import { Theme } from "../theme.slint";
+
+export component SidebarItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 38px;
+    border-radius: Theme.radius-sm;
+    background: root.selected ? Theme.bg-elevated : (touch.has-hover ? Theme.bg-hover : transparent);
+
+    animate background { duration: 100ms; }
+
+    Rectangle {
+        // Active-tab indicator bar, flush against the left edge.
+        x: 0;
+        width: 3px;
+        height: parent.height;
+        border-radius: 2px;
+        background: root.selected ? Theme.accent : transparent;
+    }
+
+    Text {
+        text: root.text;
+        color: root.selected ? Theme.text-primary : Theme.text-secondary;
+        font-size: Theme.font-size-md;
+        x: Theme.space-md;
+        width: parent.width - Theme.space-md;
+        height: 100%;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}

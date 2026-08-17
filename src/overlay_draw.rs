@@ -1,387 +1,17 @@
-/// Shared Win32 DIB pixel-blit helpers used by both overlay windows
-/// (`overlay.rs`'s alert deck and `overlay_dps.rs`'s meter table).
+/// Shared color-parsing helper used across the overlay windows and the
+/// Settings dialog's trigger action editor.
 ///
-/// Premultiplied-BGRA compositing primitives plus GDI-text-to-DIB coverage
-/// extraction. Kept in one place so the two windows can't drift on subtle
-/// alpha-blend math.
+/// Everything else that used to live here (premultiplied-BGRA compositing,
+/// GDI-text-to-DIB glyph rendering, `make_font`, `apply_lock_style`) was the
+/// pixel-blit machinery the old raw-Win32 overlay windows needed to paint
+/// themselves into a `WS_EX_LAYERED` DIB by hand. The Slint windows that
+/// replaced them (`overlay.rs`, `overlay_history.rs`, `overlay_dps.rs`) let
+/// the renderer handle compositing/text/fonts natively, so none of that is
+/// needed anymore — removed as part of the Phase 4 cutover rather than kept
+/// as dead code.
 #[cfg(feature = "tray")]
 #[allow(clippy::module_inception)]
 pub mod overlay_draw {
-    use std::mem;
-
-    #[cfg(target_os = "windows")]
-    use std::ffi::c_void;
-
-    #[cfg(target_os = "windows")]
-    use windows::Win32::Foundation::COLORREF;
-
-    #[cfg(target_os = "windows")]
-    use windows::Win32::Graphics::Gdi::{
-        CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW,
-        GetDC, ReleaseDC, SelectObject, SetBkMode, SetTextColor, BITMAPINFO, BITMAPINFOHEADER,
-        CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, DIB_RGB_COLORS,
-        DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_BOLD, FW_NORMAL, HFONT, HGDIOBJ,
-        OUT_DEFAULT_PRECIS, TRANSPARENT,
-    };
-
-    #[cfg(target_os = "windows")]
-    use windows::core::PCWSTR;
-
-    #[cfg(target_os = "windows")]
-    use windows::Win32::Foundation::HWND;
-    #[cfg(target_os = "windows")]
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, SWP_FRAMECHANGED,
-        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_TRANSPARENT,
-    };
-
-    // ── Pixel helpers ─────────────────────────────────────────────────────────
-
-    /// Pack an RGBA colour into a premultiplied 32-bpp DIB pixel.
-    /// Memory layout: [B, G, R, A] → u32 = (A<<24)|(R<<16)|(G<<8)|B.
-    #[inline]
-    pub fn premult(r: u8, g: u8, b: u8, a: u8) -> u32 {
-        let a32 = a as u32;
-        ((a32) << 24)
-            | ((r as u32 * a32 / 255) << 16)
-            | ((g as u32 * a32 / 255) << 8)
-            | (b as u32 * a32 / 255)
-    }
-
-    /// Porter-Duff src-over on two premultiplied pixels.
-    #[inline]
-    pub fn blend_over(src: u32, dst: u32) -> u32 {
-        let sa = src >> 24;
-        let inv = 255 - sa;
-        let ch = |sh: u32| ((src >> sh & 0xFF) + (((dst >> sh & 0xFF) * inv) >> 8)).min(255);
-        ((sa + (((dst >> 24) * inv) >> 8)).min(255) << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)
-    }
-
-    /// Fill a rounded rectangle into the DIB pixel slice.
-    #[allow(clippy::too_many_arguments)]
-    pub fn fill_rrect(
-        pix: &mut [u32],
-        dw: i32,
-        dh: i32,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        r: i32,
-        c: u32,
-    ) {
-        let (x1, y1) = (x1.max(0), y1.max(0));
-        let (x2, y2) = (x2.min(dw), y2.min(dh));
-        let rf = r as f32;
-        for y in y1..y2 {
-            for x in x1..x2 {
-                if (x < x1 + r || x >= x2 - r) && (y < y1 + r || y >= y2 - r) {
-                    let cx = if x < x1 + r {
-                        (x1 + r) as f32
-                    } else {
-                        (x2 - r) as f32
-                    };
-                    let cy = if y < y1 + r {
-                        (y1 + r) as f32
-                    } else {
-                        (y2 - r) as f32
-                    };
-                    let dx = x as f32 - cx;
-                    let dy = y as f32 - cy;
-                    if dx * dx + dy * dy > rf * rf {
-                        continue;
-                    }
-                }
-                let idx = (y * dw + x) as usize;
-                pix[idx] = blend_over(c, pix[idx]);
-            }
-        }
-    }
-
-    /// Fill a plain rectangle into the DIB pixel slice.
-    #[allow(clippy::too_many_arguments)]
-    pub fn fill_rect(
-        pix: &mut [u32],
-        dw: i32,
-        dh: i32,
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        c: u32,
-    ) {
-        let (x1, y1) = (x1.max(0), y1.max(0));
-        let (x2, y2) = (x2.min(dw), y2.min(dh));
-        for y in y1..y2 {
-            let base = (y * dw) as usize;
-            for x in x1 as usize..x2 as usize {
-                pix[base + x] = blend_over(c, pix[base + x]);
-            }
-        }
-    }
-
-    // ── GDI text → DIB compositing ────────────────────────────────────────────
-
-    /// Render `text` with GDI (white on opaque black) into an `rw × rh` glyph
-    /// coverage mask (0 = no ink, 255 = full ink), derived from the brightness
-    /// channel so anti-aliasing survives as partial coverage.
-    ///
-    /// # Safety
-    /// `font` must be a valid `HFONT`. Must be called on a thread with an
-    /// active GDI context (this function creates and tears down its own DC).
-    #[cfg(target_os = "windows")]
-    unsafe fn render_glyph_coverage(
-        text: &str,
-        font: HFONT,
-        rw: i32,
-        rh: i32,
-        dt_flags: windows::Win32::Graphics::Gdi::DRAW_TEXT_FORMAT,
-    ) -> Option<Vec<u8>> {
-        let bmi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: rw,
-                biHeight: -rh,
-                biPlanes: 1,
-                biBitCount: 32,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let hdc_screen = GetDC(None);
-        let hdc_tmp = CreateCompatibleDC(hdc_screen);
-        let mut bits: *mut c_void = std::ptr::null_mut();
-        let Ok(hbm) = CreateDIBSection(hdc_screen, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
-            let _ = DeleteDC(hdc_tmp);
-            ReleaseDC(None, hdc_screen);
-            return None;
-        };
-        ReleaseDC(None, hdc_screen);
-
-        let tmp = std::slice::from_raw_parts_mut(bits as *mut u32, (rw * rh) as usize);
-        // Opaque black background. GDI will not write alpha; any non-black pixel
-        // after drawing is text coverage (handles anti-aliasing correctly).
-        tmp.fill(0xFF00_0000u32);
-
-        let old_bm = SelectObject(hdc_tmp, HGDIOBJ(hbm.0));
-        let old_fn = SelectObject(hdc_tmp, HGDIOBJ(font.0));
-        SetBkMode(hdc_tmp, TRANSPARENT);
-        SetTextColor(hdc_tmp, COLORREF(0x00FF_FFFF)); // white text
-
-        let mut rect = windows::Win32::Foundation::RECT {
-            left: 0,
-            top: 0,
-            right: rw,
-            bottom: rh,
-        };
-        let mut tw: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let len = tw.len() - 1;
-        DrawTextW(
-            hdc_tmp,
-            &mut tw[..len],
-            &mut rect,
-            DT_SINGLELINE | DT_VCENTER | dt_flags,
-        );
-
-        SelectObject(hdc_tmp, old_fn);
-        SelectObject(hdc_tmp, old_bm);
-        let _ = DeleteDC(hdc_tmp);
-
-        let coverage = tmp
-            .iter()
-            .map(|&px| ((px >> 16 & 0xFF).max(px >> 8 & 0xFF).max(px & 0xFF)) as u8)
-            .collect();
-
-        let _ = DeleteObject(HGDIOBJ(hbm.0));
-        Some(coverage)
-    }
-
-    /// Composite a glyph coverage mask into `pix` at `(dx, dy)` offset by
-    /// `(ox, oy)`, tinted with `rgb` scaled by `alpha`.
-    #[cfg(target_os = "windows")]
-    #[allow(clippy::too_many_arguments)]
-    fn composite_coverage(
-        pix: &mut [u32],
-        dw: i32,
-        dh: i32,
-        coverage: &[u8],
-        rw: i32,
-        dx: i32,
-        dy: i32,
-        ox: i32,
-        oy: i32,
-        (tr, tg, tb): (u8, u8, u8),
-        alpha: f32,
-    ) {
-        for (i, &cov) in coverage.iter().enumerate() {
-            if cov == 0 {
-                continue;
-            }
-            let sa = (cov as f32 / 255.0 * alpha * 255.0) as u8;
-            if sa == 0 {
-                continue;
-            }
-            let sx = dx + ox + (i as i32 % rw);
-            let sy = dy + oy + (i as i32 / rw);
-            if sx < 0 || sy < 0 || sx >= dw || sy >= dh {
-                continue;
-            }
-            let di = (sy * dw + sx) as usize;
-            pix[di] = blend_over(premult(tr, tg, tb, sa), pix[di]);
-        }
-    }
-
-    /// Draw `text` with GDI, then alpha-composite with `text_rgb` into `pix`.
-    ///
-    /// `dt_flags` are `DrawTextW` flags OR'd on top of the fixed
-    /// `DT_SINGLELINE | DT_VCENTER` — callers must include an alignment flag
-    /// (`DT_LEFT` or `DT_RIGHT`) themselves, plus anything else needed (e.g.
-    /// `DT_END_ELLIPSIS` for truncating names that don't fit their column).
-    ///
-    /// # Safety
-    /// `font` must be a valid `HFONT` and `pix` must be a properly sized,
-    /// writable `dw * dh` pixel buffer. Must be called on a thread with an
-    /// active GDI context (this function creates and tears down its own DC).
-    #[cfg(target_os = "windows")]
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn composite_text(
-        pix: &mut [u32],
-        dw: i32,
-        dh: i32,
-        text: &str,
-        font: HFONT,
-        text_rgb: (u8, u8, u8),
-        alpha: f32,
-        dx: i32,
-        dy: i32,
-        rw: i32,
-        rh: i32,
-        dt_flags: windows::Win32::Graphics::Gdi::DRAW_TEXT_FORMAT,
-    ) {
-        if rw <= 0 || rh <= 0 || alpha < 0.004 {
-            return;
-        }
-        let Some(coverage) = render_glyph_coverage(text, font, rw, rh, dt_flags) else {
-            return;
-        };
-        composite_coverage(pix, dw, dh, &coverage, rw, dx, dy, 0, 0, text_rgb, alpha);
-    }
-
-    /// Like [`composite_text`], but first draws a solid-colour stroke by
-    /// compositing the same glyph coverage mask at several pixel offsets
-    /// around the fill position — cheap "poor man's outline" that only pays
-    /// for one GDI render pass regardless of stroke width.
-    ///
-    /// # Safety
-    /// Same requirements as [`composite_text`].
-    #[cfg(target_os = "windows")]
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn composite_text_stroked(
-        pix: &mut [u32],
-        dw: i32,
-        dh: i32,
-        text: &str,
-        font: HFONT,
-        text_rgb: (u8, u8, u8),
-        stroke_rgb: (u8, u8, u8),
-        stroke_width: i32,
-        alpha: f32,
-        dx: i32,
-        dy: i32,
-        rw: i32,
-        rh: i32,
-        dt_flags: windows::Win32::Graphics::Gdi::DRAW_TEXT_FORMAT,
-    ) {
-        if rw <= 0 || rh <= 0 || alpha < 0.004 {
-            return;
-        }
-        let Some(coverage) = render_glyph_coverage(text, font, rw, rh, dt_flags) else {
-            return;
-        };
-
-        if stroke_width > 0 {
-            let w = stroke_width;
-            for oy in -w..=w {
-                for ox in -w..=w {
-                    if ox == 0 && oy == 0 || ox * ox + oy * oy > w * w + 1 {
-                        continue;
-                    }
-                    composite_coverage(
-                        pix, dw, dh, &coverage, rw, dx, dy, ox, oy, stroke_rgb, alpha,
-                    );
-                }
-            }
-        }
-        composite_coverage(pix, dw, dh, &coverage, rw, dx, dy, 0, 0, text_rgb, alpha);
-    }
-
-    // ── Utilities ─────────────────────────────────────────────────────────────
-
-    /// # Safety
-    /// Must be called on a thread that can create GDI objects. The returned
-    /// `HFONT` is owned by the caller and must eventually be released via
-    /// `DeleteObject`.
-    #[cfg(target_os = "windows")]
-    pub unsafe fn make_font(name: &str, pt_size: i32, bold: bool) -> HFONT {
-        let height = -(pt_size * 96 / 72);
-        let weight = if bold {
-            FW_BOLD.0 as i32
-        } else {
-            FW_NORMAL.0 as i32
-        };
-        let nw: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut face = [0u16; 32];
-        let n = nw.len().min(31);
-        face[..n].copy_from_slice(&nw[..n]);
-        CreateFontW(
-            height,
-            0,
-            0,
-            0,
-            weight,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET.0 as u32,
-            OUT_DEFAULT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
-            DEFAULT_QUALITY.0 as u32,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            PCWSTR(face.as_ptr()),
-        )
-    }
-
-    /// Toggle click-through (`WS_EX_TRANSPARENT`) on an overlay window in
-    /// response to its lock state. Shared by all three overlay windows
-    /// (alert deck, history, meter) so they can't drift on the style bits —
-    /// while locked, mouse messages pass straight through to the game, which
-    /// also means a locked window can no longer receive the click that would
-    /// unlock it; unlocking has to happen via the Settings dialog checkbox,
-    /// picked up on the next config poll.
-    ///
-    /// # Safety
-    /// `hwnd` must be a valid window handle.
-    #[cfg(target_os = "windows")]
-    pub unsafe fn apply_lock_style(hwnd: HWND, locked: bool) {
-        let cur = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let new = if locked {
-            cur | WS_EX_TRANSPARENT.0 as isize
-        } else {
-            cur & !(WS_EX_TRANSPARENT.0 as isize)
-        };
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new);
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
-        );
-    }
-
     /// Parse `#RRGGBB` or `RRGGBB` → `0x00RRGGBB`.
     pub fn parse_hex_color(s: &str) -> Option<u32> {
         let s = s.trim_start_matches('#');
@@ -392,6 +22,351 @@ pub mod overlay_draw {
             Some((r << 16) | (g << 8) | b)
         } else {
             None
+        }
+    }
+
+    // ── Taskbar visibility ──────────────────────────────────────────────────
+    //
+    // The alert/history/DPS-meter/merged overlay windows are transient HUD
+    // elements layered over the game, not real application windows a user
+    // would want to Alt-Tab or taskbar-click to individually (unlike the
+    // Settings dialog, which keeps its normal taskbar entry).
+    //
+    // Two mechanisms combine to hide them, in order of how much they're
+    // relied on:
+    //
+    // 1. (Linux, primary) `tray::run()` installs a `winit_window_attributes_hook`
+    //    that tags every window `_NET_WM_WINDOW_TYPE_UTILITY` *before* it's
+    //    ever mapped — set as an initial creation attribute, not a
+    //    post-creation call, so there's no window-manager-processing race to
+    //    lose. Confirmed live against xfwm4: a Utility-typed window gets
+    //    `_NET_WM_STATE_SKIP_TASKBAR`/`SKIP_PAGER` auto-applied by the WM as
+    //    soon as it sees the type, and this is standard EWMH convention
+    //    other desktops (GNOME/Mutter, KDE/KWin, etc.) follow too, not an
+    //    xfwm4-specific behavior. Settings is exempted via
+    //    `suppress_utility_window_hint` around its one `.show()` call site.
+    // 2. (below, both platforms) An explicit, deferred post-show request —
+    //    Windows' `set_skip_taskbar` and X11's `_NET_WM_STATE_SKIP_TASKBAR`
+    //    ClientMessage. Belt-and-suspenders for window managers that don't
+    //    treat Utility-type as taskbar-exempt by default.
+
+    use std::cell::Cell;
+
+    thread_local! {
+        static SUPPRESS_UTILITY_HINT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Wraps a window's `::new()` call to opt it out of mechanism 1 above —
+    /// used around the Settings window's `SettingsWindow::new()` (its only
+    /// creation site) so it keeps a normal taskbar entry. Must wrap `new()`,
+    /// not `.show()`: Slint applies the `winit_window_attributes_hook`
+    /// while building the window adapter inside `new()` itself. Only
+    /// meaningful on Linux; a harmless no-op wrapper elsewhere.
+    pub fn suppress_utility_window_hint<R>(f: impl FnOnce() -> R) -> R {
+        SUPPRESS_UTILITY_HINT.with(|c| c.set(true));
+        let r = f();
+        SUPPRESS_UTILITY_HINT.with(|c| c.set(false));
+        r
+    }
+
+    /// Read by the `winit_window_attributes_hook` installed in `tray::run()`.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn utility_window_hint_suppressed() -> bool {
+        SUPPRESS_UTILITY_HINT.with(|c| c.get())
+    }
+
+    /// Takes a `Weak` handle and defers 50ms, rather than acting on
+    /// `&slint::Window` immediately — on X11, sending the EWMH state change
+    /// right after `.show()` can lose a race against the window manager,
+    /// which is a separate process that has to receive and process the
+    /// just-sent `MapNotify` on its own connection before it'll honor a
+    /// `_NET_WM_STATE` change for that window. Same 50ms-defer pattern as
+    /// `overlay_shell::handle_drag_end`'s post-drag position read-back.
+    /// Deferring is a no-op cost on Windows (single synchronous style-flag
+    /// change, no separate WM process to race), so this applies uniformly
+    /// rather than only on Linux.
+    pub fn hide_from_taskbar<W>(weak: slint::Weak<W>)
+    where
+        W: slint::ComponentHandle + 'static,
+    {
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+            let Some(w) = weak.upgrade() else { return };
+            hide_from_taskbar_now(w.window());
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    fn hide_from_taskbar_now(window: &slint::Window) {
+        use slint::winit_030::WinitWindowAccessor;
+        use winit::platform::windows::WindowExtWindows;
+        let _ = window.with_winit_window(|w| w.set_skip_taskbar(true));
+    }
+
+    /// Linux equivalent of the above. Winit has no cross-platform
+    /// `set_skip_taskbar` — X11 does it via the EWMH `_NET_WM_STATE_SKIP_TASKBAR`
+    /// / `_NET_WM_STATE_SKIP_PAGER` window states, sent as a `ClientMessage` to
+    /// the root window (the correct way to change state on an already-mapped
+    /// window, per the EWMH spec).
+    ///
+    /// Wayland has no equivalent core-protocol concept (no `_NET_WM_STATE`,
+    /// no universal taskbar spec) and winit reports a `Wayland` raw window
+    /// handle there instead of `Xlib` — that case is a no-op, same as this
+    /// function used to be for all of Linux before this existed.
+    #[cfg(target_os = "linux")]
+    fn hide_from_taskbar_now(window: &slint::Window) {
+        use slint::winit_030::WinitWindowAccessor;
+        let _ = window.with_winit_window(linux_x11::skip_taskbar);
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    fn hide_from_taskbar_now(_window: &slint::Window) {}
+
+    // ── Always-on-top reassertion ────────────────────────────────────────────
+    //
+    // Every overlay window's `.slint` sets `always-on-top: true` (see
+    // `OverlayShell`), which Slint applies via `winit::window::Window::
+    // set_window_level` — but only the *first* time the property is seen as
+    // `true` (i-slint-backend-winit's `update_window_properties` diffs
+    // against the level it last set and skips the call if nothing changed,
+    // to dodge a window-manager bug where reasserting it constantly steals
+    // focus — see that function's own comment). That one-shot application
+    // doesn't survive another topmost window (a game that also marks itself
+    // topmost, a screenshot/recording overlay, etc.) later taking the OS's
+    // topmost slot out from under ours — the OS doesn't hand it back on its
+    // own, and since Slint never sees the property "change" again, it never
+    // re-pokes the OS either. Called on a slow repeating timer from each
+    // overlay's own tick loop (throttled well below their render rate —
+    // this is a z-order nudge, not a per-frame operation) to counter that
+    // drift directly via winit, independent of Slint's one-shot tracking.
+    pub fn reassert_topmost(window: &slint::Window) {
+        use slint::winit_030::WinitWindowAccessor;
+        let _ = window
+            .with_winit_window(|w| w.set_window_level(winit::window::WindowLevel::AlwaysOnTop));
+    }
+
+    // ── Position reapplication on show ───────────────────────────────────────
+    //
+    // Every overlay window calls `set_position()` exactly once, at window
+    // creation (`create_alert_window` etc.), using whatever `Config` held at
+    // startup. That's the *only* place any of them ever tell the OS "put me
+    // here" — after that, the app just trusts the window manager to keep
+    // remembering where the window is across every later `.hide()`/`.show()`
+    // cycle (e.g. Settings' "Hide All Overlays" / "Show All Overlays", or the
+    // normal alert/DPS-meter queue-driven show/hide). A window created before
+    // its very first real position (i.e. `Config`'s `x`/`y` were still the
+    // `-1`/`-1` "unset" sentinel, true for any overlay that's never been
+    // dragged or explicitly positioned yet) never got a real `set_position`
+    // call at all — the WM auto-placed it wherever its own default landed
+    // (observed: dead-centered). A later drag moves it live and saves the
+    // real coordinates to `Config` correctly, but since nothing re-asserts
+    // position on the *next* show, the WM's remap during Hide All → Show All
+    // (still within the same run, so window creation never happens again to
+    // pick up the new value) snaps it right back to that same default —
+    // confirmed live: dragging, hiding, and showing again re-centered the
+    // window, while a full app restart (which re-reads `Config` at creation
+    // time, now with real coordinates) placed it correctly. Re-applying the
+    // saved position on every hidden→visible transition — not just the first
+    // one — closes that gap regardless of whether the position came from
+    // `Config` at startup or from a drag earlier in the same run.
+    pub fn apply_saved_position<W>(
+        window: &W,
+        handle: &std::sync::Arc<crate::tray::tray::AppHandle>,
+        kind: crate::overlay_registry::overlay_registry::OverlayKind,
+    ) where
+        W: slint::ComponentHandle,
+    {
+        let (x, y) = {
+            let cfg = handle.config.lock().unwrap();
+            let win = kind.config(&cfg);
+            (win.x, win.y)
+        };
+        if x >= 0 && y >= 0 {
+            window.window().set_position(slint::WindowPosition::Logical(
+                slint::LogicalPosition::new(x as f32, y as f32),
+            ));
+        }
+    }
+
+    // ── Focus-stealing on show ──────────────────────────────────────────────
+    //
+    // Every overlay window cycles `.hide()`/`.show()` as alerts come and go
+    // (see e.g. `overlay.rs`'s tick loop). On Windows, winit's `set_visible`
+    // maps to `ShowWindow`: the *first* time a window is shown it uses
+    // `SW_SHOWNOACTIVATE`, but every subsequent show — which is what
+    // actually happens each time a trigger fires after the window has been
+    // hidden once — uses plain `SW_SHOW`, which activates the window (see
+    // `WindowState::set_window_flags` in winit's
+    // `platform_impl/windows/window_state.rs`; the "already shown once"
+    // marker is permanent for the window's lifetime, there's no way to make
+    // winit keep using `SW_SHOWNOACTIVATE`). An activated overlay steals
+    // Win32 keyboard/mouse focus from the game behind it, which is what
+    // reads as "input freezes while triggers are firing" — the game window
+    // loses focus every time an alert pops.
+    //
+    // `WS_EX_NOACTIVATE` fixes this at the style level rather than fighting
+    // winit's `ShowWindow` call: a window carrying that extended style is
+    // skipped by Win32's activation logic regardless of which `SW_*` flag
+    // raised it (the standard technique used by overlay/OSD tools — RTSS,
+    // Discord's game overlay, etc.). It's a persistent window style, so
+    // setting it once covers every future hide/show cycle.
+    /// Deferred the same way as `hide_from_taskbar` (see its doc comment) —
+    /// `with_winit_window` silently no-ops until the native window actually
+    /// exists, which isn't guaranteed synchronously right after `.show()`.
+    pub fn set_no_activate<W>(weak: slint::Weak<W>)
+    where
+        W: slint::ComponentHandle + 'static,
+    {
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+            let Some(w) = weak.upgrade() else { return };
+            set_no_activate_now(w.window());
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    fn set_no_activate_now(window: &slint::Window) {
+        use slint::winit_030::WinitWindowAccessor;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        };
+
+        let _ = window.with_winit_window(|w| {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            let Ok(handle) = w.window_handle() else {
+                return;
+            };
+            let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+                return;
+            };
+            let hwnd = win32.hwnd.get();
+            unsafe {
+                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE as isize);
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn set_no_activate_now(_window: &slint::Window) {}
+
+    // ── True (non-cached) position query ────────────────────────────────────
+    //
+    // `overlay_shell::handle_drag_end` needs the window's actual on-screen
+    // position right after an interactive `drag_window()` move finishes.
+    // Winit's own `Window::position()` is a cache maintained by processing
+    // `ConfigureNotify` events through the ordinary event loop — but on
+    // X11/xfwm4, the `ConfigureNotify` trailing an EWMH-driven interactive
+    // move isn't drained by that ordinary event loop at all; it only gets
+    // processed as a side effect of the *next* `drag_window()` call's own
+    // internal message pump. Left alone, `position()` reads back stale
+    // (specifically: frozen at wherever the window was *before* the drag
+    // that just happened) indefinitely, not just briefly — confirmed live
+    // against xfwm4 (2026-08-16): dragging window A to a new spot and
+    // reading `position()` afterward — even after a multi-second wait with
+    // no other interaction — kept returning A's pre-drag coordinates, and a
+    // save at that point would silently persist the wrong value forever
+    // (each drag's config write lands one full drag behind the real
+    // position, exactly matching the "one drag behind" signature
+    // `overlay_shell` had previously fixed for a *different*, shorter-lived
+    // staleness window — see its own doc comment for that history).
+    //
+    // Bypassing winit's cache and asking the X server directly via
+    // `TranslateCoordinates` (the same primitive `XTranslateCoordinates`
+    // wraps) sidesteps the problem entirely: it's a synchronous round trip
+    // to the server for the window's *current* geometry, not a locally
+    // cached value that depends on which events winit has gotten around to
+    // processing.
+    /// Physical (unscaled) pixel position of `window`, read directly from
+    /// the OS instead of through winit's cache. `None` if unsupported on
+    /// this platform/backend (Wayland, any query failure) — callers should
+    /// fall back to `Window::position()` in that case.
+    pub fn true_window_position(window: &slint::Window) -> Option<(i32, i32)> {
+        #[cfg(target_os = "linux")]
+        {
+            use slint::winit_030::WinitWindowAccessor;
+            window
+                .with_winit_window(linux_x11::query_position)
+                .flatten()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window;
+            None
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux_x11 {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::{self, ConnectionExt as _, EventMask};
+        use x11rb::xcb_ffi::XCBConnection;
+
+        pub(super) fn skip_taskbar(winit_window: &winit::window::Window) {
+            let Ok(handle) = winit_window.window_handle() else {
+                return;
+            };
+            let RawWindowHandle::Xlib(xlib) = handle.as_raw() else {
+                return;
+            };
+            if let Err(e) = send_skip_taskbar(xlib.window as u32) {
+                tracing::warn!("skip_taskbar: failed to send EWMH state change: {e}");
+            }
+        }
+
+        // Opens its own short-lived connection to the X server — separate
+        // from whatever connection winit's X11 backend holds internally,
+        // but EWMH client messages only need the target window's XID, not
+        // that specific connection, so this works fine and keeps this code
+        // independent of winit's internals.
+        fn send_skip_taskbar(window_id: u32) -> Result<(), Box<dyn std::error::Error>> {
+            let (conn, screen_num) = XCBConnection::connect(None)?;
+            let root = conn.setup().roots[screen_num].root;
+
+            let net_wm_state = conn.intern_atom(false, b"_NET_WM_STATE")?.reply()?.atom;
+            let skip_taskbar = conn
+                .intern_atom(false, b"_NET_WM_STATE_SKIP_TASKBAR")?
+                .reply()?
+                .atom;
+            let skip_pager = conn
+                .intern_atom(false, b"_NET_WM_STATE_SKIP_PAGER")?
+                .reply()?
+                .atom;
+
+            // _NET_WM_STATE_ADD = 1 (see the EWMH spec's `_NET_WM_STATE` section).
+            const NET_WM_STATE_ADD: u32 = 1;
+            let event = xproto::ClientMessageEvent::new(
+                32,
+                window_id,
+                net_wm_state,
+                [NET_WM_STATE_ADD, skip_taskbar, skip_pager, 0, 0],
+            );
+            conn.send_event(
+                false,
+                root,
+                EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
+                event,
+            )?;
+            conn.flush()?;
+            Ok(())
+        }
+
+        /// Same short-lived-connection approach as `send_skip_taskbar`, but a
+        /// query instead of a state change: asks the X server to translate
+        /// the window's own origin (0, 0) into root-window (i.e. screen)
+        /// coordinates, which is exactly the window's on-screen position.
+        pub(super) fn query_position(winit_window: &winit::window::Window) -> Option<(i32, i32)> {
+            let handle = winit_window.window_handle().ok()?;
+            let RawWindowHandle::Xlib(xlib) = handle.as_raw() else {
+                return None;
+            };
+            translate_to_root(xlib.window as u32).ok()
+        }
+
+        fn translate_to_root(window_id: u32) -> Result<(i32, i32), Box<dyn std::error::Error>> {
+            let (conn, screen_num) = XCBConnection::connect(None)?;
+            let root = conn.setup().roots[screen_num].root;
+            let reply = conn.translate_coordinates(window_id, root, 0, 0)?.reply()?;
+            Ok((reply.dst_x as i32, reply.dst_y as i32))
         }
     }
 }

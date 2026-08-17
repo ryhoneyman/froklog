@@ -1,0 +1,157 @@
+import { Theme } from "../theme.slint";
+import { Card } from "../common/card.slint";
+import { LabeledField } from "../common/labeled-field.slint";
+import { TextField } from "../common/text-field.slint";
+import { Checkbox } from "../common/checkbox.slint";
+import { Button } from "../common/buttons.slint";
+import { ListBox } from "../common/list-box.slint";
+
+// Phase 2.2 — replaces create_logging_panel() in overlay_config_win.rs:
+// Game/Server/Player, Log File browse, Server URL test, Stream ID /
+// Password / Register, public-streaming + remote-logging toggles.
+export component LoggingTab inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in property <[string]> log-profile-rows;
+    in-out property <int> selected-log-profile-index: -1;
+    in-out property <bool> auto-detect-log: true;
+    in property <string> watching-status;
+    callback add-log-profile();
+    callback edit-log-profile();
+    callback delete-log-profile();
+    callback set-active-log-profile();
+
+    in-out property <string> server-url;
+    in property <string> url-status;
+    in property <bool> url-test-in-progress;
+    callback test-url();
+
+    in property <string> stream-id: "Not registered";
+    in property <bool> is-registered;
+    in property <bool> register-in-progress;
+    in-out property <string> password;
+    callback register-clicked();
+    callback copy-stream-id();
+
+    in-out property <bool> remote-logging;
+
+    Text {
+        text: "Logging";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-xl;
+        font-weight: 700;
+    }
+
+    Card {
+        Text {
+            text: "Log Profiles";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-md;
+            font-weight: 600;
+        }
+
+        Checkbox {
+            text: "Auto-detect (watch whichever profile was written to most recently)";
+            checked <=> root.auto-detect-log;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+
+            ListBox {
+                height: 140px;
+                horizontal-stretch: 1;
+                items: root.log-profile-rows;
+                selected-index <=> root.selected-log-profile-index;
+            }
+
+            VerticalLayout {
+                width: 108px;
+                spacing: Theme.space-xs;
+                alignment: start;
+
+                Button { text: "Add…"; primary: false; clicked => { root.add-log-profile(); } }
+                Button {
+                    text: "Edit…";
+                    primary: false;
+                    enabled: root.selected-log-profile-index >= 0;
+                    clicked => { root.edit-log-profile(); }
+                }
+                Button {
+                    text: "Delete";
+                    primary: false;
+                    enabled: root.selected-log-profile-index >= 0;
+                    clicked => { root.delete-log-profile(); }
+                }
+                Button {
+                    text: "Set Active";
+                    primary: false;
+                    h-padding: Theme.space-xs;
+                    enabled: root.selected-log-profile-index >= 0;
+                    clicked => { root.set-active-log-profile(); }
+                }
+            }
+        }
+
+        Text {
+            text: root.watching-status;
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+        }
+    }
+
+    Card {
+        LabeledField {
+            label: "Server URL";
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                TextField {
+                    placeholder: "https://server:8766";
+                    text <=> root.server-url;
+                    enabled: !root.url-test-in-progress;
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: root.url-test-in-progress ? "Testing…" : "Test";
+                    primary: false;
+                    enabled: !root.url-test-in-progress;
+                    clicked => { root.test-url(); }
+                }
+            }
+        }
+        if root.url-status != "": Text {
+            text: root.url-status;
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+        }
+    }
+
+    Card {
+        LabeledField {
+            label: "Stream ID";
+            HorizontalLayout {
+                spacing: Theme.space-sm;
+                TextField { text: root.stream-id; read-only: true; horizontal-stretch: 1; }
+                Button {
+                    text: "Copy ID";
+                    primary: false;
+                    enabled: root.is-registered;
+                    clicked => { root.copy-stream-id(); }
+                }
+            }
+        }
+        LabeledField {
+            label: "Password";
+            TextField { password: true; text <=> root.password; }
+        }
+        Button {
+            text: root.is-registered ? "Unregister" : (root.register-in-progress ? "Registering…" : "Register");
+            primary: false;
+            enabled: !root.register-in-progress;
+            clicked => { root.register-clicked(); }
+        }
+        Checkbox { text: "Enable remote logging (push to server)"; checked <=> root.remote-logging; }
+    }
+}

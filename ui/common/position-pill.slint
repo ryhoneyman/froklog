@@ -1,0 +1,131 @@
+import { Theme } from "../theme.slint";
+
+// Unified [ X: 608 | Y: 486 ] inline coordinate control plus an icon-only
+// lock toggle and a reset button, replacing the old text-checkbox "Lock" +
+// two bare TextField boxes that used to sit in each overlay card's header
+// row. Position stays editable (typing new X/Y still works) even while the
+// card body is dimmed — this row lives outside SettingsCard's disabled
+// overlay on purpose, since repositioning before enabling is a normal flow.
+export component PositionPill inherits HorizontalLayout {
+    in-out property <string> pos-x;
+    in-out property <string> pos-y;
+    in-out property <bool> locked;
+    in property <bool> enabled: true;
+    callback reset();
+
+    spacing: Theme.space-xs;
+    alignment: end;
+
+    Rectangle {
+        width: 30px;
+        height: 30px;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: lock-touch.has-hover ? Theme.bg-hover : Theme.bg-elevated;
+
+        // Real vector padlock icons instead of the U+1F512/U+1F513 emoji
+        // glyphs (plain "Segoe UI" has no emoji coverage and Slint's text
+        // renderer doesn't do OS-level font fallback — see settings_shell.
+        // slint's ×-glyph comment for the same class of bug) and instead of
+        // hand-rolled Rectangle geometry (no per-shape rotation in Slint
+        // made a convincing hinge-swing impossible to fake well). `colorize`
+        // tints the flat-black SVG artwork to the theme's text color, same
+        // pattern already used for the tray icon in settings_shell.slint.
+        Image {
+            source: root.locked
+                ? @image-url("icons/lock-closed.svg")
+                : @image-url("icons/lock-open.svg");
+            colorize: Theme.text-primary;
+            width: 16px;
+            height: 16px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+
+        lock-touch := TouchArea {
+            enabled: root.enabled;
+            clicked => { root.locked = !root.locked; }
+        }
+    }
+
+    Rectangle {
+        horizontal-stretch: 0;
+        width: pill-layout.preferred-width + 2 * Theme.space-sm;
+        height: 30px;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: Theme.bg-elevated;
+
+        pill-layout := HorizontalLayout {
+            padding-left: Theme.space-sm;
+            padding-right: Theme.space-sm;
+            spacing: 4px;
+            alignment: center;
+
+            Text {
+                text: "X:";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+            }
+            x-input := TextInput {
+                text <=> root.pos-x;
+                width: 34px;
+                color: Theme.accent;
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+                read-only: !root.enabled;
+            }
+            Text {
+                text: "|";
+                color: Theme.border;
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+            }
+            Text {
+                text: "Y:";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+            }
+            y-input := TextInput {
+                text <=> root.pos-y;
+                width: 34px;
+                color: Theme.accent;
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+                read-only: !root.enabled;
+            }
+        }
+    }
+
+    Rectangle {
+        width: 30px;
+        height: 30px;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: reset-touch.has-hover ? Theme.bg-hover : Theme.bg-elevated;
+
+        // Real vector icon instead of the U+21BA glyph — same reasoning as
+        // the lock icons above: plain "Segoe UI" doesn't carry this glyph
+        // on Windows (renders blank there, though Linux's fallback fonts
+        // happen to cover it), and Slint's text renderer doesn't do
+        // OS-level font fallback.
+        Image {
+            source: @image-url("icons/reset.svg");
+            colorize: Theme.text-primary;
+            width: 16px;
+            height: 16px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+
+        reset-touch := TouchArea {
+            enabled: root.enabled;
+            clicked => { root.reset(); }
+        }
+    }
+}

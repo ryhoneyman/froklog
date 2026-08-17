@@ -1,0 +1,45 @@
+import { Theme } from "../theme.slint";
+import { ScrollArea } from "scroll-area.slint";
+
+// Replaces Win32 LISTBOX controls (e.g. the Sounds tab's Sound Labels
+// list). Caller sets an explicit `height` (fixed viewport, like the
+// original WS_VSCROLL listbox); content scrolls internally via ScrollArea
+// rather than growing the tab.
+export component ListBox inherits Rectangle {
+    in property <[string]> items;
+    in-out property <int> selected-index: -1;
+
+    background: Theme.bg-elevated;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
+
+    ScrollArea {
+        content-height: content.preferred-height;
+
+        content := VerticalLayout {
+            for item[i] in root.items: Rectangle {
+                height: 28px;
+                background: root.selected-index == i ? Theme.accent : (touch.has-hover ? Theme.bg-hover : transparent);
+
+                animate background { duration: 100ms; }
+
+                Text {
+                    text: item;
+                    color: root.selected-index == i ? Theme.on-accent : Theme.text-primary;
+                    font-size: Theme.font-size-md;
+                    x: Theme.space-sm;
+                    width: parent.width - 2 * Theme.space-sm;
+                    height: 100%;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                touch := TouchArea {
+                    clicked => { root.selected-index = i; }
+                }
+            }
+        }
+    }
+}

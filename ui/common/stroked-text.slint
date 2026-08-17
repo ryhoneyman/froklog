@@ -1,0 +1,95 @@
+// Poor-man's stroked/outlined text: 8 offset copies in the stroke color
+// underneath, then one fill copy on top. Slint has no native text
+// stroke/outline property; the source (overlay_draw::composite_text_stroked)
+// achieves the same look by compositing a GDI glyph-coverage mask multiple
+// times at small pixel offsets. Shared by the alert and history overlay
+// windows (both render trigger-colored message text over an arbitrary
+// background where plain fill text would be unreadable).
+export component StrokedText inherits Rectangle {
+    in property <string> text;
+    in property <color> text-color: white;
+    in property <color> stroke-color: black;
+    in property <length> stroke-width: 1px;
+    in property <length> font-size: 14px;
+    in property <int> font-weight: 700;
+    // When true, text truncates with an ellipsis at this element's own
+    // (externally-assigned) width instead of overflowing past it — opt-in
+    // for the history overlay row, which stretches this element to a fixed
+    // column via `horizontal-stretch: 1` and previously let a long message
+    // spill silently past the window's right edge. Named `truncate`, not
+    // `elide`, to avoid shadowing the `elide`/`clip` enum values used below.
+    // Left false for the alert overlay's centered, naturally-sized usage —
+    // see the width/height comment below for why that matters.
+    in property <bool> truncate: false;
+
+    // No explicit width/height binding (deliberately, was `width:
+    // label.width;` / `height: label.height;` — a hard pin that defeated
+    // `horizontal-stretch` when this sits in a stretch-context row like
+    // the history overlay's, since layouts only override sizing for
+    // children that don't hard-bind their own width). Leaving it unbound
+    // lets Slint derive preferred-width/height from the children's own
+    // geometry for non-stretched callers (the alert overlay's centered
+    // usage) while still letting a stretch-context layout (the history
+    // overlay's row) size it to fill available space.
+    height: label.height;
+    // Was `label.preferred-width` here — the wrong non-circularity
+    // precedent. `wrap`'s width bound from `row.preferred-width` (in
+    // overlay_alert.slint) while `row.width` is itself 100% of `wrap` is
+    // safe because `row` is a *Layout*, whose preferred-width is always
+    // computed bottom-up from its children regardless of its own width
+    // binding. A plain leaf `Text` like `label` has no such guarantee —
+    // once `label.width` is bound to `label.preferred-width`, the two
+    // become genuinely self-referential and collapsed toward zero (this
+    // was the actual cause of the alert overlay's text starting flush at
+    // the window's horizontal center and running off to the right instead
+    // of being centered — `wrap` sized itself off a near-zero
+    // `effective-width` while the real text still rendered at its true,
+    // much larger, natural width). `sizer` below is a second, always-
+    // unbound `Text` that only ever reports its own genuinely intrinsic
+    // `preferred-width` — referencing *that* instead breaks the cycle.
+    property <length> effective-width: root.truncate ? root.width : sizer.preferred-width;
+
+    // Invisible, participates in nothing but its own `preferred-width`
+    // query above — exists purely to measure the text's true natural width
+    // without ever having its own `width:` bound to anything, which is
+    // what keeps that measurement non-circular.
+    sizer := Text {
+        text: root.text;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        visible: false;
+    }
+
+    property <[int]> dx: [-1, 0, 1, -1, 1, -1, 0, 1];
+    property <[int]> dy: [-1, -1, -1, 0, 0, 1, 1, 1];
+
+    // Every copy gets an explicit `x` — needed now that this Rectangle has
+    // no hard width binding: once a stretch-context caller (the history
+    // overlay's row) widens it past the text's natural size, a Text child
+    // left with no explicit `x` centers itself within that extra space
+    // rather than sitting flush at 0 (the stroke copies were already
+    // immune to this, since `d * stroke-width` is itself an explicit `x`
+    // binding that a default can't override — `label` had no such
+    // binding, only `horizontal-alignment: left`, which turned out not
+    // to be enough on its own).
+    for d[i] in dx: Text {
+        text: root.text;
+        color: root.stroke-color;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        width: root.effective-width;
+        overflow: root.truncate ? elide : clip;
+        x: d * root.stroke-width;
+        y: root.dy[i] * root.stroke-width;
+    }
+
+    label := Text {
+        text: root.text;
+        color: root.text-color;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        width: root.effective-width;
+        overflow: root.truncate ? elide : clip;
+        x: 0px;
+    }
+}

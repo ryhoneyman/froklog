@@ -1,0 +1,17 @@
+import { Theme } from "../theme.slint";
+
+// A label above one or more content widgets, e.g. LabeledField { label:
+// "Player Name"; LineEdit { ... } }. Used throughout the Settings dialog's
+// tab forms.
+export component LabeledField inherits VerticalLayout {
+    in property <string> label;
+    spacing: Theme.space-xs;
+
+    Text {
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Theme.font-size-sm;
+    }
+
+    @children
+}

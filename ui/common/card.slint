@@ -1,0 +1,99 @@
+import { Theme } from "../theme.slint";
+import { ToggleSwitch } from "toggle-switch.slint";
+import { PositionPill } from "position-pill.slint";
+
+export component Card inherits Rectangle {
+    background: Theme.bg-panel;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    VerticalLayout {
+        padding: Theme.space-md;
+        spacing: Theme.space-md;
+        @children
+    }
+}
+
+// Card variant for the Appearance tab's per-overlay cards (Alert, History,
+// DPS Meter, Combined): owns the standardized header row (master toggle,
+// title, lock + position pill, reset) and dims + disables the field grid
+// below it when the master toggle is off, so an inactive overlay is obvious
+// at a glance instead of just being one more identical-looking card. The
+// header row (toggle/lock/position) stays outside the dimmed body on
+// purpose — repositioning a window before enabling it is a normal flow.
+export component SettingsCard inherits Rectangle {
+    in property <string> title;
+    in-out property <bool> enabled: true;
+    in-out property <bool> locked;
+    in-out property <string> pos-x;
+    in-out property <string> pos-y;
+    callback reset-position();
+
+    background: Theme.bg-panel;
+    border-radius: Theme.radius-md;
+    border-width: 1px;
+    border-color: Theme.border;
+    // Clips the header wash below to the card's own rounded corners
+    // instead of it being a plain rectangle with square top corners.
+    clip: true;
+
+    VerticalLayout {
+        // Header band — the same subtle 10% accent-green wash used to call
+        // out an individual Card (Theme.bg-card-tint-green) elsewhere,
+        // applied here to every SettingsCard's header uniformly, plus a
+        // 1px bottom border, so the toggle/title/lock/position row reads
+        // clearly as a header rather than blending into the card body.
+        Rectangle {
+            background: Theme.bg-card-tint-green;
+
+            HorizontalLayout {
+                // Vertical padding sized to the row's tallest content (the
+                // 30px position-pill buttons), not the card's usual
+                // space-md — full space-md top and bottom (32px) against
+                // 30px of actual content was almost half whitespace, and
+                // it read as a bloated band once the header got its own
+                // background to show that whitespace against.
+                padding-left: Theme.space-md;
+                padding-right: Theme.space-md;
+                padding-top: Theme.space-sm;
+                padding-bottom: Theme.space-sm;
+                spacing: Theme.space-sm;
+                cross-axis-alignment: center;
+
+                ToggleSwitch { checked <=> root.enabled; }
+                Text {
+                    text: root.title;
+                    color: Theme.text-primary;
+                    font-size: Theme.font-size-md;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                PositionPill {
+                    pos-x <=> root.pos-x;
+                    pos-y <=> root.pos-y;
+                    locked <=> root.locked;
+                    reset => { root.reset-position(); }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border; }
+
+        // Dimming here is the visual half of "disabled"; the other half
+        // (read-only inputs, muted text) comes from each field's own
+        // `enabled: root.enabled` binding at the call site — Slint has no
+        // mechanism to broadcast a property down into arbitrary @children,
+        // so callers wire it per-field rather than SettingsCard doing it
+        // for them.
+        VerticalLayout {
+            padding: Theme.space-md;
+            padding-top: 0px;
+            spacing: Theme.space-md;
+            opacity: root.enabled ? 1.0 : 0.45;
+            @children
+        }
+    }
+}

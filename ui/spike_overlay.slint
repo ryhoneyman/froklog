@@ -1,0 +1,57 @@
+// Phase 0 Slint-migration spike. Mimics overlay.rs's fly-in / hold /
+// shrink-out sequence to test whether a transparent, borderless,
+// always-on-top Slint window can match the current WS_EX_LAYERED +
+// UpdateLayeredWindow per-pixel-alpha popup. Not shipped UI.
+export component SpikeOverlay inherits Window {
+    no-frame: true;
+    background: transparent;
+    always-on-top: true;
+    title: "froklog-slint-spike";
+    width: 420px;
+    height: 140px;
+
+    in property <string> message: "Raid marker taken!";
+    // 0 idle, 1 fly-in, 2 hold, 3 shrink-out — driven from Rust on a timer,
+    // same control split as overlay.rs (Rust owns timing, UI owns interpolation).
+    in property <int> phase: 0;
+
+    label := Text {
+        text: root.message;
+        color: white;
+        font-weight: 700;
+        font-size: 18px;
+        opacity: 0;
+        y: 40px;
+        x: (parent.width - self.width) / 2;
+    }
+
+    states [
+        flying-in when root.phase == 1: {
+            label.opacity: 1;
+            label.y: 10px;
+            label.font-size: 28px;
+            in {
+                animate label.opacity, label.y, label.font-size {
+                    duration: 220ms;
+                    easing: ease-out;
+                }
+            }
+        }
+        holding when root.phase == 2: {
+            label.opacity: 1;
+            label.y: 10px;
+            label.font-size: 28px;
+        }
+        shrinking-out when root.phase == 3: {
+            label.opacity: 0;
+            label.y: -20px;
+            label.font-size: 18px;
+            in {
+                animate label.opacity, label.y, label.font-size {
+                    duration: 260ms;
+                    easing: ease-in;
+                }
+            }
+        }
+    ]
+}

@@ -1,6 +1,12 @@
-// froklog — EverQuest log parser (Windows client binary)
+// froklog — EverQuest log parser
 // No visible window; lives in the system tray when the "tray" feature is active.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// `windows_subsystem` is a Windows-only attribute (suppresses the console
+// window in release builds) — must stay gated on target_os too, or it errors
+// when this is built for any other platform.
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -13,6 +19,8 @@ use tokio::sync::broadcast;
 use tracing::info;
 
 use froklog::config::Config;
+#[cfg(feature = "tray")]
+use froklog::config::LogWatchMode;
 use froklog::state::CombatState;
 use froklog::tailer::{TailConfig, TailFrom};
 #[cfg(feature = "tray")]
@@ -20,6 +28,49 @@ use froklog::triggers::engine::{TriggerConfig, TriggerEngine};
 use froklog::{parser, pusher, tailer};
 
 fn main() {
+    // Must be the first X11-related thing this process does, on Linux, when
+    // the tray UI runs: froklog has multiple OS threads touching GTK/Xlib
+    // (the main thread pumps GTK's loop for the tray icon; rfd's file
+    // dialogs run GTK on their own thread), and modern GTK3 no longer calls
+    // XInitThreads() for you (removed years ago; gdk_threads_init() is now
+    // a no-op) — its absence is a documented crash class independent of
+    // this codebase (CEF, several other GTK apps hit the identical stack),
+    // not specific to any one windowing setup: Xlib lazily creates internal
+    // per-object locks the first time something like XGetDefault() runs,
+    // and without XInitThreads() first, that lock is left null. Confirmed
+    // here with live thread dumps under two different unrelated call paths
+    // (cairo's font-options lookup rendering the tray icon's menu; libXcursor's
+    // theme lookup mapping rfd's file-chooser dialog) — both are just first
+    // GTK-widget-realization codepaths that happen to touch an X resource-
+    // manager default.
+    #[cfg(all(feature = "tray", target_os = "linux"))]
+    {
+        #[link(name = "X11")]
+        unsafe extern "C" {
+            fn XInitThreads() -> std::os::raw::c_int;
+        }
+        unsafe {
+            XInitThreads();
+        }
+    }
+
+    // Point `ort` (piper-rs's onnxruntime binding, see src/tts.rs) at the
+    // bundled shared library instead of trying to download/link its own —
+    // must happen before any piper/ort code runs, so this stays as early
+    // in main() as possible.
+    #[cfg(feature = "tray")]
+    {
+        let lib_name = if cfg!(target_os = "windows") {
+            "onnxruntime.dll"
+        } else {
+            "libonnxruntime.so"
+        };
+        std::env::set_var(
+            "ORT_DYLIB_PATH",
+            froklog::assets::runtime_dir().join(lib_name),
+        );
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             std::env::var("RUST_LOG")
@@ -30,7 +81,7 @@ fn main() {
 
     #[cfg(feature = "tray")]
     {
-        use froklog::tray::tray::{run as tray_run, AppHandle};
+        use froklog::tray::tray::{enforce_single_instance, run as tray_run, AppHandle};
 
         let config = Config::load();
         froklog::overlay::overlay::set_sound_enabled(config.sound_enabled);
@@ -38,7 +89,14 @@ fn main() {
         froklog::overlay::overlay::set_active_sound_package(&config.sound_package);
         let handle = Arc::new(AppHandle::new(config));
 
+        // Exits immediately (never returns) if another instance is already
+        // running, after asking it to raise Settings — must happen before
+        // spawning the engine so a duplicate launch doesn't also start a
+        // second log tailer/pusher.
+        enforce_single_instance(&handle);
+
         spawn_engine(Arc::clone(&handle));
+        spawn_profile_watcher(Arc::clone(&handle));
         tray_run(handle);
     }
 
@@ -80,18 +138,13 @@ fn main() {
 
 #[cfg(feature = "tray")]
 fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
-    // Spawn the overlay once here so it survives engine restarts and live-reloads
-    // its settings (font, alpha, enabled) from the shared config on each tick.
-    froklog::overlay::overlay::spawn_overlay(Arc::clone(&handle));
-
-    // Spawn the history overlay too — reads handle.overlay_history, which the
-    // alert overlay appends to once a message finishes flying through it.
-    froklog::overlay_history::overlay_history::spawn_overlay_history(Arc::clone(&handle));
-
-    // Spawn the DPS meter once here too — reads handle.combat_state, which stays
-    // valid across engine restarts (see run_engine_once).
-    froklog::overlay_dps::overlay_dps::spawn_dps_meter(Arc::clone(&handle));
-
+    // The three overlay windows (alert/history/DPS meter) are no longer
+    // spawned here on their own OS threads — Slint windows must be created
+    // on, and driven by, the thread that owns the event loop, so
+    // `tray::run()` creates them itself right before entering
+    // `slint::run_event_loop()`. They still read `handle.combat_state` /
+    // `handle.overlay_history` / config live on their own timers, same as
+    // before, just ticking via `slint::Timer` instead of `WM_TIMER`.
     thread::Builder::new()
         .name("eq-engine-monitor".into())
         .spawn(move || {
@@ -135,6 +188,48 @@ fn spawn_engine(handle: Arc<froklog::tray::tray::AppHandle>) {
         .expect("spawn engine monitor");
 }
 
+/// Coarsely polls, once every `AUTO_DETECT_INTERVAL`, which configured log
+/// profile was written to most recently — but only while the user is in
+/// Auto mode; in Pinned mode this thread does no filesystem work at all.
+/// When the resolved path changes, it requests an engine restart via the
+/// same `handle.restart` flag `spawn_engine`'s monitor loop already watches,
+/// so no separate teardown/rebuild logic is needed here.
+#[cfg(feature = "tray")]
+fn spawn_profile_watcher(handle: Arc<froklog::tray::tray::AppHandle>) {
+    const AUTO_DETECT_INTERVAL: Duration = Duration::from_secs(8);
+
+    thread::Builder::new()
+        .name("eq-profile-watcher".into())
+        .spawn(move || {
+            let mut last_resolved: Option<String> = None;
+            loop {
+                if handle.quit.load(Ordering::Relaxed) {
+                    break;
+                }
+                thread::sleep(AUTO_DETECT_INTERVAL);
+
+                let config = handle.config.lock().unwrap().clone();
+                if config.log_watch_mode != LogWatchMode::Auto {
+                    continue;
+                }
+                let resolved = config.resolve_active_log_path();
+                if resolved != last_resolved {
+                    // Don't restart on the very first observation — the
+                    // engine monitor already picks up the initial path.
+                    if last_resolved.is_some() {
+                        info!(
+                            "Auto-detected log switch: {:?} -> {:?}",
+                            last_resolved, resolved
+                        );
+                        handle.restart.store(true, Ordering::Relaxed);
+                    }
+                    last_resolved = resolved;
+                }
+            }
+        })
+        .expect("spawn profile watcher");
+}
+
 // ── Engine ────────────────────────────────────────────────────────────────────
 
 fn run_engine_once(
@@ -146,10 +241,14 @@ fn run_engine_once(
     last_connect_error: Arc<std::sync::RwLock<Option<String>>>,
     #[cfg(feature = "tray")] app_handle: Arc<froklog::tray::tray::AppHandle>,
 ) {
-    let log_path = match config.log_path.as_ref() {
-        Some(p) => p.clone(),
-        None => return,
+    let Some(active_profile) = config.resolve_active_profile() else {
+        return;
     };
+    let log_path = active_profile.path.clone();
+    #[cfg(feature = "tray")]
+    {
+        *app_handle.active_log_path.lock().unwrap() = Some(log_path.clone());
+    }
     // Remote push is optional: local DPS meter / triggers / overlays keep running
     // from the tailer + parser even when no server is configured or the user has
     // switched remote logging off via the toggle.
@@ -180,7 +279,7 @@ fn run_engine_once(
     let (parser_tx, line_rx) = bounded::<String>(4096);
     let (trigger_tx, _trigger_rx) = bounded::<String>(1024);
 
-    let player_name = config.effective_player_name();
+    let player_name = active_profile.effective_player();
     info!("Watching: {log_path}  player: {player_name}");
 
     let tail_config = TailConfig {

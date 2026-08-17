@@ -1,0 +1,113 @@
+import { Theme } from "../theme.slint";
+import { Card } from "../common/card.slint";
+import { LabeledField } from "../common/labeled-field.slint";
+import { Checkbox } from "../common/checkbox.slint";
+import { Slider } from "../common/slider.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { Button } from "../common/buttons.slint";
+import { ListBox } from "../common/list-box.slint";
+
+// Phase 2.4 — replaces create_sounds_panel() in overlay_config_win.rs:
+// sound enable/volume, active sound package management (New/Rename/
+// Delete/Export/Import), and the sound label list (Add/Edit/Delete).
+export component SoundsTab inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in-out property <bool> sound-enabled: true;
+    in-out property <float> sound-volume: 100;
+
+    in-out property <string> sound-package;
+    in property <[string]> sound-package-options;
+    callback new-package();
+    callback rename-package();
+    callback delete-package();
+    callback export-package();
+    callback import-package();
+
+    in property <[string]> sound-labels;
+    in-out property <int> selected-label-index: -1;
+    callback add-label();
+    callback edit-label();
+    callback delete-label();
+
+    Text {
+        text: "Sounds";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-xl;
+        font-weight: 700;
+    }
+
+    Card {
+        Checkbox { text: "Enable sounds"; checked <=> root.sound-enabled; }
+
+        LabeledField {
+            label: "Volume: \{round(root.sound-volume)}%";
+            Slider { minimum: 0; maximum: 100; value <=> root.sound-volume; }
+        }
+    }
+
+    Card {
+        Text {
+            text: "Active Package";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-md;
+            font-weight: 600;
+        }
+
+        LabeledField {
+            label: "Package";
+            ComboBoxField { options: root.sound-package-options; value <=> root.sound-package; }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-xs;
+            Button { text: "New"; primary: false; clicked => { root.new-package(); } }
+            Button { text: "Rename"; primary: false; clicked => { root.rename-package(); } }
+            Button { text: "Delete"; primary: false; clicked => { root.delete-package(); } }
+            Button { text: "Export"; primary: false; clicked => { root.export-package(); } }
+            Button { text: "Import"; primary: false; clicked => { root.import-package(); } }
+        }
+    }
+
+    Card {
+        Text {
+            text: "Sound Labels";
+            color: Theme.text-primary;
+            font-size: Theme.font-size-md;
+            font-weight: 600;
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-sm;
+
+            ListBox {
+                height: 180px;
+                horizontal-stretch: 1;
+                items: root.sound-labels;
+                selected-index <=> root.selected-label-index;
+            }
+
+            VerticalLayout {
+                width: 90px;
+                spacing: Theme.space-xs;
+                alignment: start;
+
+                Button { text: "Add"; primary: false; clicked => { root.add-label(); } }
+                Button {
+                    text: "Edit";
+                    primary: false;
+                    enabled: root.selected-label-index >= 0;
+                    clicked => { root.edit-label(); }
+                }
+                Button {
+                    text: "Delete";
+                    primary: false;
+                    enabled: root.selected-label-index >= 0;
+                    clicked => { root.delete-label(); }
+                }
+            }
+        }
+    }
+}
