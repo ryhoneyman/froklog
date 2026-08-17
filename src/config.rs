@@ -444,6 +444,21 @@ pub struct Config {
     /// Height stays content-driven (row count). Default 360.
     #[serde(default = "default_meter_width")]
     pub meter_width: i32,
+    /// DPS meter share bars: proportional class-colored fill + % column per
+    /// row (ported from the Linux interim client). Off = classic trimmed
+    /// rows.
+    #[serde(default)]
+    pub meter_share_bars: bool,
+    /// Per-column meter widths in px, dragged via the header dividers.
+    /// 0 = auto (historical 52px; bar = 5x row font size).
+    #[serde(default)]
+    pub meter_amount_w: i32,
+    #[serde(default)]
+    pub meter_rate_w: i32,
+    #[serde(default)]
+    pub meter_bar_w: i32,
+    #[serde(default)]
+    pub meter_sec_w: i32,
 
     // ── TTS / Voice settings ──────────────────────────────────────────────────
     /// Whether Text-to-Speech is enabled globally.
@@ -515,6 +530,11 @@ impl Config {
             meter_idle_secs: default_meter_idle_secs(),
             meter_font_size: default_meter_font_size(),
             meter_width: default_meter_width(),
+            meter_share_bars: false,
+            meter_amount_w: 0,
+            meter_rate_w: 0,
+            meter_bar_w: 0,
+            meter_sec_w: 0,
             ..Default::default()
         }
     }
@@ -736,6 +756,13 @@ pub(crate) fn server_name_from_path(path: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Sidecar cache of last-seen player classes (see overlay_dps's class
+/// cache) — same directory as config.toml. Tray-only, like its caller.
+#[cfg(feature = "tray")]
+pub(crate) fn classes_cache_path() -> PathBuf {
+    config_path().with_file_name("classes-cache.toml")
 }
 
 fn config_path() -> PathBuf {

@@ -105,6 +105,7 @@ pub mod overlay_history {
         visible: bool,
         force_show: bool,
         locked: bool,
+        width: i32,
         icon_cache: std::collections::HashMap<String, Option<slint::Image>>,
         tick_count: u64,
     }
@@ -122,6 +123,7 @@ pub mod overlay_history {
                 visible: false,
                 force_show: handle.force_show_windows.load(Ordering::Relaxed),
                 locked: cfg.overlay_history.locked,
+                width: cfg.overlay_history_width,
                 icon_cache: std::collections::HashMap::new(),
                 tick_count: 0,
             }
@@ -146,6 +148,7 @@ pub mod overlay_history {
             self.max_entries = cfg.overlay_history_max_entries.max(1);
             self.idle_secs = cfg.overlay_history_idle_secs;
             self.locked = cfg.overlay_history.locked;
+            self.width = cfg.overlay_history_width;
             drop(cfg);
             let new_force_show = self.handle.force_show_windows.load(Ordering::Relaxed);
             if new_force_show != self.force_show {
@@ -209,7 +212,12 @@ pub mod overlay_history {
             let cfg = handle.config.lock().unwrap();
             (cfg.overlay_history.x, cfg.overlay_history.y)
         };
-        if cfg_x_y.0 >= 0 && cfg_x_y.1 >= 0 {
+        // (-1, -1) is the never-positioned sentinel; any OTHER value is a
+        // real saved position — including negative coordinates, which are
+        // routine on multi-monitor layouts (a monitor left of or above the
+        // primary) and whenever a window is nudged past a screen's top/left
+        // edge. Gating on >= 0 silently discarded those on every restart.
+        if cfg_x_y != (-1, -1) {
             window.window().set_position(slint::WindowPosition::Logical(
                 slint::LogicalPosition::new(cfg_x_y.0 as f32, cfg_x_y.1 as f32),
             ));
@@ -221,15 +229,23 @@ pub mod overlay_history {
             let weak = window.as_weak();
             let handle = Arc::clone(&handle);
             move || {
-                let Some(w) = weak.upgrade() else { return };
-                use slint::winit_030::WinitWindowAccessor;
-                let _ = w.window().with_winit_window(|winit_window| {
-                    let _ = winit_window.drag_window();
-                });
-                overlay_shell::overlay_shell::handle_drag_end(
+                overlay_shell::overlay_shell::begin_drag(
                     weak.clone(),
                     Arc::clone(&handle),
                     OverlayKind::History,
+                );
+            }
+        });
+
+        window.on_resize_requested({
+            let weak = window.as_weak();
+            let handle = Arc::clone(&handle);
+            move || {
+                overlay_shell::overlay_shell::begin_width_resize(
+                    weak.clone(),
+                    Arc::clone(&handle),
+                    OverlayKind::History,
+                    |w, px| w.set_win_width(px),
                 );
             }
         });
@@ -256,6 +272,14 @@ pub mod overlay_history {
                 state.sync_config();
                 ui.set_locked(state.locked);
                 ui.set_force_show(state.force_show);
+                ui.set_win_width(state.width);
+                // Locked means click-through for real on Linux (input
+                // shape) — except while Show All Windows has the drag
+                // TouchArea re-enabled, when the window must stay clickable.
+                crate::overlay_draw::overlay_draw::sync_click_through(
+                    ui.window(),
+                    state.locked && !state.force_show,
+                );
 
                 // Only this window trims/renders `overlay_history` while
                 // `Separate` — see `HistoryState::alert_style`'s doc

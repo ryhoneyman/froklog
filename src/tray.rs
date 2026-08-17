@@ -232,7 +232,24 @@ pub mod tray {
                     if crate::overlay_draw::overlay_draw::utility_window_hint_suppressed() {
                         attrs
                     } else {
-                        attrs.with_x11_window_type(vec![WindowType::Utility])
+                        // Override-redirect: the WM never manages these
+                        // windows, which is what actually keeps them above a
+                        // fullscreen game on compositors that ignore
+                        // `_NET_WM_STATE_ABOVE` for managed X11 windows
+                        // (confirmed live on COSMIC, where the game is a
+                        // native Wayland surface outside the X11 stack
+                        // entirely and even wmctrl's ADD_ABOVE is dropped —
+                        // an override-redirect window rides the compositor's
+                        // unmanaged-surface layer instead, same as menus and
+                        // tooltips, and provably stays over the game).
+                        // Trade-off: no WM services — interactive move is
+                        // reimplemented in overlay_shell::begin_drag, and
+                        // stacking upkeep is a direct raise in
+                        // reassert_topmost. The Utility type hint stays for
+                        // anything that still reads it.
+                        attrs
+                            .with_x11_window_type(vec![WindowType::Utility])
+                            .with_override_redirect(true)
                     }
                 })
                 .select();
@@ -399,6 +416,7 @@ pub mod tray {
         let mut prev_count: u64 = 0;
         let mut prev_sample = Instant::now();
         let mut prev_connected: bool = false;
+        let mut prev_icon_choice: Option<u8> = None;
         let mut ticks_since_slow = TICK_SECS; // fire the slow tick immediately on first run
         let mut error_items: Vec<MenuItem> = Vec::new();
         let mut prev_error: Option<String> = None;
@@ -418,12 +436,19 @@ pub mod tray {
                         prev_connected = is_connected;
                         let logging_on = handle.logging_enabled.load(Ordering::Relaxed);
                         let cfg = handle.config.lock().unwrap();
-                        TRAY.with(|t| {
-                            if let Some(tray) = t.borrow().as_ref() {
-                                let _ =
-                                    tray.set_icon(Some(make_icon(&cfg, logging_on, is_connected)));
-                            }
-                        });
+                        let choice = icon_choice(&cfg, logging_on, is_connected);
+                        if prev_icon_choice != Some(choice) {
+                            prev_icon_choice = Some(choice);
+                            TRAY.with(|t| {
+                                if let Some(tray) = t.borrow().as_ref() {
+                                    let _ = tray.set_icon(Some(make_icon(
+                                        &cfg,
+                                        logging_on,
+                                        is_connected,
+                                    )));
+                                }
+                            });
+                        }
                     }
 
                     ticks_since_slow += 1;
@@ -449,6 +474,9 @@ pub mod tray {
                         .ok()
                         .and_then(|g| g.clone());
 
+                    let choice = icon_choice(&cfg, logging_on, is_connected);
+                    let icon_stale = prev_icon_choice != Some(choice);
+                    prev_icon_choice = Some(choice);
                     TRAY.with(|t| {
                         if let Some(tray) = t.borrow().as_ref() {
                             let _ = tray.set_tooltip(Some(make_tooltip_full(
@@ -458,7 +486,13 @@ pub mod tray {
                                 is_connected,
                                 rate,
                             )));
-                            let _ = tray.set_icon(Some(make_icon(&cfg, logging_on, is_connected)));
+                            // Only on a real state change — see icon_choice's
+                            // doc comment for why re-setting churns the icon
+                            // file out from under the tray applet.
+                            if icon_stale {
+                                let _ =
+                                    tray.set_icon(Some(make_icon(&cfg, logging_on, is_connected)));
+                            }
                         }
                     });
                     status_item.set_text(make_status_text(
@@ -891,28 +925,42 @@ pub mod tray {
         format!("froklog ● {log} — {activity}")
     }
 
+    /// Which of the four status icons applies — a comparable key so callers
+    /// can skip `set_icon` when nothing changed. That matters on Linux:
+    /// every `set_icon` writes a NEW counter-named PNG, deletes the previous
+    /// one, and re-points the StatusNotifierItem at the new path — so
+    /// re-setting an unchanged icon every status tick gives the tray applet
+    /// a moving target, and any read that loses the race lands on a deleted
+    /// file and renders no icon at all (observed live on COSMIC: the item's
+    /// IconName can wedge one generation behind the file on disk).
+    pub(crate) fn icon_choice(cfg: &Config, logging_on: bool, connected: bool) -> u8 {
+        if !logging_on {
+            3 // red
+        } else if !cfg.local_ready() {
+            1 // gray
+        } else if !cfg.remote_logging_enabled {
+            // Remote push intentionally off — local engine is fully up, so this
+            // isn't a warning state.
+            0 // green
+        } else if !cfg.is_registered() || !connected {
+            // Wants remote but not registered / WS link down — reconnecting.
+            2 // orange
+        } else {
+            0 // green
+        }
+    }
+
     pub(crate) fn make_icon(cfg: &Config, logging_on: bool, connected: bool) -> tray_icon::Icon {
         const GREEN: &[u8] = include_bytes!("../assets/froklog-green.png");
         const GRAY: &[u8] = include_bytes!("../assets/froklog-gray.png");
         const ORANGE: &[u8] = include_bytes!("../assets/froklog-orange.png");
         const RED: &[u8] = include_bytes!("../assets/froklog-red.png");
 
-        let bytes = if !logging_on {
-            RED
-        } else if !cfg.local_ready() {
-            GRAY
-        } else if !cfg.remote_logging_enabled {
-            // Remote push intentionally off — local engine is fully up, so this
-            // isn't a warning state.
-            GREEN
-        } else if !cfg.is_registered() {
-            // Log chosen, remote push wanted, but not registered yet — orange.
-            ORANGE
-        } else if !connected {
-            // Registered but WS link is down — show orange to signal reconnecting.
-            ORANGE
-        } else {
-            GREEN
+        let bytes = match icon_choice(cfg, logging_on, connected) {
+            3 => RED,
+            1 => GRAY,
+            2 => ORANGE,
+            _ => GREEN,
         };
 
         let img = image::load_from_memory(bytes)
