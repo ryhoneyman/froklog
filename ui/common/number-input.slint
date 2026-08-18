@@ -58,6 +58,13 @@ export component NumberInput inherits VerticalLayout {
                     root.edited();
                 }
             }
+            // Enter doesn't blur a single-line TextInput on its own, so
+            // without this the `changed has-focus` commit above never fires
+            // from the keyboard — only from tabbing/clicking to another
+            // focusable field. Routing through clear-focus() (rather than
+            // calling root.edited() directly here too) keeps one single
+            // commit path instead of two independent ones.
+            accepted => { self.clear-focus(); }
         }
 
         unit-text := Text {

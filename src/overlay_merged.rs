@@ -228,7 +228,15 @@ pub mod overlay_merged {
                 // the mirrored gate on the standalone alert window.
                 let is_active_style = state.alert_style == AlertStyle::Merged;
                 let fly_ms = state.engine.fly_ms();
-                let active = if is_active_style {
+                // Log-inactivity hide wins over everything else, including
+                // Show All Windows — see `AppHandle::log_inactive`'s doc
+                // comment. Checked *before* ticking the engine — see
+                // `overlay.rs`'s mirrored `log_inactive` gate for why:
+                // ticking while hidden drains/animates/archives queued
+                // messages with nothing ever drawn, so they're already gone
+                // by the time the overlay wakes back up.
+                let log_inactive = state.handle.log_inactive(state.hide_inactive_secs);
+                let active = if !log_inactive && is_active_style {
                     state.engine.tick()
                 } else {
                     None
@@ -243,10 +251,7 @@ pub mod overlay_merged {
                 let idle_timed_out = state.history_idle_secs > 0
                     && last_arrived_secs.is_some_and(|s| s > state.history_idle_secs as f32);
                 let has_content = active.is_some() || !raw_entries.is_empty();
-                // Log-inactivity hide wins over everything else, including
-                // Show All Windows — see `AppHandle::log_inactive`'s doc
-                // comment.
-                let show = !state.handle.log_inactive(state.hide_inactive_secs)
+                let show = !log_inactive
                     && is_active_style
                     && (state.force_show || (state.enabled && has_content && !idle_timed_out));
                 if !show {

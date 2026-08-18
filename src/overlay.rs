@@ -329,19 +329,31 @@ pub mod overlay {
                     state.locked && !state.force_show,
                 );
                 let fly_ms = state.engine.fly_ms();
+                // Log-inactivity hide wins over everything else, including
+                // Show All Windows — see `AppHandle::log_inactive`'s doc
+                // comment. Checked *before* ticking the engine: `tick()`
+                // drains the shared queue and advances whatever's active
+                // through its full fly-in/hold/shrink-out lifecycle on
+                // wall-clock time alone, with no awareness of whether this
+                // window is actually on screen to show it. Ticking it while
+                // hidden let a message that arrived during the sleep window
+                // play all the way through and land in history without ever
+                // being drawn — by the time log activity resumed and the
+                // overlay woke back up, it was already gone. Skipping
+                // `tick()` here instead freezes the queue/active-alert state
+                // for the duration of the sleep, so it picks up untouched
+                // once activity resumes.
+                let log_inactive = state.handle.log_inactive(state.hide_inactive_secs);
                 // Only drain/advance the shared alert queue while this
                 // window is the active alert presentation — see
                 // `OverlayState::alert_style`'s doc comment.
-                let active = if state.alert_style == AlertStyle::Separate {
+                let active = if !log_inactive && state.alert_style == AlertStyle::Separate {
                     state.engine.tick()
                 } else {
                     None
                 };
 
-                // Log-inactivity hide wins over everything else, including
-                // Show All Windows — see `AppHandle::log_inactive`'s doc
-                // comment.
-                let show = !state.handle.log_inactive(state.hide_inactive_secs)
+                let show = !log_inactive
                     && state.alert_style == AlertStyle::Separate
                     && (state.overlay_enabled || state.force_show)
                     && active.is_some();
