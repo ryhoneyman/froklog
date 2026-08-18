@@ -166,6 +166,7 @@ pub mod alert_engine {
             // the button is released.
             if let Some(active) = &self.active {
                 if active.is_placeholder && !force_show {
+                    tracing::info!("alert engine: placeholder cleared (force_show released)");
                     self.active = None;
                 }
             }
@@ -179,6 +180,7 @@ pub mod alert_engine {
                 // The backlog isn't lost — it resumes the moment force_show
                 // goes false again.
                 if force_show {
+                    tracing::info!("alert engine: placeholder injected (force_show set)");
                     self.active = Some(ActiveAlert {
                         event: OverlayEvent {
                             icon: String::new(),
@@ -268,10 +270,11 @@ pub mod alert_engine {
         fn try_speak(&mut self, text: &str, priority: &VoicePriority, is_test: bool) {
             use crate::config::TtsAudioMode;
 
-            let (enabled, speed, mode, re, ro, ra) = {
+            let (enabled, volume, speed, mode, re, ro, ra) = {
                 let cfg = self.handle.config.lock().unwrap();
                 (
                     cfg.tts_enabled,
+                    cfg.tts_volume,
                     cfg.tts_speed.clone(),
                     cfg.tts_audio_mode.clone(),
                     cfg.tts_read_emergency,
@@ -317,7 +320,12 @@ pub mod alert_engine {
                 },
             };
 
-            engine.speak(text, interrupt, crate::tts::tts::length_scale_for(&speed));
+            engine.speak(
+                text,
+                interrupt,
+                crate::tts::tts::length_scale_for(&speed),
+                volume as f32 / 100.0,
+            );
         }
     }
 }

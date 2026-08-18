@@ -1,0 +1,77 @@
+import { Theme } from "../theme.slint";
+import { Card } from "../common/card.slint";
+
+component InfoRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    padding-top: Theme.space-xs;
+    padding-bottom: Theme.space-xs;
+
+    Text {
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Theme.font-size-md;
+        horizontal-stretch: 0;
+    }
+    Rectangle { horizontal-stretch: 1; }
+    Text {
+        text: root.value;
+        color: Theme.text-primary;
+        font-size: Theme.font-size-md;
+        horizontal-stretch: 0;
+    }
+}
+
+// About tab: version/license/author info plus the frog mark, centered
+// hero-style (name/tagline/version stacked under the logo) above a plain
+// info card — the common shape modern "About This App" panels use (VS
+// Code's, Slack's, etc.), rather than a form full of LabeledFields like the
+// other tabs, since nothing here is editable.
+export component AboutTab inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-lg;
+    alignment: start;
+
+    in property <string> app-version;
+
+    VerticalLayout {
+        alignment: start;
+        spacing: Theme.space-sm;
+
+        Image {
+            source: @image-url("../../assets/froklog-window-64.png");
+            width: 88px;
+            height: 88px;
+            horizontal-alignment: center;
+            x: (parent.width - self.width) / 2;
+        }
+
+        Text {
+            text: "froklog";
+            color: Theme.text-primary;
+            font-size: 28px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "EverQuest Real-Time Log Processing and Notification Platform";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-md;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "Version \{root.app-version}";
+            color: Theme.text-secondary;
+            font-size: Theme.font-size-sm;
+            horizontal-alignment: center;
+        }
+    }
+
+    Card {
+        InfoRow { label: "License"; value: "GPL-3.0-or-later"; }
+        Rectangle { height: 1px; background: Theme.border; }
+        InfoRow { label: "Authors"; value: "Ryan Honeyman, jadrian2006"; }
+    }
+}

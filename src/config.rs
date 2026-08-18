@@ -122,6 +122,13 @@ fn default_overlay_merged_window() -> OverlayWindowConfig {
     }
 }
 
+/// Seconds of no new log-file lines before every overlay window is
+/// force-hidden, overriding per-overlay Idle Hide settings (even "Never")
+/// and Show All Windows alike. 0 = Never (feature disabled). Default 30.
+fn default_overlay_hide_inactive_secs() -> u32 {
+    30
+}
+
 fn default_meter_max_rows() -> usize {
     8
 }
@@ -139,6 +146,10 @@ fn default_meter_width() -> i32 {
 }
 
 fn default_sound_volume() -> u8 {
+    100
+}
+
+fn default_tts_volume() -> u8 {
     100
 }
 
@@ -364,6 +375,13 @@ pub struct Config {
     /// Which alert presentation is active — see [`AlertStyle`].
     #[serde(default)]
     pub alert_style: AlertStyle,
+    /// Seconds of no new log-file lines before every overlay window is
+    /// force-hidden — detects the game not running/logging (closed,
+    /// crashed, character select) so overlays don't linger on screen.
+    /// Overrides per-overlay Idle Hide settings (even "Never") and Show
+    /// All Windows alike. 0 = Never (feature disabled). Default 30.
+    #[serde(default = "default_overlay_hide_inactive_secs")]
+    pub overlay_hide_inactive_secs: u32,
 
     // ── Overlay settings ──────────────────────────────────────────────────────
     /// Window opacity 0–255 (255 = fully opaque). Default 255.
@@ -462,8 +480,13 @@ pub struct Config {
 
     // ── TTS / Voice settings ──────────────────────────────────────────────────
     /// Whether Text-to-Speech is enabled globally.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub tts_enabled: bool,
+    /// Overall volume (0-100) applied to spoken TTS alerts, independent of
+    /// `sound_volume` — only affects the voice, not `play_sound`/triggers'
+    /// sound-effect actions.
+    #[serde(default = "default_tts_volume")]
+    pub tts_volume: u8,
     /// Playback speed for TTS speech.
     #[serde(default)]
     pub tts_speed: TtsSpeed,
@@ -508,6 +531,8 @@ impl Config {
             sound_enabled: true,
             sound_volume: 100,
             sound_package: default_sound_package(),
+            tts_enabled: true,
+            tts_volume: 100,
             tts_voice: default_tts_voice(),
             overlay_alpha: default_overlay_alpha(),
             overlay_start_font_size: default_overlay_start_font_size(),

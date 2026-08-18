@@ -1,5 +1,9 @@
-// Phase 2 — window chrome, sidebar nav, Save/Close wiring for the Settings
-// dialog, replacing the SysTabControl32 tab strip in
+// Phase 2 — window chrome, sidebar nav for the Settings dialog (every field
+// now saves itself — instantly on change for checkboxes/toggles/pulldowns,
+// on defocus for the Overlays tab's numeric/position fields, on a
+// successful Test/Register for the Connection tab's URL/password — so
+// there's no separate Save button or close-time dirty check any more),
+// replacing the SysTabControl32 tab strip in
 // overlay_config_win.rs's original 8-tab dialog (since folded down to 6 —
 // the DPS Meter and Windows tabs were both merged into Overlays; see
 // ui/tabs/appearance_tab.slint's doc comment). Add/edit flows (trigger,
@@ -9,7 +13,6 @@
 // doc comment for why.
 import { Theme } from "theme.slint";
 import { SidebarItem } from "common/sidebar-item.slint";
-import { Button } from "common/buttons.slint";
 import { ScrollArea } from "common/scroll-area.slint";
 import { ModalScrim } from "common/modal-scrim.slint";
 import { IconOption } from "common/icon-combo-box.slint";
@@ -20,6 +23,9 @@ import { TriggersTab } from "tabs/triggers_tab.slint";
 import { AppearanceTab } from "tabs/appearance_tab.slint";
 import { VoiceTab } from "tabs/voice_tab.slint";
 import { SoundsTab } from "tabs/sounds_tab.slint";
+import { VariablesTab, VariableRow } from "tabs/variables_tab.slint";
+import { DebugTab, DebugRow, DebugSegment } from "tabs/debug_tab.slint";
+import { AboutTab } from "tabs/about_tab.slint";
 import { TriggerPanel, TriggerRow } from "panels/trigger_panel.slint";
 import { ConditionPanel } from "panels/condition_panel.slint";
 import { ActionPanel } from "panels/action_panel.slint";
@@ -44,25 +50,10 @@ export component SettingsWindow inherits Window {
 
     in-out property <int> current-tab: 0;
     property <[string]> tab-names: [
-        "General", "Logging", "Triggers", "Overlays", "Voice", "Sounds",
+        "General", "Logging", "Triggers", "Overlays", "Voice", "Sounds", "Variables", "Debug", "About",
     ];
 
-    callback save();
-    // Fired only from the pending-changes dialog below — there's no
-    // standalone Close button any more (see that dialog's doc comment for
-    // why); the sole way to close Settings is the native titlebar X, which
-    // Rust's `on_close_requested` hook intercepts to decide between closing
-    // outright and opening this dialog.
-    callback save-and-close-settings();
-    callback discard-and-close-settings();
-    in-out property <bool> pending-changes-open: false;
-    // Whether any Save-gated field (see "Dirty tracking" below) has changed
-    // since the last load/Save — drives the Save button's enabled state so
-    // it only lights up when there's actually something to persist. Reset
-    // to false by Rust at the end of `load_config` (undoing the spurious
-    // `changed` firings load's own `set_*` calls trigger) and again after
-    // `save_config` runs, since Save persists every tracked field at once.
-    in-out property <bool> dirty: false;
+    in property <string> app-version <=> about-tab.app-version;
 
     // Drawer state, driven from Rust's `Vec<PanelFrame>` stack
     // (settings_window.rs) — see the drawer markup below and
@@ -164,6 +155,7 @@ export component SettingsWindow inherits Window {
     in-out property <string> win-meter-pos-y <=> appearance-tab.meter-pos-y;
     callback meter-reset-position <=> appearance-tab.meter-reset-position;
     in-out property <int> alert-style <=> appearance-tab.alert-style;
+    in-out property <int> hide-inactive-index <=> appearance-tab.hide-inactive-index;
     in-out property <bool> win-merged-enabled <=> appearance-tab.merged-enabled;
     in-out property <bool> win-merged-locked <=> appearance-tab.merged-locked;
     in-out property <string> win-merged-pos-x <=> appearance-tab.merged-pos-x;
@@ -177,9 +169,14 @@ export component SettingsWindow inherits Window {
     in-out property <string> merged-history-font-size <=> appearance-tab.merged-history-font-size;
     in-out property <string> merged-history-idle-secs <=> appearance-tab.merged-history-idle-secs;
     in-out property <string> merged-history-max-entries <=> appearance-tab.merged-history-max-entries;
+    // Fires when any font-size/timing/opacity/history/meter/position field
+    // on the Overlays tab loses focus — see appearance_tab.slint's doc
+    // comment on its own `commit-appearance`.
+    callback commit-appearance <=> appearance-tab.commit-appearance;
 
     // ── Voice tab ────────────────────────────────────────────────────────
     in-out property <bool> tts-enabled <=> voice-tab.tts-enabled;
+    in-out property <float> tts-volume <=> voice-tab.tts-volume;
     in-out property <string> tts-speed <=> voice-tab.tts-speed;
     in-out property <int> tts-audio-mode <=> voice-tab.audio-mode;
     in-out property <bool> tts-read-emergency <=> voice-tab.read-emergency;
@@ -217,6 +214,36 @@ export component SettingsWindow inherits Window {
     callback edit-sound-label <=> sounds-tab.edit-label;
     callback delete-sound-label <=> sounds-tab.delete-label;
 
+    // ── Variables tab ─────────────────────────────────────────────────────
+    in-out property <string> active-reference-group <=> variables-tab.active-group;
+    in property <[string]> reference-group-options <=> variables-tab.group-options;
+    // Set true by Rust right after "+" creates a new group, so it drops
+    // straight into the rename field instead of leaving the user to notice
+    // and click the pencil separately.
+    in-out property <bool> renaming-group <=> variables-tab.renaming-group;
+    callback reference-group-changed <=> variables-tab.group-changed;
+    callback new-reference-group <=> variables-tab.new-group;
+    callback clone-reference-group <=> variables-tab.clone-group;
+    callback rename-reference-group-confirmed <=> variables-tab.rename-group-confirmed;
+    callback delete-reference-group <=> variables-tab.delete-group;
+    in property <[VariableRow]> variable-rows <=> variables-tab.variable-rows;
+    // Which row (by index into variable-rows) should grab keyboard focus on
+    // its Name field right now — set by Rust immediately after "+ Add
+    // Variable" appends a fresh blank row, then reset back to -1 a beat
+    // later (see settings_window.rs's on_add_variable) so it doesn't keep
+    // re-stealing focus on every later unrelated refresh of this same list.
+    in property <int> focus-row-index <=> variables-tab.focus-row-index;
+    callback add-variable <=> variables-tab.add-variable;
+    callback delete-variable <=> variables-tab.delete-variable;
+    callback confirm-variable <=> variables-tab.confirm-variable;
+
+    // ── Debug tab ──────────────────────────────────────────────────────────
+    in property <[DebugRow]> debug-rows <=> debug-tab.debug-rows;
+    in-out property <string> debug-line-limit <=> debug-tab.debug-line-limit;
+    in-out property <bool> debug-live <=> debug-tab.debug-live;
+    callback debug-line-limit-changed <=> debug-tab.debug-line-limit-changed;
+    pure callback debug-line-matches-search <=> debug-tab.debug-line-matches-search;
+
     // ── Drawer: Trigger panel ───────────────────────────────────────────
     in-out property <string> trigger-name <=> trigger-panel.trigger-name;
     in-out property <bool> trigger-enabled <=> trigger-panel.trigger-enabled;
@@ -246,6 +273,10 @@ export component SettingsWindow inherits Window {
     in-out property <string> cond-var-name <=> condition-panel.var-name;
     in-out property <string> var-op <=> condition-panel.var-op;
     in-out property <string> cond-var-value <=> condition-panel.var-value;
+    in property <[string]> discovered-var-names <=> condition-panel.discovered-var-names;
+    in-out property <string> var-value-mode <=> condition-panel.var-value-mode;
+    in-out property <string> var-value-ref <=> condition-panel.var-value-ref;
+    in property <[string]> reference-var-options <=> condition-panel.reference-var-options;
 
     // ── Drawer: Action panel ─────────────────────────────────────────────
     in-out property <string> action-type <=> action-panel.action-type;
@@ -338,6 +369,9 @@ export component SettingsWindow inherits Window {
     callback instant-save-tts-enabled();
     changed tts-enabled => { root.instant-save-tts-enabled(); }
 
+    callback instant-save-tts-volume();
+    changed tts-volume => { root.instant-save-tts-volume(); }
+
     callback instant-save-tts-speed();
     changed tts-speed => { root.instant-save-tts-speed(); }
 
@@ -371,6 +405,12 @@ export component SettingsWindow inherits Window {
     callback instant-save-alert-style();
     changed alert-style => { root.instant-save-alert-style(); }
 
+    callback instant-save-hide-inactive();
+    changed hide-inactive-index => { root.instant-save-hide-inactive(); }
+
+    callback instant-save-meter-share-bars();
+    changed meter-share-bars => { root.instant-save-meter-share-bars(); }
+
     callback instant-save-sound-enabled();
     changed sound-enabled => { root.instant-save-sound-enabled(); }
 
@@ -382,63 +422,6 @@ export component SettingsWindow inherits Window {
 
     callback instant-save-auto-detect-log();
     changed auto-detect-log => { root.instant-save-auto-detect-log(); }
-
-    // ── Dirty tracking (Save-gated fields) ──────────────────────────────
-    // Everything Save actually persists (see settings_window.rs's
-    // `save_config`) that *isn't* one of the instant-save fields above —
-    // text/spinbox entries with no standalone persistence of their own.
-    // Position x/y are included here too: typing a value or clicking a
-    // Reset Position button only updates these fields, it doesn't write to
-    // Config until Save runs. (A live drag is the one exception — it
-    // persists immediately and only echoes into these same fields for
-    // display via `sync_window_position` — so a drag can light Save up
-    // even though that particular field is already saved; clicking Save
-    // then is a harmless no-op re-write of the same value.)
-    // TEMPORARY diagnostic — pinpointing a reported bug where Save
-    // correctly clears `dirty`, but the very next Settings open shows it
-    // dirty again with no user edits. `dirty-reason` records which field's
-    // `changed` handler last fired; `changed dirty` reports both the value
-    // and that reason to Rust (settings_window.rs's `on_dirty_changed`,
-    // itself temporary) so real log output can show what actually fired
-    // and when, instead of guessing from a static read of this file. Strip
-    // all of this back out to the plain `root.dirty = true;` lines once
-    // the culprit is found.
-    in-out property <string> dirty-reason;
-    callback dirty-changed(bool, string);
-    changed dirty => { root.dirty-changed(root.dirty, root.dirty-reason); }
-
-    changed server-url => { root.dirty = true; root.dirty-reason = "server-url"; }
-    changed password => { root.dirty = true; root.dirty-reason = "password"; }
-    changed start-font-size => { root.dirty = true; root.dirty-reason = "start-font-size"; }
-    changed max-font-size => { root.dirty = true; root.dirty-reason = "max-font-size"; }
-    changed fly-ms => { root.dirty = true; root.dirty-reason = "fly-ms"; }
-    changed hold-secs => { root.dirty = true; root.dirty-reason = "hold-secs"; }
-    changed alpha => { root.dirty = true; root.dirty-reason = "alpha"; }
-    changed history-font-size => { root.dirty = true; root.dirty-reason = "history-font-size"; }
-    changed history-idle-secs => { root.dirty = true; root.dirty-reason = "history-idle-secs"; }
-    changed history-max-entries => { root.dirty = true; root.dirty-reason = "history-max-entries"; }
-    changed history-width => { root.dirty = true; root.dirty-reason = "history-width"; }
-    changed merged-start-font-size => { root.dirty = true; root.dirty-reason = "merged-start-font-size"; }
-    changed merged-max-font-size => { root.dirty = true; root.dirty-reason = "merged-max-font-size"; }
-    changed merged-fly-ms => { root.dirty = true; root.dirty-reason = "merged-fly-ms"; }
-    changed merged-hold-secs => { root.dirty = true; root.dirty-reason = "merged-hold-secs"; }
-    changed merged-alpha => { root.dirty = true; root.dirty-reason = "merged-alpha"; }
-    changed merged-history-font-size => { root.dirty = true; root.dirty-reason = "merged-history-font-size"; }
-    changed merged-history-idle-secs => { root.dirty = true; root.dirty-reason = "merged-history-idle-secs"; }
-    changed merged-history-max-entries => { root.dirty = true; root.dirty-reason = "merged-history-max-entries"; }
-    changed meter-max-rows => { root.dirty = true; root.dirty-reason = "meter-max-rows"; }
-    changed meter-idle-secs => { root.dirty = true; root.dirty-reason = "meter-idle-secs"; }
-    changed meter-font-size => { root.dirty = true; root.dirty-reason = "meter-font-size"; }
-    changed meter-width => { root.dirty = true; root.dirty-reason = "meter-width"; }
-    changed meter-share-bars => { root.dirty = true; root.dirty-reason = "meter-share-bars"; }
-    changed win-overlay-pos-x => { root.dirty = true; root.dirty-reason = "win-overlay-pos-x"; }
-    changed win-overlay-pos-y => { root.dirty = true; root.dirty-reason = "win-overlay-pos-y"; }
-    changed win-history-pos-x => { root.dirty = true; root.dirty-reason = "win-history-pos-x"; }
-    changed win-history-pos-y => { root.dirty = true; root.dirty-reason = "win-history-pos-y"; }
-    changed win-meter-pos-x => { root.dirty = true; root.dirty-reason = "win-meter-pos-x"; }
-    changed win-meter-pos-y => { root.dirty = true; root.dirty-reason = "win-meter-pos-y"; }
-    changed win-merged-pos-x => { root.dirty = true; root.dirty-reason = "win-merged-pos-x"; }
-    changed win-merged-pos-y => { root.dirty = true; root.dirty-reason = "win-merged-pos-y"; }
 
     VerticalLayout {
         HorizontalLayout {
@@ -486,7 +469,13 @@ export component SettingsWindow inherits Window {
                                     ? appearance-tab.preferred-height
                                     : root.current-tab == 4
                                         ? voice-tab.preferred-height
-                                        : sounds-tab.preferred-height;
+                                        : root.current-tab == 5
+                                            ? sounds-tab.preferred-height
+                                            : root.current-tab == 6
+                                                ? variables-tab.preferred-height
+                                                : root.current-tab == 7
+                                                    ? debug-tab.preferred-height
+                                                    : about-tab.preferred-height;
 
                     general-tab := GeneralTab {
                         visible: root.current-tab == 0;
@@ -506,26 +495,15 @@ export component SettingsWindow inherits Window {
                     sounds-tab := SoundsTab {
                         visible: root.current-tab == 5;
                     }
-                }
-            }
-        }
-
-        Rectangle {
-            height: 56px;
-            background: Theme.bg-panel;
-            border-width: 1px;
-            border-color: Theme.border;
-
-            HorizontalLayout {
-                padding: Theme.space-md;
-                spacing: Theme.space-sm;
-                alignment: end;
-
-                Button {
-                    text: "Save";
-                    primary: true;
-                    enabled: root.dirty;
-                    clicked => { root.save(); }
+                    variables-tab := VariablesTab {
+                        visible: root.current-tab == 6;
+                    }
+                    debug-tab := DebugTab {
+                        visible: root.current-tab == 7;
+                    }
+                    about-tab := AboutTab {
+                        visible: root.current-tab == 8;
+                    }
                 }
             }
         }
@@ -663,66 +641,6 @@ export component SettingsWindow inherits Window {
                     download(name) => { root.voice-catalog-download(name); }
                     delete(name) => { root.voice-catalog-delete(name); }
                     close => { root.drawer-back(); }
-                }
-            }
-        }
-    }
-
-    // Guards the titlebar X against silently discarding Save-gated edits
-    // (server URL, password, font sizes, overlay positions, etc. — see
-    // "Dirty tracking" above) now that there's no separate Close button
-    // whose very label used to make that discard-on-close behavior obvious.
-    // Rust's `on_close_requested` hook vetoes the close and sets
-    // `pending-changes-open` instead whenever `dirty` is true; "Keep
-    // Editing" is handled right here since it's pure UI state, while the
-    // other two round-trip through Rust because they need to actually
-    // close (and, for Save, persist) the window.
-    ModalScrim { active: root.pending-changes-open; }
-    if root.pending-changes-open: Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: 380px;
-        height: 168px;
-        background: Theme.bg-elevated;
-        border-radius: Theme.radius-md;
-        border-width: 1px;
-        border-color: Theme.border;
-
-        VerticalLayout {
-            padding: Theme.space-lg;
-            spacing: Theme.space-md;
-
-            Text {
-                text: "Unsaved Changes";
-                color: Theme.text-primary;
-                font-size: Theme.font-size-lg;
-                font-weight: 700;
-            }
-            Text {
-                text: "You have changes that haven't been saved yet.";
-                color: Theme.text-secondary;
-                font-size: Theme.font-size-sm;
-                wrap: word-wrap;
-                vertical-stretch: 1;
-            }
-            HorizontalLayout {
-                spacing: Theme.space-sm;
-                alignment: end;
-
-                Button {
-                    text: "Keep Editing";
-                    primary: false;
-                    clicked => { root.pending-changes-open = false; }
-                }
-                Button {
-                    text: "Discard";
-                    primary: false;
-                    clicked => { root.discard-and-close-settings(); }
-                }
-                Button {
-                    text: "Save & Close";
-                    primary: true;
-                    clicked => { root.save-and-close-settings(); }
                 }
             }
         }

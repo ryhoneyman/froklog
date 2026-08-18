@@ -75,6 +75,7 @@ pub mod overlay {
         visible: bool,
         force_show: bool,
         locked: bool,
+        hide_inactive_secs: u32,
         icon_cache: HashMap<String, Option<slint::Image>>,
         tick_count: u64,
     }
@@ -100,6 +101,7 @@ pub mod overlay {
                 visible: false,
                 force_show: handle.force_show_windows.load(Ordering::Relaxed),
                 locked: cfg.overlay_alert.locked,
+                hide_inactive_secs: cfg.overlay_hide_inactive_secs,
                 icon_cache: HashMap::new(),
                 tick_count: 0,
             }
@@ -124,6 +126,7 @@ pub mod overlay {
             self.max_pt = cfg.overlay_max_font_size.max(6) as i32;
             self.alpha = cfg.overlay_alpha;
             self.locked = cfg.overlay_alert.locked;
+            self.hide_inactive_secs = cfg.overlay_hide_inactive_secs;
             drop(cfg);
             self.engine.sync_config();
             let new_force_show = self.handle.force_show_windows.load(Ordering::Relaxed);
@@ -335,14 +338,33 @@ pub mod overlay {
                     None
                 };
 
-                let show = state.alert_style == AlertStyle::Separate
+                // Log-inactivity hide wins over everything else, including
+                // Show All Windows — see `AppHandle::log_inactive`'s doc
+                // comment.
+                let show = !state.handle.log_inactive(state.hide_inactive_secs)
+                    && state.alert_style == AlertStyle::Separate
                     && (state.overlay_enabled || state.force_show)
                     && active.is_some();
                 if !show {
                     if state.visible {
                         tracing::info!("alert overlay: hiding");
-                        let _ = ui.hide();
+                        if let Err(e) = ui.hide() {
+                            tracing::warn!("alert overlay: hide() failed: {e}");
+                        }
                         state.visible = false;
+                        // Slint's Property::set() only marks a property (and
+                        // therefore anything depending on it) dirty when the
+                        // new value differs from the old one — see
+                        // i-slint-core's properties.rs. A placeholder's
+                        // `alpha` is a constant 1.0 every tick it's shown,
+                        // so the *next* show's `set_alpha(1.0)` would
+                        // otherwise be a silent no-op against this same
+                        // 1.0 leftover from before hiding — nothing marks
+                        // dirty, nothing repaints, and the window can come
+                        // back from `.show()` visually blank. Zeroing it
+                        // here guarantees the next show's `set_alpha` is a
+                        // genuine transition instead of a repeat.
+                        ui.set_alpha(0.0);
                     }
                     return;
                 }
@@ -357,10 +379,17 @@ pub mod overlay {
                         &state.handle,
                         crate::overlay_registry::overlay_registry::OverlayKind::Alert,
                     );
-                    let _ = ui.show();
+                    if let Err(e) = ui.show() {
+                        tracing::warn!("alert overlay: show() failed: {e}");
+                    }
                     state.visible = true;
+                    tracing::info!(
+                        "alert overlay: post-show slint-visible={}",
+                        ui.window().is_visible()
+                    );
                     crate::overlay_draw::overlay_draw::hide_from_taskbar(weak.clone());
                     crate::overlay_draw::overlay_draw::set_no_activate(weak.clone());
+                    crate::overlay_draw::overlay_draw::force_repaint(weak.clone());
                 }
                 // See `overlay_draw::reassert_topmost`'s doc comment — Slint
                 // only sets the OS-level topmost flag once, so this repeats

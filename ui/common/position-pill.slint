@@ -12,6 +12,9 @@ export component PositionPill inherits HorizontalLayout {
     in-out property <bool> locked;
     in property <bool> enabled: true;
     callback reset();
+    // Fired when either coordinate field loses focus — see number-input.
+    // slint's `edited` doc comment for why defocus, not per-keystroke.
+    callback edited();
 
     spacing: Theme.space-xs;
     alignment: end;
@@ -77,6 +80,11 @@ export component PositionPill inherits HorizontalLayout {
                 font-size: Theme.font-size-sm;
                 vertical-alignment: center;
                 read-only: !root.enabled;
+                changed has-focus => {
+                    if !self.has-focus {
+                        root.edited();
+                    }
+                }
             }
             Text {
                 text: "|";
@@ -97,6 +105,11 @@ export component PositionPill inherits HorizontalLayout {
                 font-size: Theme.font-size-sm;
                 vertical-alignment: center;
                 read-only: !root.enabled;
+                changed has-focus => {
+                    if !self.has-focus {
+                        root.edited();
+                    }
+                }
             }
         }
     }

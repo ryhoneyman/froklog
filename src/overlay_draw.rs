@@ -183,18 +183,57 @@ pub mod overlay_draw {
     pub fn sync_click_through(_window: &slint::Window, _passthrough: bool) {}
 
     /// Window-relative pointer position and button-1 state, for the manual
-    /// drag loop (see `linux_x11::pointer_local` for why window-relative is
-    /// load-bearing). `None` off-Linux or on any query failure.
+    /// drag/resize loops (see `linux_x11::pointer_local` for why
+    /// window-relative is load-bearing on Linux). `None` on any query
+    /// failure, or on a platform with no implementation below.
     pub fn pointer_local(window: &slint::Window) -> Option<(i32, i32, bool)> {
         #[cfg(target_os = "linux")]
         {
             use slint::winit_030::WinitWindowAccessor;
             window.with_winit_window(linux_x11::pointer_local).flatten()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
         {
-            let _ = window;
-            None
+            use slint::winit_030::WinitWindowAccessor;
+            window.with_winit_window(windows_pointer_local).flatten()
+        }
+    }
+
+    /// Windows counterpart to `linux_x11::pointer_local`: `GetCursorPos`
+    /// gives screen coordinates, `GetWindowRect` gives the window's screen
+    /// origin, and the difference is exactly what X11's `QueryPointer`
+    /// hands back directly as `win_x`/`win_y`. `GetAsyncKeyState` reads the
+    /// live left-button state regardless of which window currently has
+    /// focus/capture, which matters here since these overlay windows carry
+    /// `WS_EX_NOACTIVATE` and never truly have Win32 focus.
+    #[cfg(target_os = "windows")]
+    fn windows_pointer_local(winit_window: &winit::window::Window) -> Option<(i32, i32, bool)> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::Foundation::{POINT, RECT};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+        let handle = winit_window.window_handle().ok()?;
+        let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+            return None;
+        };
+        let hwnd = win32.hwnd.get();
+        unsafe {
+            let mut pt = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut pt) == 0 {
+                return None;
+            }
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            if GetWindowRect(hwnd, &mut rect) == 0 {
+                return None;
+            }
+            let down = (GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0;
+            Some((pt.x - rect.left, pt.y - rect.top, down))
         }
     }
 
@@ -304,6 +343,41 @@ pub mod overlay_draw {
 
     #[cfg(not(target_os = "windows"))]
     fn set_no_activate_now(_window: &slint::Window) {}
+
+    // ── Forced repaint after a long hide ────────────────────────────────────
+    //
+    // Confirmed live: an overlay window that's been hidden for more than a
+    // couple of seconds (e.g. between two separate "Show All Windows"
+    // clicks) can come back from `.show()` visually blank — while every
+    // layer this app can log (the alert engine's own active/placeholder
+    // state, this window's `visible` flag, and even Slint's own
+    // `Window::is_visible()`) all agree it's shown. It reliably starts
+    // working again the moment a real, continuously-animating trigger
+    // alert forces a few genuine frames to render — a placeholder's
+    // properties are 100% static between shows, so Slint's own diffing (a
+    // setter that re-assigns the same value is a no-op, not a redraw)
+    // never issues a fresh draw call to refill whatever the GPU
+    // swapchain/backbuffer the OS discarded while the window sat hidden.
+    //
+    // First attempt at this used Win32's `RedrawWindow`, which turned out
+    // to be the wrong lever: that forces a `WM_PAINT`, but Slint's GPU
+    // renderer doesn't paint in response to `WM_PAINT` at all — it repaints
+    // when winit's own `RedrawRequested` fires. `Window::request_redraw()`
+    // is the actual hook into that path (a stable winit API, so this needs
+    // no platform split or extra `windows-sys` features), and unlike
+    // `RedrawWindow` it isn't a Win32-only concept — cheap and harmless to
+    // call unconditionally on every platform.
+    pub fn force_repaint<W>(weak: slint::Weak<W>)
+    where
+        W: slint::ComponentHandle + 'static,
+    {
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+            let Some(w) = weak.upgrade() else { return };
+            use slint::winit_030::WinitWindowAccessor;
+            let hit = w.window().with_winit_window(|ww| ww.request_redraw());
+            tracing::info!("force_repaint: request_redraw dispatched={}", hit.is_some());
+        });
+    }
 
     // ── True (non-cached) position query ────────────────────────────────────
     //

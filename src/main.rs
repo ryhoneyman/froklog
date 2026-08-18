@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+#[cfg(feature = "tray")]
+use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use crossbeam_channel::bounded;
@@ -326,10 +328,16 @@ fn run_engine_once(
 
     // Splitter: fan the tailer output to the parser channel and the trigger channel.
     {
+        #[cfg(feature = "tray")]
+        let last_log_activity = Arc::clone(&app_handle.last_log_activity);
         thread::Builder::new()
             .name("eq-splitter".into())
             .spawn(move || {
                 for line in tail_rx {
+                    #[cfg(feature = "tray")]
+                    {
+                        *last_log_activity.lock().unwrap() = Instant::now();
+                    }
                     let _ = parser_tx.send(line.clone());
                     // Drop lines if the trigger channel is full rather than blocking the parser.
                     let _ = trigger_tx.try_send(line);

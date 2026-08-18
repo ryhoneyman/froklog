@@ -57,6 +57,14 @@ export global Theme {
     out property <length> space-sm: 8px;
     out property <length> space-md: 16px;
     out property <length> space-lg: 24px;
+
+    // Standard square icon-button size (+/pencil/×/▲/▼-style toolbar
+    // buttons) — matches TextField/ComboBoxField's own height so a button
+    // row sitting next to one of those fields lines up edge to edge instead
+    // of towering over it. Used by both the Trigger panel's condition/
+    // action toolbar and the Variables tab's group toolbar; keep them
+    // sharing this token rather than each hand-picking a size.
+    out property <length> icon-button-size: 30px;
 }
 
 // EQ class colors, matching ACT conventions — same source of truth as the

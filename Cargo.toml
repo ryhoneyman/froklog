@@ -232,6 +232,7 @@ raw-window-handle = { version = "0.6", optional = true }
 windows-sys = { version = "0.52", optional = true, features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 # Reads the raw HWND out of the winit-created overlay windows, to hand to
 # windows-sys above. Same crate/version winit itself already compiles with

@@ -27,6 +27,7 @@ export struct HistoryRow {
 }
 
 export component HistoryOverlayWindow inherits OverlayShell {
+    title: "History Overlay";
     // Same contract as DpsMeterWindow.win-width: pushed from config
     // (`overlay_history_width`, whose Settings field already existed but
     // was never applied); 0 = "Auto" = the historical 320px.

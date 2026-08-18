@@ -449,6 +449,7 @@ pub mod overlay_dps {
         visible: bool,
         force_show: bool,
         locked: bool,
+        hide_inactive_secs: u32,
         width: i32,
         share_bars: bool,
         amount_w: i32,
@@ -472,6 +473,7 @@ pub mod overlay_dps {
                 visible: false,
                 force_show: handle.force_show_windows.load(Ordering::Relaxed),
                 locked: cfg.overlay_meter.locked,
+                hide_inactive_secs: cfg.overlay_hide_inactive_secs,
                 width: cfg.meter_width,
                 share_bars: cfg.meter_share_bars,
                 amount_w: cfg.meter_amount_w,
@@ -488,6 +490,7 @@ pub mod overlay_dps {
             self.max_rows = cfg.meter_max_rows.max(1);
             self.idle_secs = cfg.meter_idle_secs;
             self.locked = cfg.overlay_meter.locked;
+            self.hide_inactive_secs = cfg.overlay_hide_inactive_secs;
             self.width = cfg.meter_width;
             self.share_bars = cfg.meter_share_bars;
             self.amount_w = cfg.meter_amount_w;
@@ -774,12 +777,27 @@ pub mod overlay_dps {
                 let view_mob_id =
                     resolve_view_mob_id(&cs, pinned_mob_id_tick.get()).or(state.last_active_mob_id);
 
-                let show = state.force_show || (state.meter_enabled && view_mob_id.is_some());
+                // Log-inactivity hide wins over everything else, including
+                // Show All Windows — see `AppHandle::log_inactive`'s doc
+                // comment.
+                let show = !state.handle.log_inactive(state.hide_inactive_secs)
+                    && (state.force_show || (state.meter_enabled && view_mob_id.is_some()));
                 if !show {
                     if state.visible {
                         tracing::info!("dps meter: hiding");
                         let _ = ui.hide();
                         state.visible = false;
+                        // See overlay.rs's matching comment on
+                        // `set_alpha(0.0)` on hide — Slint's Property::set()
+                        // no-ops when the new value equals the old one.
+                        // `mob_label` alone only re-dirties its own Text
+                        // element on the next show; `panel_opacity` re-dirties
+                        // the whole `panel` container (title bar, column
+                        // header, rows, footer), which is what actually
+                        // needed to come back — see overlay_dps.slint's
+                        // `panel-opacity` doc comment.
+                        ui.set_mob_label("".into());
+                        ui.set_panel_opacity(0.0);
                     }
                     mob_picker_open_tick.set(false);
                     return;
@@ -803,6 +821,7 @@ pub mod overlay_dps {
                         state.visible = true;
                         crate::overlay_draw::overlay_draw::hide_from_taskbar(weak.clone());
                         crate::overlay_draw::overlay_draw::set_no_activate(weak.clone());
+                        crate::overlay_draw::overlay_draw::force_repaint(weak.clone());
                     }
                     // See `overlay_draw::reassert_topmost`'s doc comment.
                     if state.tick_count.is_multiple_of(25) {
@@ -813,6 +832,7 @@ pub mod overlay_dps {
                     ui.set_footer_total_label("0".into());
                     ui.set_footer_rate_label("0".into());
                     ui.set_elapsed_label("0s".into());
+                    ui.set_panel_opacity(1.0);
                     return;
                 };
 
@@ -835,6 +855,7 @@ pub mod overlay_dps {
                         tracing::info!("dps meter: hiding (idle)");
                         let _ = ui.hide();
                         state.visible = false;
+                        ui.set_panel_opacity(0.0);
                     }
                     return;
                 }
@@ -853,6 +874,8 @@ pub mod overlay_dps {
                     state.visible = true;
                     crate::overlay_draw::overlay_draw::hide_from_taskbar(weak.clone());
                     crate::overlay_draw::overlay_draw::set_no_activate(weak.clone());
+                    crate::overlay_draw::overlay_draw::force_repaint(weak.clone());
+                    ui.set_panel_opacity(1.0);
                 }
                 // See `overlay_draw::reassert_topmost`'s doc comment.
                 if state.tick_count.is_multiple_of(25) {

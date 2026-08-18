@@ -54,6 +54,25 @@ export component AppearanceTab inherits VerticalLayout {
         "Separate (Alert and History)", "Combined (Alert in History)",
     ];
 
+    // Index into `hide-inactive-options` below; the seconds value each
+    // index maps to lives in settings_window.rs (index<->secs conversion,
+    // mirroring `alert-style`'s int<->enum mapping). 0 = "Never" (feature
+    // off — see `Config::overlay_hide_inactive_secs`'s doc comment), 1 =
+    // the default 30s. Applies to every overlay window at once, so it
+    // lives next to Alert Style rather than in any one overlay's own card.
+    in-out property <int> hide-inactive-index: 1;
+    property <[string]> hide-inactive-options: [
+        "Never", "after 30s", "after 60s", "after 5m",
+    ];
+
+    // Fired whenever a font-size/timing/opacity/history/meter/position field
+    // on this tab loses focus — these fields have no standalone persistence
+    // of their own (unlike the checkboxes/toggles/pulldowns below, which
+    // save the instant they change), so committing them all together here
+    // is the replacement for the old Save button. See settings_shell.slint's
+    // `commit-appearance` and settings_window.rs's `save_appearance`.
+    callback commit-appearance();
+
     // ── Alert Overlay ───────────────────────────────────────────────────
     in-out property <string> overlay-font: "Segoe UI";
     in property <[string]> font-options: [
@@ -144,11 +163,32 @@ export component AppearanceTab inherits VerticalLayout {
             font-size: Theme.font-size-md;
             font-weight: 600;
         }
-        ComboBoxField {
-            options: root.alert-style-options;
-            value: root.alert-style-options[root.alert-style];
-            selected(v) => {
-                root.alert-style = v == root.alert-style-options[0] ? 0 : 1;
+        HorizontalLayout {
+            spacing: Theme.space-md;
+            alignment: start;
+            ComboBoxField {
+                width: 220px;
+                options: root.alert-style-options;
+                value: root.alert-style-options[root.alert-style];
+                selected(v) => {
+                    root.alert-style = v == root.alert-style-options[0] ? 0 : 1;
+                }
+            }
+            Text {
+                text: "Hide when inactive";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+            }
+            ComboBoxField {
+                width: 110px;
+                options: root.hide-inactive-options;
+                value: root.hide-inactive-options[root.hide-inactive-index];
+                selected(v) => {
+                    root.hide-inactive-index = v == root.hide-inactive-options[0] ? 0
+                        : v == root.hide-inactive-options[1] ? 1
+                        : v == root.hide-inactive-options[2] ? 2 : 3;
+                }
             }
         }
     }
@@ -160,6 +200,7 @@ export component AppearanceTab inherits VerticalLayout {
         pos-x <=> root.alert-pos-x;
         pos-y <=> root.alert-pos-y;
         reset-position => { root.alert-reset-position(); }
+        edited => { root.commit-appearance(); }
 
         LabeledField {
             label: "Font";
@@ -167,17 +208,17 @@ export component AppearanceTab inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Start Size"; unit: "pt"; value <=> root.start-font-size; enabled: root.alert-enabled; }
-            NumberInput { label: "Max Size"; unit: "pt"; value <=> root.max-font-size; enabled: root.alert-enabled; }
+            NumberInput { label: "Start Size"; unit: "pt"; value <=> root.start-font-size; enabled: root.alert-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Max Size"; unit: "pt"; value <=> root.max-font-size; enabled: root.alert-enabled; edited => { root.commit-appearance(); } }
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Fly-In Speed"; unit: "ms"; value <=> root.fly-ms; enabled: root.alert-enabled; }
-            NumberInput { label: "Hold Time"; unit: "s"; value <=> root.hold-secs; enabled: root.alert-enabled; }
+            NumberInput { label: "Fly-In Speed"; unit: "ms"; value <=> root.fly-ms; enabled: root.alert-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Hold Time"; unit: "s"; value <=> root.hold-secs; enabled: root.alert-enabled; edited => { root.commit-appearance(); } }
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Opacity"; unit: "/255"; value <=> root.alpha; enabled: root.alert-enabled; }
+            NumberInput { label: "Opacity"; unit: "/255"; value <=> root.alpha; enabled: root.alert-enabled; edited => { root.commit-appearance(); } }
             Rectangle { horizontal-stretch: 1; }
         }
     }
@@ -189,16 +230,17 @@ export component AppearanceTab inherits VerticalLayout {
         pos-x <=> root.history-pos-x;
         pos-y <=> root.history-pos-y;
         reset-position => { root.history-reset-position(); }
+        edited => { root.commit-appearance(); }
 
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.history-font-size; enabled: root.history-enabled; }
-            NumberInput { label: "Max Entries"; value <=> root.history-max-entries; enabled: root.history-enabled; }
+            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.history-font-size; enabled: root.history-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Max Entries"; value <=> root.history-max-entries; enabled: root.history-enabled; edited => { root.commit-appearance(); } }
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.history-idle-secs; enabled: root.history-enabled; }
-            NumberInput { label: "Width"; unit: "px"; zero-hint: "Auto"; value <=> root.history-width; enabled: root.history-enabled; }
+            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.history-idle-secs; enabled: root.history-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Width"; unit: "px"; zero-hint: "Auto"; value <=> root.history-width; enabled: root.history-enabled; edited => { root.commit-appearance(); } }
         }
     }
 
@@ -209,20 +251,21 @@ export component AppearanceTab inherits VerticalLayout {
         pos-x <=> root.merged-pos-x;
         pos-y <=> root.merged-pos-y;
         reset-position => { root.merged-reset-position(); }
+        edited => { root.commit-appearance(); }
 
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Start Size"; unit: "pt"; value <=> root.merged-start-font-size; enabled: root.merged-enabled; }
-            NumberInput { label: "Max Size"; unit: "pt"; value <=> root.merged-max-font-size; enabled: root.merged-enabled; }
+            NumberInput { label: "Start Size"; unit: "pt"; value <=> root.merged-start-font-size; enabled: root.merged-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Max Size"; unit: "pt"; value <=> root.merged-max-font-size; enabled: root.merged-enabled; edited => { root.commit-appearance(); } }
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Fly-In Speed"; unit: "ms"; value <=> root.merged-fly-ms; enabled: root.merged-enabled; }
-            NumberInput { label: "Hold Time"; unit: "s"; value <=> root.merged-hold-secs; enabled: root.merged-enabled; }
+            NumberInput { label: "Fly-In Speed"; unit: "ms"; value <=> root.merged-fly-ms; enabled: root.merged-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Hold Time"; unit: "s"; value <=> root.merged-hold-secs; enabled: root.merged-enabled; edited => { root.commit-appearance(); } }
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Opacity"; unit: "/255"; value <=> root.merged-alpha; enabled: root.merged-enabled; }
+            NumberInput { label: "Opacity"; unit: "/255"; value <=> root.merged-alpha; enabled: root.merged-enabled; edited => { root.commit-appearance(); } }
             Rectangle { horizontal-stretch: 1; }
         }
 
@@ -234,12 +277,12 @@ export component AppearanceTab inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.merged-history-font-size; enabled: root.merged-enabled; }
-            NumberInput { label: "Max Entries"; value <=> root.merged-history-max-entries; enabled: root.merged-enabled; }
+            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.merged-history-font-size; enabled: root.merged-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Max Entries"; value <=> root.merged-history-max-entries; enabled: root.merged-enabled; edited => { root.commit-appearance(); } }
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.merged-history-idle-secs; enabled: root.merged-enabled; }
+            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.merged-history-idle-secs; enabled: root.merged-enabled; edited => { root.commit-appearance(); } }
             Rectangle { horizontal-stretch: 1; }
         }
     }
@@ -251,17 +294,21 @@ export component AppearanceTab inherits VerticalLayout {
         pos-x <=> root.meter-pos-x;
         pos-y <=> root.meter-pos-y;
         reset-position => { root.meter-reset-position(); }
+        edited => { root.commit-appearance(); }
 
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Max Rows"; value <=> root.meter-max-rows; enabled: root.meter-enabled; }
-            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.meter-font-size; enabled: root.meter-enabled; }
+            NumberInput { label: "Max Rows"; value <=> root.meter-max-rows; enabled: root.meter-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Font Size"; unit: "pt"; value <=> root.meter-font-size; enabled: root.meter-enabled; edited => { root.commit-appearance(); } }
         }
         HorizontalLayout {
             spacing: Theme.space-md;
-            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.meter-idle-secs; enabled: root.meter-enabled; }
-            NumberInput { label: "Width"; unit: "px"; zero-hint: "Auto"; value <=> root.meter-width; enabled: root.meter-enabled; }
+            NumberInput { label: "Idle Hide"; unit: "s"; zero-hint: "Never"; value <=> root.meter-idle-secs; enabled: root.meter-enabled; edited => { root.commit-appearance(); } }
+            NumberInput { label: "Width"; unit: "px"; zero-hint: "Auto"; value <=> root.meter-width; enabled: root.meter-enabled; edited => { root.commit-appearance(); } }
         }
+        // Share Bars is a checkbox, not a text field with a meaningful
+        // defocus moment — it's instant-save (settings_shell.slint) like
+        // every other checkbox/toggle on this tab, not commit-appearance.
         Checkbox { text: "Share bars (class-colored % of group total per row)"; checked <=> root.meter-share-bars; enabled: root.meter-enabled; }
     }
 }

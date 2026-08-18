@@ -1,4 +1,4 @@
-# froklog — EverQuest Log Parser
+# froklog — EverQuest Real-Time Log Processing and Notification Platform
 
 [![CI](https://github.com/ryhoneyman/froklog/actions/workflows/ci.yml/badge.svg)](https://github.com/ryhoneyman/froklog/actions/workflows/ci.yml)
 

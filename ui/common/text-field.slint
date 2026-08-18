@@ -11,6 +11,16 @@ export component TextField inherits Rectangle {
     callback edited(string);
 
     height: 30px;
+    // A bare `TextInput` does NOT auto-scroll to keep the cursor in view —
+    // that was this component's own wrong assumption (see git history);
+    // only Slint's higher-level `LineEdit` widget adds that, by tracking a
+    // `computed-x` offset and shifting the input in `cursor-position-changed`
+    // (see i-slint-compiler's `widgets/common/lineedit-base.slint`). Without
+    // porting that same trick below, `input`'s `width` was pinned to the
+    // box's own visible width, so a long value (e.g. the Condition editor's
+    // regex patterns) just had its tail permanently clipped — unreachable by
+    // End, arrow keys, or drag-select, since nothing ever moved the view.
+    clip: true;
     background: root.enabled ? Theme.bg-elevated : Theme.bg-panel;
     border-radius: Theme.radius-sm;
     border-width: 1px;
@@ -19,15 +29,36 @@ export component TextField inherits Rectangle {
     animate border-color { duration: 100ms; }
 
     input := TextInput {
-        x: Theme.space-sm;
-        width: parent.width - 2 * Theme.space-sm;
+        // Tracks how far the (possibly wider-than-the-box) input has been
+        // shifted left so the cursor stays visible — see `cursor-position-
+        // changed` below, ported from `lineedit-base.slint`.
+        property <length> computed-x;
+        // Clamped between the field's resting left inset (never shifts
+        // right past that) and just past the text's own end (never
+        // scrolls past it, leaving blank space) — same two-sided `min`/
+        // `max` clamp `lineedit-base.slint` uses, with `Theme.space-sm` in
+        // place of its `margin` (0 there, since that widget lays icons out
+        // beside the input rather than inset within it).
+        x: min(Theme.space-sm, max(parent.width - Theme.space-sm - self.width - self.text-cursor-width, self.computed-x));
+        // `self.preferred-width`, not a fixed `parent.width - 2 * Theme.space-sm`
+        // — that old fixed width is exactly what left no extra room for the
+        // text past the box to scroll into view in the first place.
+        width: max(parent.width - 2 * Theme.space-sm - self.text-cursor-width, self.preferred-width);
         height: 100%;
         vertical-alignment: center;
+        single-line: true;
         color: root.enabled ? Theme.text-primary : Theme.text-disabled;
         font-size: Theme.font-size-md;
         read-only: root.read-only || !root.enabled;
         input-type: root.password ? InputType.password : InputType.text;
         edited => { root.edited(self.text); }
+        cursor-position-changed(cursor-position) => {
+            if cursor-position.x + self.computed-x < Theme.space-sm {
+                self.computed-x = Theme.space-sm - cursor-position.x;
+            } else if cursor-position.x + self.computed-x > parent.width - Theme.space-sm - self.text-cursor-width {
+                self.computed-x = parent.width - Theme.space-sm - cursor-position.x - self.text-cursor-width;
+            }
+        }
     }
 
     if input.text == "" && !input.has-focus: Text {

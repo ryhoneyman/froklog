@@ -199,9 +199,10 @@ pub mod overlay_shell {
         Incremental,
     }
 
-    /// Ceiling on one drag; a stuck button-state reading must not poll
-    /// forever. Generous — a deliberate reposition can take a while.
-    #[cfg(target_os = "linux")]
+    /// Ceiling on one drag/resize; a stuck button-state reading must not
+    /// poll forever. Generous — a deliberate reposition can take a while.
+    /// Shared by the Linux manual-drag loop and the (now cross-platform)
+    /// manual width-resize loop below.
     const DRAG_MAX_MS: u64 = 30_000;
     /// Pointer travel (px, either axis) before the probe move fires — big
     /// enough that the Sense comparison isn't drowned by mouse jitter.
@@ -329,12 +330,23 @@ pub mod overlay_shell {
         });
     }
 
-    /// Starts a width resize from an overlay's right-edge grip. Linux runs
-    /// the same poll-loop shape as `begin_drag` — but no regime probe: the
-    /// window's ORIGIN never moves during a width resize, so window-relative
-    /// pointer readings are trustworthy under both the frozen-frame
-    /// compositor and a rebasing X server. Elsewhere it hands off to the
-    /// OS-native interactive resize.
+    /// Starts a width resize from an overlay's right-edge grip. Runs the
+    /// same manual poll-loop shape as `begin_drag`'s Linux path — but no
+    /// regime probe: the window's ORIGIN never moves during a width resize,
+    /// so window-relative pointer readings are trustworthy under both the
+    /// frozen-frame compositor and a rebasing X server.
+    ///
+    /// This used to hand off to the OS-native interactive resize
+    /// (`drag_resize_window`) on Windows, mirroring how `begin_drag` uses
+    /// the native `drag_window()` there. Unlike moving, which only needs
+    /// `WS_EX_NOACTIVATE`-style windows to accept `SC_MOVE`, native resize
+    /// needs a sizable border (`WS_THICKFRAME`) that these frameless
+    /// `WS_POPUP` overlays never had — confirmed live: the cursor swapped to
+    /// a resize arrow (Windows entering the `SC_SIZE` modal loop) but no
+    /// resize ever happened, and the modal loop's mouse capture never
+    /// cleanly released afterward, freezing the window's normal drag-to-move
+    /// too. The manual loop below sidesteps native resize entirely, so it's
+    /// now used on every platform.
     ///
     /// `apply` pushes the new logical width into the window's `win-width`
     /// property for instant feedback; the config field is updated in memory
@@ -348,44 +360,25 @@ pub mod overlay_shell {
     ) where
         W: ComponentHandle + 'static,
     {
-        #[cfg(target_os = "linux")]
-        {
-            let anchors = weak.upgrade().and_then(|w| {
-                let (lx, _, down) = crate::overlay_draw::overlay_draw::pointer_local(w.window())?;
-                if !down {
-                    return None;
-                }
-                Some((lx, w.window().size().width as i32))
-            });
-            if let Some((anchor_x, anchor_w)) = anchors {
-                width_resize_step(weak, handle, kind, anchor_x, anchor_w, apply, 0);
+        let anchors = weak.upgrade().and_then(|w| {
+            let (lx, _, down) = crate::overlay_draw::overlay_draw::pointer_local(w.window())?;
+            if !down {
+                return None;
             }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = &apply;
-            if let Some(w) = weak.upgrade() {
-                use slint::winit_030::WinitWindowAccessor;
-                let _ = w.window().with_winit_window(|ww| {
-                    let _ = ww.drag_resize_window(winit::window::ResizeDirection::East);
-                });
-                // Native resize has finished (drag_resize_window blocks on
-                // Windows) — persist what the OS left us with.
-                let scale = w.window().scale_factor();
-                let logical = (w.window().size().width as f32 / scale).round() as i32;
-                save_width(kind, &handle, logical);
-            }
+            Some((lx, w.window().size().width as i32))
+        });
+        if let Some((anchor_x, anchor_w)) = anchors {
+            width_resize_step(weak, handle, kind, anchor_x, anchor_w, apply, 0);
         }
     }
 
-    /// Bounds on an interactively-resized overlay width (logical px).
-    /// Linux-only: the native-resize path elsewhere lets the OS bound it.
-    #[cfg(target_os = "linux")]
+    /// Bounds on an interactively-resized overlay width (logical px). Both
+    /// platforms clamp here now — see `begin_width_resize`'s doc comment for
+    /// why Windows no longer uses the OS-native resize path that used to let
+    /// the OS bound the drag instead.
     const RESIZE_MIN_W: i32 = 160;
-    #[cfg(target_os = "linux")]
     const RESIZE_MAX_W: i32 = 2000;
 
-    #[cfg(target_os = "linux")]
     fn width_resize_step<W>(
         weak: Weak<W>,
         handle: Arc<AppHandle>,

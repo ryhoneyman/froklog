@@ -1,0 +1,411 @@
+import { Theme } from "../theme.slint";
+import { Card } from "../common/card.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { Button } from "../common/buttons.slint";
+import { SvgIconButton } from "../common/icon-button.slint";
+
+export struct VariableRow {
+    name: string,
+    value: string,
+    // "number" or "text" — inferred by Rust the same way `store_var`
+    // comparisons already infer it (parseable as f64 or not), never
+    // declared by the user. Recomputed only when a row is confirmed (see
+    // `VariableRowItem`'s doc comment), not live while typing.
+    kind: string,
+}
+
+// Small square icon button for the row's remove (×) — U+00D7 is Latin-1
+// Supplement, confirmed to render on real Segoe UI (unlike U+2715, which
+// this project already had to swap away from once — see SvgIconButton for
+// why anything less common than that goes through an actual SVG asset
+// instead of gambling on another font glyph). Same bordered/filled chrome
+// as the group toolbar's + button (border + `bg-elevated` at rest, `bg-hover`
+// on hover) rather than a bare hover-only highlight — `color` is a fixed
+// tint (not hover-gated), since this button's glyph is always meant to read
+// as "delete", not just when the pointer happens to be over it.
+component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> enabled: true;
+    in property <color> glyph-color: Theme.text-primary;
+
+    callback clicked();
+
+    width: 24px;
+    height: 24px;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: touch.has-hover && root.enabled ? Theme.bg-hover : Theme.bg-elevated;
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    animate background { duration: 100ms; }
+
+    Text {
+        text: root.glyph;
+        color: root.glyph-color;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: 100%;
+        height: 100%;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Plain, unwrapped text input for a table cell — no covering TouchArea (an
+// earlier version had one "for click-to-focus", which sat on top of the
+// TextInput and intercepted clicks meant to position the cursor inside the
+// text — TextInput already handles its own click-to-focus natively). Local
+// state only: nothing here writes back to Rust — the row's confirm button
+// reads `text` directly by id when the user is ready to commit.
+component InlineCell inherits Rectangle {
+    in property <string> value;
+    // Grabs keyboard focus the instant this cell is created — see
+    // VariableRowItem's `focus-name` doc comment for why `init` (not a
+    // `changed` handler) is the right hook here.
+    in property <bool> autofocus: false;
+    // Current (possibly user-edited, not-yet-confirmed) text — read by the
+    // row's confirm button/Enter handler at commit time.
+    out property <string> text-value <=> input.text;
+    callback accepted();
+
+    // Callable by a sibling (the Name cell's Enter handler moves focus into
+    // the Value cell instead of confirming — see VariableRowItem).
+    public function focus-cell() {
+        input.focus();
+    }
+
+    height: 26px;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : transparent;
+    background: input.has-focus ? Theme.bg-elevated : Theme.bg-panel;
+
+    animate border-color, background { duration: 100ms; }
+
+    input := TextInput {
+        x: Theme.space-xs;
+        width: parent.width - 2 * Theme.space-xs;
+        height: 100%;
+        vertical-alignment: center;
+        color: Theme.text-primary;
+        font-size: Theme.font-size-sm;
+        text: root.value;
+        accepted => { root.accepted(); }
+        init => { if root.autofocus { self.focus(); } }
+    }
+}
+
+component TypeBadge inherits Rectangle {
+    in property <string> kind;
+    property <bool> is-number: root.kind == "number";
+
+    width: 60px;
+    height: 18px;
+    border-radius: 9px;
+    background: root.is-number ? #24405a : #4a3a1c;
+
+    Text {
+        text: root.is-number ? "NUMBER" : "TEXT";
+        color: root.is-number ? #8fc2ea : #e6cd7d;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: 100%;
+        height: 100%;
+    }
+}
+
+// One row. Nothing here persists until the green check is clicked (or
+// Enter pressed in either field, via `InlineCell.accepted`) — replacing an
+// earlier commit-on-blur design that fought with itself: blurring one
+// field to click into the other, or clicking away to finish, would
+// sometimes wipe out what was just typed, and there was no way to confirm
+// with the keyboard. Explicit confirm sidesteps all of that: fields are
+// purely local scratch space until you say so.
+//
+// The confirm checkmark only appears — in a reserved slot between the Type
+// badge and the × — while the fields actually disagree with the row's
+// last-confirmed name/value; otherwise that slot is just empty space, kept
+// reserved so the row doesn't reflow when it appears. An always-visible
+// checkmark on the left read as out of place and disconnected from the
+// fields it acts on.
+component VariableRowItem inherits Rectangle {
+    in property <string> row-name;
+    in property <string> row-value;
+    in property <string> row-kind;
+    // Grabs focus on this row's Name field the instant it's created — set
+    // by the caller from `i == root.focus-row-index`, used for the
+    // freshly-appended blank row right after "+ Add Variable".
+    in property <bool> focus-name: false;
+    // (new-name, new-value) — the row's own original name (for detecting a
+    // rename-in-place) is threaded through by the caller, which already has
+    // it from the model.
+    callback confirmed(string, string);
+    callback remove-clicked();
+
+    property <bool> row-dirty: name-cell.text-value != root.row-name || value-cell.text-value != root.row-value;
+
+    height: 30px;
+
+    HorizontalLayout {
+        spacing: Theme.space-xs;
+
+        name-cell := InlineCell {
+            horizontal-stretch: 1;
+            value: root.row-name;
+            autofocus: root.focus-name;
+            // Enter here moves to Value instead of confirming — matches how
+            // a normal form's Tab order behaves, and means "Name" alone
+            // can't accidentally save an empty Value.
+            accepted => { value-cell.focus-cell(); }
+        }
+        value-cell := InlineCell {
+            horizontal-stretch: 1;
+            value: root.row-value;
+            accepted => { root.confirmed(name-cell.text-value, value-cell.text-value); }
+        }
+        Rectangle {
+            width: 60px;
+            TypeBadge {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                kind: root.row-kind;
+            }
+        }
+        Rectangle {
+            width: 24px;
+            // Explicit centering (not relying on layout defaults) — a plain
+            // child of a plain Rectangle anchors at (0,0), not vertically
+            // centered. Matches TypeBadge's own centering above for the
+            // same reason.
+            if root.row-dirty: SvgIconButton {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                icon: @image-url("../common/icons/checkmark.svg");
+                tint: Theme.success;
+                box-size: 24px;
+                icon-size: 13px;
+                clicked => { root.confirmed(name-cell.text-value, value-cell.text-value); }
+            }
+        }
+        Rectangle {
+            width: 24px;
+            // Same wrapper-plus-manual-centering shape as the checkmark
+            // slot above, even though this one's never conditional — as a
+            // *direct* HorizontalLayout child (its previous position),
+            // IconButton's own fixed 24px height put it through the
+            // layout's own cross-axis alignment instead, which didn't
+            // land on the same pixel as the checkmark's manual centering.
+            // Identical wrapper shape for both removes the discrepancy
+            // instead of trying to guess which one was "correct".
+            IconButton {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                glyph: "\u{00D7}";
+                glyph-color: Theme.danger;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}
+
+// Replaces the group ComboBoxField in place while renaming — pre-filled
+// with the current name, commits on Enter. Auto-focuses on appearing
+// (Slint re-instantiates a component guarded by `if` each time its
+// condition turns true, so `init` fires again every time this shows).
+component GroupRenameField inherits Rectangle {
+    in property <string> initial;
+    callback confirmed(string);
+
+    height: 30px;
+    background: Theme.bg-elevated;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.accent;
+
+    input := TextInput {
+        x: Theme.space-sm;
+        width: parent.width - 2 * Theme.space-sm;
+        height: 100%;
+        vertical-alignment: center;
+        color: Theme.text-primary;
+        font-size: Theme.font-size-md;
+        text: root.initial;
+        accepted => { root.confirmed(self.text); }
+        init => { self.focus(); self.select-all(); }
+    }
+}
+
+// Phase — Variables tab: named reference groups (e.g. one per raid
+// context) of plain name/value pairs a trigger's Var condition can compare
+// against via a `{name}` placeholder in its Value field (see
+// ConditionPanel's Literal/Reference toggle). Switching the active group
+// re-targets every trigger that reads a reference variable. Edits here
+// stay in-memory (same as every other trigger/condition/action edit in
+// this dialog) until the window's own Save button — there's deliberately
+// no separate Save/OK control on this tab; each row's own green check is
+// what moves a row from "being edited" to "committed", not a persistence
+// boundary of its own.
+export component VariablesTab inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: Theme.space-md;
+    alignment: start;
+
+    in-out property <string> active-group;
+    in property <[string]> group-options;
+    in-out property <bool> renaming-group: false;
+    callback group-changed(string);
+    callback new-group();
+    callback clone-group();
+    callback rename-group-confirmed(string);
+    callback delete-group();
+
+    in property <[VariableRow]> variable-rows;
+    // See settings_shell.slint's alias doc comment for the full story —
+    // briefly: which row (if any) should grab its Name field's keyboard
+    // focus right now, set by Rust for one beat after "+ Add Variable".
+    in property <int> focus-row-index: -1;
+    callback add-variable();
+    callback delete-variable(int);
+    // (row-index, original-name, new-name, new-value)
+    callback confirm-variable(int, string, string, string);
+
+    Text {
+        text: "Variables";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-xl;
+        font-weight: 700;
+    }
+    Text {
+        text: "Groups of reference values that triggers can compare against";
+        color: Theme.text-secondary;
+        font-size: Theme.font-size-sm;
+    }
+
+    Card {
+        HorizontalLayout {
+            spacing: Theme.space-xs;
+            alignment: start;
+
+            Text {
+                text: "Active group";
+                color: Theme.text-secondary;
+                font-size: Theme.font-size-sm;
+                vertical-alignment: center;
+            }
+            Rectangle { width: Theme.space-xs; }
+            // `value <=> root.active-group` (not `value: root.active-group`)
+            // matters here: ComboBoxField sets its own `value` imperatively
+            // when an option is clicked (see combo-box.slint's `item-touch`),
+            // which permanently detaches a one-way `:` binding from ever
+            // reflecting further *external* changes to `active-group` again
+            // (e.g. this tab's own delete-group fallback) — the dropdown
+            // would silently keep showing the deleted group's name forever
+            // after the first manual selection. Two-way keeps both directions
+            // live, matching how every other ComboBoxField in this dialog
+            // (e.g. Sounds tab's package picker) is already wired.
+            if !root.renaming-group: ComboBoxField {
+                width: 200px;
+                options: root.group-options;
+                value <=> root.active-group;
+                selected(v) => { root.group-changed(v); }
+            }
+            if root.renaming-group: GroupRenameField {
+                width: 200px;
+                initial: root.active-group;
+                confirmed(v) => {
+                    root.renaming-group = false;
+                    root.rename-group-confirmed(v);
+                }
+            }
+            Rectangle { width: Theme.space-xs; }
+            // Theme.icon-button-size (30px) — matches the ComboBoxField
+            // just to their left height-for-height, and is the same size
+            // trigger_panel.slint's condition/action toolbar now uses too.
+            Button {
+                width: Theme.icon-button-size;
+                height: Theme.icon-button-size;
+                h-padding: Theme.space-xs;
+                font-size: Theme.font-size-lg;
+                text: "+";
+                primary: false;
+                clicked => { root.new-group(); }
+            }
+            SvgIconButton {
+                icon: @image-url("../common/icons/clone.svg");
+                clicked => { root.clone-group(); }
+            }
+            SvgIconButton {
+                icon: @image-url("../common/icons/pencil.svg");
+                enabled: root.active-group != "Default";
+                clicked => { root.renaming-group = true; }
+            }
+            Button {
+                width: Theme.icon-button-size;
+                height: Theme.icon-button-size;
+                h-padding: Theme.space-xs;
+                font-size: Theme.font-size-lg;
+                text: "\u{00D7}";
+                primary: false;
+                enabled: root.active-group != "Default";
+                clicked => { root.delete-group(); }
+            }
+        }
+    }
+
+    Card {
+        VerticalLayout {
+            spacing: Theme.space-xs;
+
+            HorizontalLayout {
+                spacing: Theme.space-xs;
+                Text { text: "Name"; color: Theme.text-disabled; font-size: Theme.font-size-sm; horizontal-stretch: 1; }
+                Text { text: "Value"; color: Theme.text-disabled; font-size: Theme.font-size-sm; horizontal-stretch: 1; }
+                Rectangle { width: 60px; }
+                Rectangle { width: 24px; }
+                Rectangle { width: 24px; }
+            }
+            Rectangle { height: 1px; background: Theme.border; }
+
+            for row[i] in root.variable-rows: VariableRowItem {
+                row-name: row.name;
+                row-value: row.value;
+                row-kind: row.kind;
+                focus-name: i == root.focus-row-index;
+                confirmed(name, value) => { root.confirm-variable(i, row.name, name, value); }
+                remove-clicked => { root.delete-variable(i); }
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                Rectangle {
+                    width: add-text.preferred-width + 2 * Theme.space-sm;
+                    height: 26px;
+                    border-radius: Theme.radius-sm;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: add-touch.has-hover ? Theme.bg-hover : transparent;
+
+                    add-text := Text {
+                        text: "+ Add Variable";
+                        color: Theme.text-secondary;
+                        font-size: Theme.font-size-sm;
+                        x: Theme.space-sm;
+                        vertical-alignment: center;
+                        height: 100%;
+                    }
+                    add-touch := TouchArea {
+                        clicked => { root.add-variable(); }
+                    }
+                }
+            }
+        }
+    }
+}

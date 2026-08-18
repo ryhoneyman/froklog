@@ -1,0 +1,45 @@
+import { Theme } from "../theme.slint";
+
+// Square icon button backed by a real SVG asset (colorized via
+// `Image.colorize`) rather than a font glyph — avoids repeats of the ✕/✎
+// invisible-on-real-Segoe-UI problem this project already hit twice.
+// Defaults to `Theme.icon-button-size` (matches TextField/ComboBoxField's
+// own height) so it lines up with an adjacent input field; override
+// `box-size`/`icon-size` for a denser context (e.g. a table row) that needs
+// something smaller.
+export component SvgIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> enabled: true;
+    in property <bool> bordered: true;
+    in property <color> tint: Theme.text-primary;
+    in property <length> box-size: Theme.icon-button-size;
+    in property <length> icon-size: Theme.icon-button-size * 0.47;
+
+    callback clicked();
+
+    width: root.box-size;
+    height: root.box-size;
+    border-radius: Theme.radius-sm;
+    border-width: root.bordered ? 1px : 0px;
+    border-color: Theme.border;
+    background: touch.has-hover && root.enabled
+        ? Theme.bg-hover
+        : (root.bordered ? Theme.bg-elevated : transparent);
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    animate background { duration: 100ms; }
+
+    Image {
+        source: root.icon;
+        colorize: root.tint;
+        width: root.icon-size;
+        height: root.icon-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}

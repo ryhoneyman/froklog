@@ -189,6 +189,57 @@ pub async fn tail(path: String, config: TailConfig, tx: Sender<String>) {
     }
 }
 
+// ── Tail preview (sync) ──────────────────────────────────────────────────────
+
+/// Reads up to `max_lines` lines from the end of the file at `path` without
+/// reading the whole file into memory first — walks backward in fixed-size
+/// chunks until enough newlines are seen, so it stays fast even against a
+/// gigabyte-scale EQ log. Backs the Settings window's Debug tab (a plain
+/// blocking `std::fs` read, called from the Slint UI thread on tab
+/// open/line-count change — unlike `tail` above, there's no live-follow
+/// here, so there's no need for the async tokio path). Returns lines in
+/// original (oldest-first) order, or empty if the file doesn't exist / can't
+/// be read.
+pub fn read_tail_lines(path: &str, max_lines: usize) -> Vec<String> {
+    use std::fs::File;
+    use std::io::{Read, Seek, SeekFrom};
+
+    if max_lines == 0 {
+        return Vec::new();
+    }
+    let Ok(mut file) = File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(len) = file.seek(SeekFrom::End(0)) else {
+        return Vec::new();
+    };
+
+    const CHUNK: u64 = 64 * 1024;
+    let mut pos = len;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut newline_count = 0usize;
+
+    while pos > 0 && newline_count <= max_lines {
+        let read_size = CHUNK.min(pos);
+        pos -= read_size;
+        if file.seek(SeekFrom::Start(pos)).is_err() {
+            break;
+        }
+        let mut chunk = vec![0u8; read_size as usize];
+        if file.read_exact(&mut chunk).is_err() {
+            break;
+        }
+        newline_count += chunk.iter().filter(|&&b| b == b'\n').count();
+        chunk.extend_from_slice(&buf);
+        buf = chunk;
+    }
+
+    let text = String::from_utf8_lossy(&buf);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].iter().map(|s| s.to_string()).collect()
+}
+
 // ── Binary seek ───────────────────────────────────────────────────────────────
 
 /// Seek `file` to the byte just before the first line whose timestamp >= `target`.
@@ -448,5 +499,56 @@ mod tests {
     #[test]
     fn duration_empty_err() {
         assert!(parse_duration_str("").is_err());
+    }
+
+    // ── read_tail_lines ───────────────────────────────────────────────────────
+    fn write_temp_log(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn tail_lines_returns_last_n_in_order() {
+        let path = write_temp_log(
+            "froklog_tail_test_last_n.log",
+            "line1\nline2\nline3\nline4\nline5\n",
+        );
+        let lines = read_tail_lines(path.to_str().unwrap(), 3);
+        assert_eq!(lines, vec!["line3", "line4", "line5"]);
+    }
+
+    #[test]
+    fn tail_lines_fewer_than_requested_returns_all() {
+        let path = write_temp_log("froklog_tail_test_fewer.log", "line1\nline2\n");
+        let lines = read_tail_lines(path.to_str().unwrap(), 100);
+        assert_eq!(lines, vec!["line1", "line2"]);
+    }
+
+    #[test]
+    fn tail_lines_spans_multiple_chunks() {
+        // Force more than one 64KB backward-read chunk.
+        let mut content = String::new();
+        for i in 0..5000 {
+            content.push_str(&format!("padding line number {i} with some extra text\n"));
+        }
+        content.push_str("final-marker-line\n");
+        let path = write_temp_log("froklog_tail_test_multi_chunk.log", &content);
+        let lines = read_tail_lines(path.to_str().unwrap(), 5);
+        assert_eq!(lines.last().unwrap(), "final-marker-line");
+        assert_eq!(lines.len(), 5);
+    }
+
+    #[test]
+    fn tail_lines_missing_file_returns_empty() {
+        let lines = read_tail_lines("/nonexistent/froklog_tail_test.log", 10);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn tail_lines_zero_requested_returns_empty() {
+        let path = write_temp_log("froklog_tail_test_zero.log", "line1\n");
+        let lines = read_tail_lines(path.to_str().unwrap(), 0);
+        assert!(lines.is_empty());
     }
 }

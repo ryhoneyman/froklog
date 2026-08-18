@@ -10,7 +10,7 @@
 ///
 /// Condition types:
 ///   - match : compare the log line with an exact string, regex, or glob pattern
-///   - var   : test a value with isset/equals/gt/gte/lt/lte/matches. `var_name`
+///   - var   : test a value with isset/equals/gt/gte/lt/lte/contains/matches. `var_name`
 ///     resolves against a capture group from an earlier Match condition *in the
 ///     same trigger* first, then falls back to a persisted `store_var` variable —
 ///     so a Regex condition can capture a number and a following Var condition
@@ -69,6 +69,8 @@ pub mod engine {
         Lt,
         /// Numeric less-than-or-equal.
         Lte,
+        /// Case-insensitive substring match.
+        Contains,
         /// Variable value matches a regex pattern.
         Matches,
     }
@@ -111,7 +113,7 @@ pub mod engine {
     }
 
     /// A single trigger condition stored in triggers.toml.
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     #[serde(tag = "type", rename_all = "snake_case")]
     pub enum Condition {
         /// Test the incoming log line.
@@ -197,7 +199,7 @@ pub mod engine {
     }
 
     /// A single action executed when a trigger fires.
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     #[serde(tag = "type", rename_all = "snake_case")]
     pub enum Action {
         /// Show a message in the overlay.
@@ -270,7 +272,7 @@ pub mod engine {
     }
 
     /// One trigger definition as stored in triggers.toml.
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub struct TriggerDef {
         pub name: String,
         #[serde(default = "default_true")]
@@ -284,23 +286,74 @@ pub mod engine {
     }
 
     /// Root document in triggers.toml.
-    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
     pub struct TriggerConfig {
         #[serde(default, rename = "trigger")]
         pub triggers: Vec<TriggerDef>,
+        /// Named reference groups (e.g. one per raid context), each a flat
+        /// set of variable name -> value. `BTreeMap` (not `HashMap`) so both
+        /// the TOML file and the Variables tab's list order stay stable
+        /// across saves instead of shuffling on every write. Values are
+        /// always plain strings — number vs. text is inferred at compare
+        /// time by `cmp_numeric`, exactly like `store_var` already does, so
+        /// there's no separate typed variant to keep in sync here.
+        #[serde(default)]
+        pub reference_groups:
+            std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+        /// Which `reference_groups` key is currently live. A `Condition::Var`
+        /// whose `value` is a `{name}` placeholder resolves it against this
+        /// group (see `EngineInner::from_config` seeding `vars` from it) —
+        /// switching this one field re-targets every trigger that reads a
+        /// reference variable, with no trigger edits.
+        #[serde(default)]
+        pub active_reference_group: String,
     }
+
+    /// The one reference group the Variables tab UI refuses to rename or
+    /// delete — new variables land here until the user creates their own
+    /// group, and it's the fallback `active_reference_group` repairs to if
+    /// that key ever goes missing (a hand-edited triggers.toml, mainly).
+    pub const DEFAULT_REFERENCE_GROUP: &str = "Default";
 
     impl TriggerConfig {
         pub fn load() -> Self {
             let path = triggers_path();
             let Ok(text) = std::fs::read_to_string(&path) else {
-                return Self::default();
+                let mut cfg = Self::default();
+                cfg.ensure_default_reference_group();
+                cfg.save();
+                return cfg;
             };
             let mut cfg: Self = toml::from_str(&text).unwrap_or_default();
-            if migrate_legacy_sounds(&mut cfg) {
+            let mut changed = migrate_legacy_sounds(&mut cfg);
+            changed |= trim_trigger_strings(&mut cfg);
+            changed |= cfg.ensure_default_reference_group();
+            if changed {
                 cfg.save();
             }
             cfg
+        }
+
+        /// Guarantees `DEFAULT_REFERENCE_GROUP` exists and
+        /// `active_reference_group` names a real group. Returns whether
+        /// anything changed, so callers know whether to persist it.
+        pub fn ensure_default_reference_group(&mut self) -> bool {
+            let mut changed = false;
+            if !self.reference_groups.contains_key(DEFAULT_REFERENCE_GROUP) {
+                self.reference_groups.insert(
+                    DEFAULT_REFERENCE_GROUP.to_string(),
+                    std::collections::BTreeMap::new(),
+                );
+                changed = true;
+            }
+            if !self
+                .reference_groups
+                .contains_key(&self.active_reference_group)
+            {
+                self.active_reference_group = DEFAULT_REFERENCE_GROUP.to_string();
+                changed = true;
+            }
+            changed
         }
 
         pub fn save(&self) {
@@ -339,6 +392,76 @@ pub mod engine {
                         }
                         *sound = None;
                         changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    /// Strips leading/trailing whitespace from every free-text field on
+    /// every trigger. Older entries — hand-edited, imported, or
+    /// copy-pasted from a forum/GINA export — can carry a trailing space or
+    /// `\r\n` that's invisible in the editor but silently breaks
+    /// exact/regex matching (see the
+    /// `trailing_crlf_in_pattern_prevents_matching` test). Returns whether
+    /// anything changed, so the caller knows to persist it. Idempotent —
+    /// an already-trimmed string trims to itself.
+    fn trim_trigger_strings(cfg: &mut TriggerConfig) -> bool {
+        let mut changed = false;
+        let mut trim = |s: &mut String| {
+            let trimmed_len = s.trim().len();
+            if trimmed_len != s.len() {
+                *s = s.trim().to_string();
+                changed = true;
+            }
+        };
+        for def in &mut cfg.triggers {
+            trim(&mut def.name);
+            for cond in &mut def.conditions {
+                match cond {
+                    Condition::Match { pattern, .. } => trim(pattern),
+                    Condition::Var {
+                        var_name, value, ..
+                    } => {
+                        trim(var_name);
+                        trim(value);
+                    }
+                    Condition::Chat {
+                        custom_channel,
+                        pattern,
+                        ..
+                    } => {
+                        trim(custom_channel);
+                        trim(pattern);
+                    }
+                }
+            }
+            for action in &mut def.actions {
+                match action {
+                    Action::Overlay {
+                        icon,
+                        color,
+                        message,
+                        message_color,
+                        border_color,
+                        ..
+                    } => {
+                        trim(icon);
+                        trim(color);
+                        trim(message);
+                        trim(message_color);
+                        trim(border_color);
+                    }
+                    Action::VoiceAlert { tts_text, .. } => trim(tts_text),
+                    Action::PlaySound { sounds, .. } => {
+                        for s in sounds {
+                            trim(s);
+                        }
+                    }
+                    Action::StoreVar { var_name, value } => {
+                        trim(var_name);
+                        trim(value);
                     }
                 }
             }
@@ -481,6 +604,100 @@ pub mod engine {
         pub fn fire_actions_for_test(&self, actions: &[Action]) {
             self.inner.lock().unwrap().fire_actions_for_test(actions);
         }
+
+        /// Dry-run evaluation for the Settings window's Debug tab: the same
+        /// condition/logic matching `process_line` does, but never calls
+        /// `execute_actions` — no overlay events, sounds, or TTS actually
+        /// fire, and `vars` is read-only here. Safe to call repeatedly over
+        /// a historical tail of a log file. Returns one `LineMatch` per
+        /// trigger that would have fired on `raw_line`.
+        pub fn preview_line(&self, raw_line: &str) -> Vec<LineMatch> {
+            let inner = self.inner.lock().unwrap();
+            let line = strip_eq_timestamp(raw_line);
+            let mut out = Vec::new();
+
+            for trigger in &inner.triggers {
+                let mut results: Vec<bool> = Vec::with_capacity(trigger.conditions.len());
+                let mut caps = CaptureMap::default();
+                let mut caps_set = false;
+
+                for cond in &trigger.conditions {
+                    let (passed, maybe_caps) = eval_condition(cond, line, &inner.vars, &caps);
+                    results.push(passed);
+                    if passed {
+                        if let Some(c) = maybe_caps {
+                            if !caps_set {
+                                caps.positional = c.positional;
+                                caps_set = true;
+                            }
+                            caps.named.extend(c.named);
+                        }
+                    }
+                }
+
+                let fired = match trigger.logic {
+                    ConditionLogic::All => results.iter().all(|&b| b),
+                    ConditionLogic::Any => results.is_empty() || results.iter().any(|&b| b),
+                };
+                if !fired {
+                    continue;
+                }
+
+                let mut shows_overlay = false;
+                let mut plays_sound = false;
+                let mut speaks_voice = false;
+                let mut emergency = false;
+                for action in &trigger.actions {
+                    match action {
+                        Action::Overlay { .. } => shows_overlay = true,
+                        Action::PlaySound { .. } => plays_sound = true,
+                        Action::VoiceAlert { priority, .. } => {
+                            speaks_voice = true;
+                            if matches!(priority, VoicePriority::Emergency) {
+                                emergency = true;
+                            }
+                        }
+                        Action::StoreVar { .. } => {}
+                    }
+                }
+
+                // Named captures only (not positional groups) — this feeds
+                // the Debug tab's highlight-in-gold rendering, which is
+                // meant to call out `(?P<name>...)` values specifically
+                // (the same ones a `{name}` reference/template can read),
+                // not every parenthesized group a pattern happens to use.
+                let mut captures: Vec<String> = Vec::new();
+                for v in caps.named.values() {
+                    if !v.is_empty() && !captures.contains(v) {
+                        captures.push(v.clone());
+                    }
+                }
+
+                out.push(LineMatch {
+                    trigger_name: trigger.name.clone(),
+                    emergency,
+                    shows_overlay,
+                    plays_sound,
+                    speaks_voice,
+                    captures,
+                });
+            }
+
+            out
+        }
+    }
+
+    /// One trigger's dry-run result from `TriggerEngine::preview_line`.
+    pub struct LineMatch {
+        pub trigger_name: String,
+        pub emergency: bool,
+        pub shows_overlay: bool,
+        pub plays_sound: bool,
+        pub speaks_voice: bool,
+        /// Distinct, non-empty capture group values (positional groups 1+
+        /// and named groups) — used by the Debug tab to highlight them
+        /// inline wherever they occur in the displayed line.
+        pub captures: Vec<String>,
     }
 
     // ── Engine inner ──────────────────────────────────────────────────────────
@@ -507,9 +724,21 @@ pub mod engine {
                 triggers.len(),
                 cfg.triggers.len()
             );
+            // Seed `vars` from the active reference group so a `Condition::Var`
+            // whose `value` is a `{name}` placeholder resolves immediately,
+            // with no `store_var` action needed first. `store_var` writes to
+            // this same map at runtime and can shadow a reference variable of
+            // the same name — same last-write-wins behavior any two
+            // `store_var`s already have.
+            let mut vars = HashMap::new();
+            if let Some(group) = cfg.reference_groups.get(&cfg.active_reference_group) {
+                for (name, value) in group {
+                    vars.insert(name.clone(), value.clone());
+                }
+            }
             Self {
                 triggers,
-                vars: HashMap::new(),
+                vars,
                 pending: Vec::new(),
                 output,
                 lines_processed: 0,
@@ -770,6 +999,40 @@ pub mod engine {
         }
     }
 
+    /// Every named capture group findable across all triggers' Regex/Glob
+    /// Match/Chat conditions — regex's own `(?P<name>...)` and Glob's
+    /// `{name}` alike, since `glob_to_regex` compiles the latter into the
+    /// former. Sorted and deduplicated. Powers the Condition editor's
+    /// "Variable name" combo box (still free-typeable for anything not
+    /// found here, e.g. a `store_var`-only name) — reuses `compile_pattern`
+    /// rather than re-parsing patterns, so it can never disagree with what
+    /// the engine itself would actually capture at runtime.
+    pub fn discover_named_vars(cfg: &TriggerConfig) -> Vec<String> {
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for def in &cfg.triggers {
+            for cond in &def.conditions {
+                let (match_type, pattern) = match cond {
+                    Condition::Match {
+                        match_type,
+                        pattern,
+                    } => (match_type, pattern),
+                    Condition::Chat {
+                        match_type,
+                        pattern,
+                        ..
+                    } => (match_type, pattern),
+                    Condition::Var { .. } => continue,
+                };
+                if let Some(CompiledMatch::Regex(re)) = compile_pattern(match_type, pattern) {
+                    for name in re.capture_names().flatten() {
+                        names.insert(name.to_owned());
+                    }
+                }
+            }
+        }
+        names.into_iter().collect()
+    }
+
     // ── Condition evaluation ──────────────────────────────────────────────────
 
     /// Shared by `Match` and `Chat` conditions: both compile a `match_type` +
@@ -1016,6 +1279,16 @@ pub mod engine {
             } => {
                 let stored = resolve_var(var_name, caps, vars);
                 let stored = stored.as_deref();
+                // Resolve `{name}` placeholders in the comparison value itself —
+                // this is what lets the Condition editor's "Reference Variable"
+                // picker just write `{split_threshold}` into `value` and have it
+                // read live from whichever reference group is currently active
+                // (reference-group values are seeded into `vars` at trigger-
+                // engine load time, see `EngineInner::from_config`), with no new
+                // schema on `Action::StoreVar`/`Condition::Var`. A literal value
+                // with no `{...}` in it resolves to itself unchanged.
+                let value = resolve_template(value, caps, vars);
+                let value = value.as_str();
                 let result = match op {
                     VarOp::Isset => stored.is_some(),
                     VarOp::Equals => stored
@@ -1025,6 +1298,9 @@ pub mod engine {
                     VarOp::Gte => cmp_numeric(stored, value, |a, b| a >= b),
                     VarOp::Lt => cmp_numeric(stored, value, |a, b| a < b),
                     VarOp::Lte => cmp_numeric(stored, value, |a, b| a <= b),
+                    VarOp::Contains => stored
+                        .map(|v| v.to_ascii_lowercase().contains(&value.to_ascii_lowercase()))
+                        .unwrap_or(false),
                     VarOp::Matches => {
                         if let Some(v) = stored {
                             Regex::new(value).map(|re| re.is_match(v)).unwrap_or(false)
@@ -1193,6 +1469,59 @@ pub mod engine {
             );
         }
 
+        /// Named groups (`(?<name>...)`, not the older `(?P<name>...)`) plus
+        /// a bare, unescaped `(Critical)` relying on `auto_escape_literal_groups`
+        /// — the exact shape of pattern a user reported not firing. Confirms
+        /// the engine/auto-escape mechanism itself is fine; the real bug (if
+        /// any) is elsewhere (match type not set to Regex, another ANDed
+        /// condition failing, the edit never actually reaching `trigger_cfg`).
+        #[test]
+        fn named_groups_and_unescaped_literal_paren_group_both_work_together() {
+            let cfg = overlay_trigger(
+                r"You (?<melee_type>\w+) .+? for (?<damage>\d+) points of damage\.\s*(Critical)",
+            );
+            assert_eq!(
+                fired(
+                    &cfg,
+                    "You slash a greater skeleton for 96 points of damage. (Critical)"
+                ),
+                1,
+                "should fire on an unstamped critical hit line"
+            );
+        }
+
+        /// Root cause of a real report: a pattern pasted from elsewhere
+        /// carried an invisible trailing `\r\n`, and the Condition editor
+        /// saved it verbatim — a line's own text (from `read_tail_lines`/
+        /// the tailer) never itself contains a literal newline, so a
+        /// pattern requiring one at the end can never match anything, no
+        /// matter how correct the rest of it is. `settings_window.rs`'s
+        /// `on_condition_panel_ok` now `trim_end()`s every free-text
+        /// Condition field before saving; this documents *why* that fix
+        /// matters (the engine itself has no way to know a trailing
+        /// newline was accidental) rather than testing the Rust-side UI
+        /// callback directly, which isn't unit-testable in isolation.
+        #[test]
+        fn trailing_crlf_in_pattern_prevents_matching() {
+            let line = "You punch a Teir`Dal ranger for 85 points of damage. (Critical)";
+            let base =
+                r"You (?<melee_type>\w+) .+? for (?<damage>\d+) points of damage\.\s*(Critical)";
+
+            let broken = overlay_trigger(&format!("{base}\r\n"));
+            assert_eq!(
+                fired(&broken, line),
+                0,
+                "an untrimmed trailing \\r\\n must prevent the match"
+            );
+
+            let fixed = overlay_trigger(base.trim_end());
+            assert_eq!(
+                fired(&fixed, line),
+                1,
+                "the same pattern, trimmed, must match"
+            );
+        }
+
         #[test]
         fn anchored_pattern_ignores_chat_pasted_copies() {
             let cfg = overlay_trigger(r"^You slash .+ for (\d+) points of damage\. \(Critical\)");
@@ -1246,6 +1575,7 @@ pub mod engine {
                         delay_secs: 0.0,
                     }],
                 }],
+                ..Default::default()
             };
             assert!(migrate_legacy_sounds(&mut cfg));
             let Action::PlaySound { sound, sounds, .. } = &cfg.triggers[0].actions[0] else {
@@ -1255,6 +1585,51 @@ pub mod engine {
             assert_eq!(sounds, &vec!["aggro".to_string()]);
             // Idempotent: a second pass over already-migrated data is a no-op.
             assert!(!migrate_legacy_sounds(&mut cfg));
+        }
+
+        #[test]
+        fn trim_trigger_strings_strips_stray_whitespace() {
+            let mut cfg = TriggerConfig {
+                triggers: vec![TriggerDef {
+                    name: " Aggro Warning \r\n".into(),
+                    enabled: true,
+                    condition_logic: ConditionLogic::default(),
+                    conditions: vec![Condition::Match {
+                        match_type: MatchType::Regex,
+                        pattern: "You have been slain by .+\r\n".into(),
+                    }],
+                    actions: vec![
+                        Action::VoiceAlert {
+                            tts_text: " incoming! ".into(),
+                            priority: VoicePriority::default(),
+                        },
+                        Action::PlaySound {
+                            sound: None,
+                            sounds: vec![" aggro \n".into()],
+                            mode: SoundMode::default(),
+                            delay_secs: 0.0,
+                        },
+                    ],
+                }],
+                ..Default::default()
+            };
+            assert!(trim_trigger_strings(&mut cfg));
+            let def = &cfg.triggers[0];
+            assert_eq!(def.name, "Aggro Warning");
+            let Condition::Match { pattern, .. } = &def.conditions[0] else {
+                panic!("expected Match");
+            };
+            assert_eq!(pattern, "You have been slain by .+");
+            let Action::VoiceAlert { tts_text, .. } = &def.actions[0] else {
+                panic!("expected VoiceAlert");
+            };
+            assert_eq!(tts_text, "incoming!");
+            let Action::PlaySound { sounds, .. } = &def.actions[1] else {
+                panic!("expected PlaySound");
+            };
+            assert_eq!(sounds, &vec!["aggro".to_string()]);
+            // Idempotent: a second pass over already-trimmed data is a no-op.
+            assert!(!trim_trigger_strings(&mut cfg));
         }
 
         #[test]
@@ -1468,6 +1843,138 @@ pub mod engine {
                 let (fired, _) = eval_condition(&compiled, line, &vars, &caps);
                 assert!(!fired, "{line} should not satisfy a Tell-only condition");
             }
+        }
+
+        #[test]
+        fn discover_named_vars_finds_regex_and_glob_names() {
+            let cfg = TriggerConfig {
+                triggers: vec![
+                    TriggerDef {
+                        name: "regex-one".into(),
+                        enabled: true,
+                        condition_logic: ConditionLogic::default(),
+                        conditions: vec![Condition::Match {
+                            match_type: MatchType::Regex,
+                            pattern: r"(?P<dmg>\d+) points".into(),
+                        }],
+                        actions: vec![],
+                    },
+                    TriggerDef {
+                        name: "glob-one".into(),
+                        enabled: true,
+                        condition_logic: ConditionLogic::default(),
+                        conditions: vec![Condition::Match {
+                            match_type: MatchType::Glob,
+                            pattern: "You have slain {mob}!".into(),
+                        }],
+                        actions: vec![],
+                    },
+                ],
+                ..Default::default()
+            };
+            assert_eq!(discover_named_vars(&cfg), vec!["dmg", "mob"]);
+        }
+
+        /// End-to-end: a reference group's values are seeded into the live
+        /// engine's `vars` at load time, and a Var condition's `value` field
+        /// resolves a `{name}` placeholder against them — the mechanism the
+        /// Condition editor's "Reference Variable" mode relies on.
+        #[test]
+        fn var_condition_compares_against_active_reference_group() {
+            let mut reference_groups = std::collections::BTreeMap::new();
+            let mut raid_group = std::collections::BTreeMap::new();
+            raid_group.insert("threshold".to_string(), "50000".to_string());
+            reference_groups.insert("raid".to_string(), raid_group);
+
+            let cfg = TriggerConfig {
+                triggers: vec![TriggerDef {
+                    name: "big hit".into(),
+                    enabled: true,
+                    condition_logic: ConditionLogic::All,
+                    conditions: vec![
+                        Condition::Match {
+                            match_type: MatchType::Regex,
+                            pattern: r"(?P<dmg>\d+) points".into(),
+                        },
+                        Condition::Var {
+                            var_name: "dmg".into(),
+                            op: VarOp::Gt,
+                            value: "{threshold}".into(),
+                        },
+                    ],
+                    actions: vec![Action::Overlay {
+                        icon: String::new(),
+                        color: String::new(),
+                        message: "big hit!".into(),
+                        message_color: String::new(),
+                        border_color: String::new(),
+                        delay_secs: 0.0,
+                        treatment: Treatment::default(),
+                        priority: VoicePriority::default(),
+                    }],
+                }],
+                reference_groups,
+                active_reference_group: "raid".into(),
+            };
+
+            assert_eq!(
+                fired(&cfg, "5000 points"),
+                0,
+                "below the reference threshold must not fire"
+            );
+            assert_eq!(
+                fired(&cfg, "999999 points"),
+                1,
+                "above the reference threshold must fire"
+            );
+        }
+
+        /// A Reference-mode Var condition whose `{name}` placeholder isn't
+        /// present in the active reference group (typo'd, deleted, or
+        /// belongs to a different group than the one currently active) must
+        /// just fail to match — `resolve_template` leaves the placeholder
+        /// text unresolved (see its doc comment) and every `VarOp` arm
+        /// already treats an unparsable/non-matching comparison value as a
+        /// non-match rather than erroring, so this only needs a regression
+        /// test, not a code change.
+        #[test]
+        fn var_condition_with_unset_reference_fails_to_match_without_erroring() {
+            let cfg = TriggerConfig {
+                triggers: vec![TriggerDef {
+                    name: "big hit".into(),
+                    enabled: true,
+                    condition_logic: ConditionLogic::All,
+                    conditions: vec![
+                        Condition::Match {
+                            match_type: MatchType::Regex,
+                            pattern: r"(?P<dmg>\d+) points".into(),
+                        },
+                        Condition::Var {
+                            var_name: "dmg".into(),
+                            op: VarOp::Gt,
+                            value: "{nonexistent}".into(),
+                        },
+                    ],
+                    actions: vec![Action::Overlay {
+                        icon: String::new(),
+                        color: String::new(),
+                        message: "big hit!".into(),
+                        message_color: String::new(),
+                        border_color: String::new(),
+                        delay_secs: 0.0,
+                        treatment: Treatment::default(),
+                        priority: VoicePriority::default(),
+                    }],
+                }],
+                reference_groups: std::collections::BTreeMap::new(),
+                active_reference_group: "Default".into(),
+            };
+
+            assert_eq!(
+                fired(&cfg, "999999 points"),
+                0,
+                "an unresolved reference placeholder must fail the match, not fire or panic"
+            );
         }
     }
 }

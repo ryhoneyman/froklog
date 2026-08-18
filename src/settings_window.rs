@@ -17,7 +17,7 @@
 #[cfg(feature = "tray")]
 #[allow(clippy::module_inception)]
 pub mod settings_window {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -33,8 +33,8 @@ pub mod settings_window {
     use crate::tray::tray::{copy_to_clipboard, AppHandle};
     use crate::trigger_presets::effective_presets;
     use crate::triggers::engine::{
-        Action, ChatChannel, Condition, ConditionLogic, MatchType, SoundMode, Treatment,
-        TriggerConfig, TriggerDef, VarOp, VoicePriority,
+        Action, ChatChannel, Condition, ConditionLogic, LineMatch, MatchType, SoundMode, Treatment,
+        TriggerConfig, TriggerDef, TriggerEngine, VarOp, VoicePriority, DEFAULT_REFERENCE_GROUP,
     };
 
     // Each entry point compiled separately by build.rs; explicit `include!`
@@ -75,6 +75,31 @@ pub mod settings_window {
     fn str_model(items: &[String]) -> ModelRc<SharedString> {
         let v: Vec<SharedString> = items.iter().map(|s| s.as_str().into()).collect();
         ModelRc::new(VecModel::from(v))
+    }
+
+    /// Maps `Config::overlay_hide_inactive_secs` to the Overlays tab's
+    /// "Hide when inactive" pulldown index — see `appearance_tab.slint`'s
+    /// `hide-inactive-options` (Never, after 30s, after 60s, after 5m).
+    /// An unrecognized saved value (hand-edited config.toml) falls back to
+    /// the 30s default rather than "Never", so a garbage value doesn't
+    /// silently disable the feature.
+    fn hide_inactive_index_for_secs(secs: u32) -> i32 {
+        match secs {
+            0 => 0,
+            30 => 1,
+            60 => 2,
+            300 => 3,
+            _ => 1,
+        }
+    }
+
+    fn hide_inactive_secs_for_index(index: i32) -> u32 {
+        match index {
+            0 => 0,
+            2 => 60,
+            3 => 300,
+            _ => 30,
+        }
     }
 
     /// Which color-preview property a pushed `ColorPicker` panel should
@@ -171,11 +196,27 @@ pub mod settings_window {
 
     // ── Public entry points (called from tray.rs) ─────────────────────────────
 
+    /// `.show()` alone doesn't restack an already-visible window above
+    /// whatever else has been clicked on top of it since (e.g. the game) —
+    /// on Windows it only affects minimized/hidden windows, not z-order.
+    /// Un-minimizing (winit's `focus_window` is a no-op on a minimized
+    /// window per its own doc comment) then explicitly focusing is what
+    /// actually raises it to the front, mirroring how a taskbar/alt-tab
+    /// click behaves.
+    fn force_to_front(window: &SettingsWindow) {
+        let _ = window.show();
+        use slint::winit_030::WinitWindowAccessor;
+        let _ = window.window().with_winit_window(|w| {
+            w.set_minimized(false);
+            w.focus_window();
+        });
+    }
+
     pub fn raise_settings(tab: i32) {
         SETTINGS_WINDOW.with(|c| {
             if let Some(w) = c.borrow().as_ref().and_then(|w| w.upgrade()) {
                 w.set_current_tab(tab);
-                let _ = w.show();
+                force_to_front(&w);
             }
         });
     }
@@ -183,7 +224,7 @@ pub mod settings_window {
     pub fn raise_settings_no_tab_change() {
         SETTINGS_WINDOW.with(|c| {
             if let Some(w) = c.borrow().as_ref().and_then(|w| w.upgrade()) {
-                let _ = w.show();
+                force_to_front(&w);
             }
         });
     }
@@ -258,57 +299,68 @@ pub mod settings_window {
 
         let trigger_cfg = Rc::new(RefCell::new(TriggerConfig::load()));
         let panel_stack: Rc<RefCell<Vec<PanelFrame>>> = Rc::new(RefCell::new(Vec::new()));
+        // Count of still-blank "+ Add Variable" rows not yet confirmed for
+        // whichever group is currently open — see `wire_variables_callbacks`'s
+        // doc comment.
+        let pending_new_rows: Rc<Cell<usize>> = Rc::new(Cell::new(0));
 
         load_config(&window, &handle);
         refresh_trigger_rows(&window, &trigger_cfg);
+        refresh_variables_tab(&window, &trigger_cfg, &pending_new_rows, None);
+        refresh_debug_tab(&window, &handle, &trigger_cfg);
         wire_callbacks(&window, &handle, &trigger_cfg, &panel_stack);
+        wire_variables_callbacks(&window, &handle, &trigger_cfg, &pending_new_rows);
 
-        // The titlebar X is the only way to close Settings now (see
-        // settings_shell.slint's pending-changes dialog doc comment) — if
-        // any Save-gated field is dirty, veto the close and pop that dialog
-        // instead of silently discarding the edit; otherwise close for real.
-        // Also used to discard an in-progress drawer edit (trigger/
-        // condition/action/etc.) — no separate veto needed for that any
-        // more now that add/edit flows are an embedded drawer inside this
-        // same window rather than a second top-level window that could be
-        // orphaned (see common/modal-scrim.slint's doc comment).
+        // Debug tab's "Live" checkbox: re-reads the active log's tail on a
+        // short repeating timer while checked and the Debug tab is the one
+        // showing — the log list's own viewport height changing on every
+        // tick is what drives its snap-to-bottom (see scroll-area.slint's
+        // `stick-to-bottom`/`tracked-viewport-height`), so this timer's
+        // only job is to keep the row data itself fresh. Gated on
+        // `current_tab == 7` (the Debug tab —
+        // see settings_shell.slint's `tab-names`) so it's a no-op while any
+        // other tab is showing, even though the window is likely still
+        // `Weak`-alive and ticking in the background regardless. Kept alive
+        // for the life of the window via `mem::forget`, same as every other
+        // repeating UI timer in this codebase (e.g. overlay_history.rs's
+        // refresh timer).
+        {
+            let weak = window.as_weak();
+            let handle = Arc::clone(&handle);
+            let trigger_cfg = trigger_cfg.clone();
+            let timer = slint::Timer::default();
+            timer.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(750),
+                move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if w.get_current_tab() == 7 && w.get_debug_live() {
+                        refresh_debug_tab(&w, &handle, &trigger_cfg);
+                    }
+                },
+            );
+            std::mem::forget(timer);
+        }
+
+        // The titlebar X is the only way to close Settings now. Every field
+        // saves itself as it's edited (see settings_shell.slint's header
+        // comment), so there's nothing left to lose on close — just tear
+        // down and hide. Also used to discard an in-progress drawer edit
+        // (trigger/condition/action/etc.) — no separate veto needed for
+        // that any more now that add/edit flows are an embedded drawer
+        // inside this same window rather than a second top-level window
+        // that could be orphaned (see common/modal-scrim.slint's doc
+        // comment).
         {
             let handle = Arc::clone(&handle);
-            let weak = window.as_weak();
             window.window().on_close_requested(move || {
-                let w = weak.upgrade().unwrap();
-                if w.get_dirty() {
-                    w.set_pending_changes_open(true);
-                    return slint::CloseRequestResponse::KeepWindowShown;
-                }
                 finish_close_bookkeeping(&handle);
                 slint::CloseRequestResponse::HideWindow
             });
         }
 
         SETTINGS_WINDOW.with(|c| *c.borrow_mut() = Some(window.as_weak()));
-        tracing::info!("open_settings: about to show, dirty={}", window.get_dirty());
         window.show().expect("show settings window");
-
-        // load_config's population above sets dirty-gated fields (e.g.
-        // start-font-size) whose `changed` notifications Slint defers until
-        // the window's first render, which happens inside/after `show()`
-        // above — resetting `dirty` before that point gets silently
-        // clobbered back to `true` once the deferred notifications flush.
-        // Queue the real reset for the next event-loop tick so it runs
-        // after that flush instead of racing it.
-        {
-            let weak = window.as_weak();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    tracing::info!(
-                        "open_settings: deferred dirty reset, was dirty={}",
-                        w.get_dirty()
-                    );
-                    w.set_dirty(false);
-                }
-            });
-        }
     }
 
     // ── Load Config -> Slint properties ───────────────────────────────────────
@@ -366,6 +418,11 @@ pub mod settings_window {
 
     fn load_config(window: &SettingsWindow, handle: &Arc<AppHandle>) {
         let cfg = handle.config.lock().unwrap();
+
+        // About tab. Static for the process's lifetime — set once here
+        // rather than threaded through Config, since it's build metadata,
+        // not a user setting.
+        window.set_app_version(env!("CARGO_PKG_VERSION").into());
 
         // General tab.
         window.set_import_status("".into());
@@ -429,6 +486,7 @@ pub mod settings_window {
 
         // Voice tab.
         window.set_tts_enabled(cfg.tts_enabled);
+        window.set_tts_volume(cfg.tts_volume as f32);
         window.set_tts_speed(
             match cfg.tts_speed {
                 TtsSpeed::Normal => "Normal (1x)",
@@ -469,6 +527,8 @@ pub mod settings_window {
             AlertStyle::Separate => 0,
             AlertStyle::Merged => 1,
         });
+        window
+            .set_hide_inactive_index(hide_inactive_index_for_secs(cfg.overlay_hide_inactive_secs));
         window.set_win_merged_enabled(cfg.overlay_merged.enabled);
         window.set_win_merged_locked(cfg.overlay_merged.locked);
         window.set_win_merged_pos_x(cfg.overlay_merged.x.to_string().into());
@@ -480,17 +540,6 @@ pub mod settings_window {
         window.set_sound_volume(cfg.sound_volume as f32);
         refresh_sound_packages(window, &cfg.sound_package);
         refresh_sound_labels(window, &cfg.sound_package);
-
-        // Every `set_*` above walks the Save-gated fields through their
-        // `changed` handlers, which flip `dirty` true on any value change
-        // from the freshly-constructed window's defaults. Resetting `dirty`
-        // here doesn't stick, though: Slint defers at least some of those
-        // `changed` notifications (confirmed via logging — e.g.
-        // start-font-size's fired 8ms after `show()`, not during this
-        // synchronous population) until the window's first render, which
-        // happens inside/after `show()`. The real reset lives in
-        // `open_settings`, deferred via `invoke_from_event_loop` so it runs
-        // after that first-render flush instead of being clobbered by it.
     }
 
     /// Refreshes the log-profile list, Auto-detect checkbox, and "Currently
@@ -601,6 +650,359 @@ pub mod settings_window {
         window.set_selected_label_index(-1);
     }
 
+    // ── Variables tab ────────────────────────────────────────────────────────
+    //
+    // Variables autosaves: a row's green check, a new group, a rename, or a
+    // delete all write `trigger_cfg` to disk and reload the live trigger
+    // engine immediately, via `persist_and_reload_triggers` below. Every
+    // other mutation of `trigger_cfg` — the Trigger list's add/edit (via the
+    // drawer's Trigger panel OK, which is also where a Condition/Action
+    // panel's own OK ends up landing, since those only edit that in-progress
+    // trigger's scratch state), delete, move, and toggle — calls the same
+    // helper at its own point of mutation, now that there's no single
+    // end-of-session Save button to do it all at once instead.
+    //
+    // `pending_new_rows` tracks how many still-blank rows are appended below
+    // the confirmed ones (via "+ Add Variable") — nothing more than a count,
+    // since an unconfirmed row has no server-side content worth tracking:
+    // the confirm button reads the live text straight out of the row's own
+    // text fields.
+
+    /// Writes `trigger_cfg` to triggers.toml and reloads the live trigger
+    /// engine in place. Called from every callback that mutates `trigger_cfg`
+    /// — see this section's doc comment.
+    fn persist_and_reload_triggers(
+        window: &SettingsWindow,
+        handle: &Arc<AppHandle>,
+        trigger_cfg: &Rc<RefCell<TriggerConfig>>,
+    ) {
+        let cfg = trigger_cfg.borrow();
+        cfg.save();
+        match handle.trigger_engine.lock().unwrap().as_ref() {
+            Some(engine) => engine.reload(&cfg),
+            None => {
+                tracing::warn!(
+                    "Variables autosave — trigger engine not yet created, change won't take effect until restart"
+                );
+            }
+        }
+        drop(cfg);
+        refresh_debug_tab(window, handle, trigger_cfg);
+    }
+
+    fn is_numeric_str(s: &str) -> bool {
+        !s.trim().is_empty() && s.trim().parse::<f64>().is_ok()
+    }
+
+    fn variable_rows_model(
+        confirmed: &std::collections::BTreeMap<String, String>,
+        pending_new_rows: usize,
+    ) -> ModelRc<VariableRow> {
+        let mut rows: Vec<VariableRow> = confirmed
+            .iter()
+            .map(|(name, value)| VariableRow {
+                name: name.as_str().into(),
+                value: value.as_str().into(),
+                kind: if is_numeric_str(value) {
+                    "number"
+                } else {
+                    "text"
+                }
+                .into(),
+            })
+            .collect();
+        rows.extend((0..pending_new_rows).map(|_| VariableRow {
+            name: "".into(),
+            value: "".into(),
+            kind: "text".into(),
+        }));
+        ModelRc::new(VecModel::from(rows))
+    }
+
+    fn refresh_variable_rows_only(
+        window: &SettingsWindow,
+        trigger_cfg: &Rc<RefCell<TriggerConfig>>,
+        pending_new_rows: &Rc<Cell<usize>>,
+        group: &str,
+    ) {
+        let tc = trigger_cfg.borrow();
+        let empty = std::collections::BTreeMap::new();
+        let confirmed = tc.reference_groups.get(group).unwrap_or(&empty);
+        window.set_variable_rows(variable_rows_model(confirmed, pending_new_rows.get()));
+    }
+
+    /// Refreshes the group dropdown, active selection, and row list, and
+    /// resets `pending_new_rows` to 0 — switching groups (or reloading
+    /// after a group is deleted out from under this tab) abandons any
+    /// still-blank "+ Add Variable" rows for the group being left, same as
+    /// switching sound packages doesn't carry over in-progress label edits
+    /// either. `group` picks which group becomes active — `None` keeps
+    /// whatever `trigger_cfg.active_reference_group` already says (via
+    /// `ensure_default_reference_group`'s repair if that key is gone),
+    /// `Some` switches explicitly (used after group-changed/New/Delete/Rename).
+    fn refresh_variables_tab(
+        window: &SettingsWindow,
+        trigger_cfg: &Rc<RefCell<TriggerConfig>>,
+        pending_new_rows: &Rc<Cell<usize>>,
+        group: Option<&str>,
+    ) {
+        pending_new_rows.set(0);
+        let mut tc = trigger_cfg.borrow_mut();
+        if let Some(g) = group {
+            tc.active_reference_group = g.to_string();
+        }
+        tc.ensure_default_reference_group();
+        let names: Vec<String> = tc.reference_groups.keys().cloned().collect();
+        let active = tc.active_reference_group.clone();
+        drop(tc);
+
+        window.set_reference_group_options(str_model(&names));
+        window.set_active_reference_group(active.clone().into());
+        refresh_variable_rows_only(window, trigger_cfg, pending_new_rows, &active);
+    }
+
+    /// Unique group name for "+" — mirrors
+    /// `sound_packages::unique_package_name`'s "base, base (2), base (3)…"
+    /// scheme, just against `reference_groups`' keys instead of the
+    /// filesystem.
+    fn unique_group_name(cfg: &TriggerConfig, base: &str) -> String {
+        if !cfg.reference_groups.contains_key(base) {
+            return base.to_string();
+        }
+        let mut n = 2u32;
+        loop {
+            let candidate = format!("{base} ({n})");
+            if !cfg.reference_groups.contains_key(&candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
+    fn wire_variables_callbacks(
+        window: &SettingsWindow,
+        handle: &Arc<AppHandle>,
+        trigger_cfg: &Rc<RefCell<TriggerConfig>>,
+        pending_new_rows: &Rc<Cell<usize>>,
+    ) {
+        window.on_reference_group_changed({
+            let weak = window.as_weak();
+            let trigger_cfg = trigger_cfg.clone();
+            let pending_new_rows = pending_new_rows.clone();
+            move |group| {
+                let w = weak.upgrade().unwrap();
+                refresh_variables_tab(&w, &trigger_cfg, &pending_new_rows, Some(&group));
+            }
+        });
+        window.on_new_reference_group({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let trigger_cfg = trigger_cfg.clone();
+            let pending_new_rows = pending_new_rows.clone();
+            move || {
+                let w = weak.upgrade().unwrap();
+                let name = {
+                    let mut tc = trigger_cfg.borrow_mut();
+                    let name = unique_group_name(&tc, "New Group");
+                    tc.reference_groups
+                        .insert(name.clone(), std::collections::BTreeMap::new());
+                    name
+                };
+                persist_and_reload_triggers(&w, &handle, &trigger_cfg);
+                refresh_variables_tab(&w, &trigger_cfg, &pending_new_rows, Some(&name));
+                // Straight into rename mode with the generated "New Group"
+                // name ready to be typed over, rather than leaving the user
+                // to notice the pencil button and click it separately.
+                w.set_renaming_group(true);
+            }
+        });
+        window.on_clone_reference_group({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let trigger_cfg = trigger_cfg.clone();
+            let pending_new_rows = pending_new_rows.clone();
+            move || {
+                let w = weak.upgrade().unwrap();
+                let source = w.get_active_reference_group().to_string();
+                let name = {
+                    let mut tc = trigger_cfg.borrow_mut();
+                    let values = tc
+                        .reference_groups
+                        .get(&source)
+                        .cloned()
+                        .unwrap_or_default();
+                    let name = unique_group_name(&tc, &source);
+                    tc.reference_groups.insert(name.clone(), values);
+                    name
+                };
+                persist_and_reload_triggers(&w, &handle, &trigger_cfg);
+                refresh_variables_tab(&w, &trigger_cfg, &pending_new_rows, Some(&name));
+                // Straight into rename mode, same as New Group — the cloned
+                // group starts with a generated "source (2)"-style name the
+                // user almost certainly wants to replace immediately.
+                w.set_renaming_group(true);
+            }
+        });
+        window.on_rename_reference_group_confirmed({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let trigger_cfg = trigger_cfg.clone();
+            let pending_new_rows = pending_new_rows.clone();
+            move |new_name| {
+                let w = weak.upgrade().unwrap();
+                let new_name = new_name.trim().to_string();
+                let old = w.get_active_reference_group().to_string();
+                if new_name.is_empty() || old == DEFAULT_REFERENCE_GROUP {
+                    refresh_variables_tab(&w, &trigger_cfg, &pending_new_rows, None);
+                    return;
+                }
+                {
+                    let mut tc = trigger_cfg.borrow_mut();
+                    if new_name != old && !tc.reference_groups.contains_key(&new_name) {
+                        if let Some(vals) = tc.reference_groups.remove(&old) {
+                            tc.reference_groups.insert(new_name.clone(), vals);
+                        }
+                        tc.active_reference_group = new_name.clone();
+                    }
+                }
+                persist_and_reload_triggers(&w, &handle, &trigger_cfg);
+                refresh_variables_tab(&w, &trigger_cfg, &pending_new_rows, None);
+            }
+        });
+        window.on_delete_reference_group({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let trigger_cfg = trigger_cfg.clone();
+            let pending_new_rows = pending_new_rows.clone();
+            move || {
+                let w = weak.upgrade().unwrap();
+                let group = w.get_active_reference_group().to_string();
+                if group.is_empty() || group == DEFAULT_REFERENCE_GROUP {
+                    return;
+                }
+                let fallback = {
+                    let mut tc = trigger_cfg.borrow_mut();
+                    // The group alphabetically just above the one being
+                    // deleted (falling forward to the next one if it was
+                    // first) — "Default" always exists as the last-resort
+                    // fallback, but isn't the default fallback: deleting
+                    // "Zone Timers" should land back on "Raid Comp", not
+                    // jump away to "Default" just because it happens to be
+                    // unremovable.
+                    let keys: Vec<String> = tc.reference_groups.keys().cloned().collect();
+                    let idx = keys.iter().position(|k| k == &group).unwrap_or(0);
+                    let fallback = if idx > 0 {
+                        keys[idx - 1].clone()
+                    } else if keys.len() > 1 {
+                        keys[1].clone()
+                    } else {
+                        DEFAULT_REFERENCE_GROUP.to_string()
+                    };
+                    tc.reference_groups.remove(&group);
+                    tc.active_reference_group = fallback.clone();
+                    fallback
+                };
+                persist_and_reload_triggers(&w, &handle, &trigger_cfg);
+                refresh_variables_tab(&w, &trigger_cfg, &pending_new_rows, Some(&fallback));
+            }
+        });
+        window.on_add_variable({
+            let weak = window.as_weak();
+            let trigger_cfg = trigger_cfg.clone();
+            let pending_new_rows = pending_new_rows.clone();
+            move || {
+                let w = weak.upgrade().unwrap();
+                pending_new_rows.set(pending_new_rows.get() + 1);
+                let group = w.get_active_reference_group().to_string();
+                let confirmed_count = trigger_cfg
+                    .borrow()
+                    .reference_groups
+                    .get(&group)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                refresh_variable_rows_only(&w, &trigger_cfg, &pending_new_rows, &group);
+                // Focus the freshly-appended blank row's Name field — see
+                // settings_shell.slint's `focus-row-index` doc comment for
+                // why this self-clears shortly after instead of staying set.
+                let new_index = confirmed_count + pending_new_rows.get() - 1;
+                w.set_focus_row_index(new_index as i32);
+                let weak2 = weak.clone();
+                slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+                    if let Some(w) = weak2.upgrade() {
+                        w.set_focus_row_index(-1);
+                    }
+                });
+            }
+        });
+        window.on_delete_variable({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let trigger_cfg = trigger_cfg.clone();
+            let pending_new_rows = pending_new_rows.clone();
+            move |index| {
+                let w = weak.upgrade().unwrap();
+                let idx = index as usize;
+                let group = w.get_active_reference_group().to_string();
+                let confirmed_count = trigger_cfg
+                    .borrow()
+                    .reference_groups
+                    .get(&group)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                if idx < confirmed_count {
+                    let mut tc = trigger_cfg.borrow_mut();
+                    if let Some(map) = tc.reference_groups.get_mut(&group) {
+                        if let Some(key) = map.keys().nth(idx).cloned() {
+                            map.remove(&key);
+                        }
+                    }
+                    drop(tc);
+                    persist_and_reload_triggers(&w, &handle, &trigger_cfg);
+                } else {
+                    pending_new_rows.set(pending_new_rows.get().saturating_sub(1));
+                }
+                refresh_variable_rows_only(&w, &trigger_cfg, &pending_new_rows, &group);
+            }
+        });
+        window.on_confirm_variable({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let trigger_cfg = trigger_cfg.clone();
+            let pending_new_rows = pending_new_rows.clone();
+            move |index, original_name, new_name, new_value| {
+                let w = weak.upgrade().unwrap();
+                let new_name = new_name.trim().to_string();
+                if new_name.is_empty() {
+                    return;
+                }
+                let group = w.get_active_reference_group().to_string();
+                if group.is_empty() {
+                    return;
+                }
+                let idx = index as usize;
+                let confirmed_count = trigger_cfg
+                    .borrow()
+                    .reference_groups
+                    .get(&group)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                {
+                    let mut tc = trigger_cfg.borrow_mut();
+                    let map = tc.reference_groups.entry(group.clone()).or_default();
+                    if !original_name.is_empty() && original_name.as_str() != new_name {
+                        map.remove(original_name.as_str());
+                    }
+                    map.insert(new_name, new_value.to_string());
+                }
+                if idx >= confirmed_count {
+                    pending_new_rows.set(pending_new_rows.get().saturating_sub(1));
+                }
+                persist_and_reload_triggers(&w, &handle, &trigger_cfg);
+                refresh_variable_rows_only(&w, &trigger_cfg, &pending_new_rows, &group);
+            }
+        });
+    }
+
     // ── Instant-save (checkboxes/sliders/radios/standalone pulldowns) ──────────
     //
     // Persists immediately on change rather than waiting for the Save
@@ -621,46 +1023,23 @@ pub mod settings_window {
 
     // ── Save Slint properties -> Config ───────────────────────────────────────
 
-    fn save_config(window: &SettingsWindow, handle: &Arc<AppHandle>, trigger_cfg: &TriggerConfig) {
+    /// Persists every Overlays-tab font-size/timing/opacity/history/meter/
+    /// position field at once, called whenever any one of them loses focus
+    /// (`commit-appearance`, wired from appearance_tab.slint's per-field
+    /// `edited` callbacks — see settings_shell.slint's header comment) or a
+    /// Reset Position button fires. Everything else on this tab (the master
+    /// enabled/locked toggles, alert-style, overlay-font, Share Bars) is
+    /// already instant-save and writes straight to Config on change, so it
+    /// isn't repeated here. None of these fields feed `run_engine_once` —
+    /// they're read live by the overlay/meter timers — so no restart is
+    /// needed.
+    fn save_appearance(window: &SettingsWindow, handle: &Arc<AppHandle>) {
         fn parse_or<T: std::str::FromStr>(s: &str, default: T) -> T {
             s.trim().parse().unwrap_or(default)
         }
 
         let mut cfg = handle.config.lock().unwrap();
 
-        // Only these actually change what `run_engine_once` does (which
-        // server/credentials to push to) — everything else on this dialog
-        // (overlay look, TTS, sounds, window positions) is already read live
-        // by the overlay/meter timers and doesn't need the engine to
-        // restart. Log profile changes (path/player/server/game/which
-        // profile is active) have their own instant-save-with-restart path
-        // via `mutate_log_profiles`, since they're no longer part of this
-        // Save-gated form. Restarting tears down and rebuilds `combat_state`
-        // from scratch, which is exactly what was wiping the DPS meter and
-        // history overlay on every Save, even for changes that had nothing
-        // to do with logging.
-        let old_server_url = cfg.server_url.clone();
-        let old_remote_enabled = cfg.remote_logging_enabled;
-
-        cfg.server_url = {
-            let u = window.get_server_url().to_string();
-            if u.is_empty() {
-                None
-            } else {
-                Some(u)
-            }
-        };
-        cfg.stream_password = {
-            let p = window.get_password().to_string();
-            if p.is_empty() {
-                None
-            } else {
-                Some(p)
-            }
-        };
-        cfg.remote_logging_enabled = window.get_remote_logging();
-
-        cfg.overlay_font = window.get_overlay_font().to_string();
         cfg.overlay_start_font_size =
             parse_or(&window.get_start_font_size(), cfg.overlay_start_font_size);
         cfg.overlay_max_font_size =
@@ -712,92 +1091,22 @@ pub mod settings_window {
         cfg.meter_idle_secs = parse_or(&window.get_meter_idle_secs(), cfg.meter_idle_secs);
         cfg.meter_font_size = parse_or(&window.get_meter_font_size(), cfg.meter_font_size);
         cfg.meter_width = parse_or(&window.get_meter_width(), cfg.meter_width);
-        cfg.meter_share_bars = window.get_meter_share_bars();
 
-        cfg.tts_enabled = window.get_tts_enabled();
-        cfg.tts_speed = match window.get_tts_speed().as_str() {
-            "Fast (1.2x)" => TtsSpeed::Fast,
-            "Faster (1.5x)" => TtsSpeed::Faster,
-            "Fastest (2x)" => TtsSpeed::Fastest,
-            _ => TtsSpeed::Normal,
-        };
-        cfg.tts_audio_mode = match window.get_tts_audio_mode() {
-            1 => TtsAudioMode::QueueAll,
-            2 => TtsAudioMode::InterruptConstantly,
-            _ => TtsAudioMode::SmartPriority,
-        };
-        cfg.tts_read_emergency = window.get_tts_read_emergency();
-        cfg.tts_read_operational = window.get_tts_read_operational();
-        cfg.tts_read_ambient = window.get_tts_read_ambient();
-        let voice_display = window.get_tts_voice().to_string();
-        if let Some(id) = tts_voice_id_for_display(window, &voice_display) {
-            cfg.tts_voice = id;
-        }
-
-        cfg.overlay_alert.enabled = window.get_win_overlay_enabled();
-        cfg.overlay_alert.locked = window.get_win_overlay_locked();
         cfg.overlay_alert.x = parse_or(&window.get_win_overlay_pos_x(), cfg.overlay_alert.x);
         cfg.overlay_alert.y = parse_or(&window.get_win_overlay_pos_y(), cfg.overlay_alert.y);
-        cfg.overlay_history.enabled = window.get_win_history_enabled();
-        cfg.overlay_history.locked = window.get_win_history_locked();
         cfg.overlay_history.x = parse_or(&window.get_win_history_pos_x(), cfg.overlay_history.x);
         cfg.overlay_history.y = parse_or(&window.get_win_history_pos_y(), cfg.overlay_history.y);
-        cfg.overlay_meter.enabled = window.get_win_meter_enabled();
-        cfg.overlay_meter.locked = window.get_win_meter_locked();
         cfg.overlay_meter.x = parse_or(&window.get_win_meter_pos_x(), cfg.overlay_meter.x);
         cfg.overlay_meter.y = parse_or(&window.get_win_meter_pos_y(), cfg.overlay_meter.y);
-        cfg.alert_style = match window.get_alert_style() {
-            1 => AlertStyle::Merged,
-            _ => AlertStyle::Separate,
-        };
-        cfg.overlay_merged.enabled = window.get_win_merged_enabled();
-        cfg.overlay_merged.locked = window.get_win_merged_locked();
         cfg.overlay_merged.x = parse_or(&window.get_win_merged_pos_x(), cfg.overlay_merged.x);
         cfg.overlay_merged.y = parse_or(&window.get_win_merged_pos_y(), cfg.overlay_merged.y);
 
-        cfg.sound_enabled = window.get_sound_enabled();
-        cfg.sound_volume = window.get_sound_volume().round().clamp(0.0, 100.0) as u8;
-        cfg.sound_package = window.get_sound_package().to_string();
-        crate::overlay::overlay::set_sound_enabled(cfg.sound_enabled);
-        crate::overlay::overlay::set_sound_volume_percent(cfg.sound_volume);
-        crate::overlay::overlay::set_active_sound_package(&cfg.sound_package);
-
-        let restart_needed =
-            cfg.server_url != old_server_url || cfg.remote_logging_enabled != old_remote_enabled;
-
         cfg.save();
-        trigger_cfg.save();
-        // Reload the *existing* shared engine in place rather than
-        // installing a fresh `TriggerEngine` here: `TriggerEngine` is
-        // `Arc<Mutex<EngineInner>>`-backed, and main.rs's `eq-triggers`
-        // thread holds its own clone of the engine created at startup,
-        // captured directly in its closure — it never re-reads
-        // `handle.trigger_engine` after that. Swapping this `Option` to a
-        // brand-new `TriggerEngine::new(..)` would only be visible to
-        // other readers of `handle.trigger_engine` (e.g. the "test
-        // trigger" button), leaving the actual log-processing thread
-        // running against the old triggers until restart. `.reload()`
-        // mutates the shared `EngineInner` behind the existing `Arc`, so
-        // both clones observe the change immediately.
-        match handle.trigger_engine.lock().unwrap().as_ref() {
-            Some(engine) => engine.reload(trigger_cfg),
-            None => {
-                tracing::warn!(
-                    "Settings saved before trigger engine existed — trigger changes won't take effect until restart"
-                );
-            }
-        }
-        if restart_needed {
-            tracing::info!("Settings saved — server-url/remote-logging changed, restarting engine");
-            handle.restart.store(true, Ordering::Relaxed);
-        } else {
-            tracing::info!("Settings saved — no engine-relevant fields changed, not restarting");
-        }
     }
 
-    // Shared by every path that actually closes Settings (the titlebar X
-    // when not dirty, and the pending-changes dialog's Save & Close /
-    // Discard buttons when it is) — everything except the window's own
+    // Shared by every path that closes Settings — just the titlebar X now
+    // that every field saves itself as it's edited (see settings_shell.
+    // slint's header comment) — everything except the window's own
     // `.hide()`/the native `HideWindow` response, since the titlebar-X path
     // gets that for free by returning it to Slint instead of calling it
     // directly.
@@ -822,12 +1131,6 @@ pub mod settings_window {
         trigger_cfg: &Rc<RefCell<TriggerConfig>>,
         panel_stack: &Rc<RefCell<Vec<PanelFrame>>>,
     ) {
-        // TEMPORARY diagnostic — see settings_shell.slint's `dirty-reason`
-        // doc comment for what this is chasing and why it should come back
-        // out once the culprit's found.
-        window.on_dirty_changed(|dirty, reason| {
-            tracing::info!("settings dirty-changed: dirty={dirty} last-field={reason:?}");
-        });
         window.on_drawer_back({
             let weak = window.as_weak();
             let stack = panel_stack.clone();
@@ -853,12 +1156,27 @@ pub mod settings_window {
                 jump_to_panel(&w, &stack, index);
             }
         });
+        window.on_debug_line_limit_changed({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let trigger_cfg = trigger_cfg.clone();
+            move || {
+                let w = weak.upgrade().unwrap();
+                refresh_debug_tab(&w, &handle, &trigger_cfg);
+            }
+        });
+        // Slint's `if` conditions short-circuit, so this is only ever called
+        // with a non-empty `term` (see debug_tab.slint's row-filter `if`s).
+        window.on_debug_line_matches_search(|line: SharedString, term: SharedString| {
+            line.to_lowercase().contains(term.to_lowercase().as_str())
+        });
 
         // ── Drawer: panel "OK" handlers ─────────────────────────────────
         // One per panel (Cancel/back is generic — see on_drawer_back above
         // — but each panel commits its own fields differently).
         window.on_trigger_panel_ok({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             let stack = panel_stack.clone();
             let trigger_cfg = trigger_cfg.clone();
             move || {
@@ -888,6 +1206,7 @@ pub mod settings_window {
                     _ => tc.triggers.push(def),
                 }
                 drop(tc);
+                persist_and_reload_triggers(&w, &handle, &trigger_cfg);
                 refresh_trigger_rows(&w, &trigger_cfg);
                 pop_panel(&w, &stack);
             }
@@ -904,6 +1223,14 @@ pub mod settings_window {
                     }) => (conditions.clone(), *edit_index),
                     _ => return,
                 };
+                // Trailing whitespace — most often a stray \r\n left over
+                // from pasting a pattern copied out of a log file/editor —
+                // is invisible in the TextField but breaks matching
+                // outright (an unescaped trailing `\n` inside what's
+                // otherwise a correct pattern), and a user has no way to
+                // spot it by eye. Stripped from every free-text Condition
+                // field on save; `trim_end` (not `trim`) since *leading*
+                // whitespace in a pattern can occasionally be meaningful.
                 let cond = if w.get_cond_type() == "Match (log line)" {
                     let match_type = match w.get_match_type().as_str() {
                         "Exact (substring)" => MatchType::Exact,
@@ -912,7 +1239,7 @@ pub mod settings_window {
                     };
                     Condition::Match {
                         match_type,
-                        pattern: w.get_pattern().to_string(),
+                        pattern: w.get_pattern().trim_end().to_string(),
                     }
                 } else if w.get_cond_type() == "Chat message" {
                     let match_type = match w.get_match_type().as_str() {
@@ -922,24 +1249,42 @@ pub mod settings_window {
                     };
                     Condition::Chat {
                         channel: chat_channel_from_label(&w.get_chat_channel()),
-                        custom_channel: w.get_chat_custom_channel().to_string(),
+                        custom_channel: w.get_chat_custom_channel().trim_end().to_string(),
                         match_type,
-                        pattern: w.get_pattern().to_string(),
+                        pattern: w.get_pattern().trim_end().to_string(),
                     }
                 } else {
                     let op = match w.get_var_op().as_str() {
-                        "equals" => VarOp::Equals,
-                        "gt (>)" => VarOp::Gt,
-                        "gte (\u{2265})" => VarOp::Gte,
-                        "lt (<)" => VarOp::Lt,
-                        "lte (\u{2264})" => VarOp::Lte,
-                        "matches" => VarOp::Matches,
+                        "Equals" => VarOp::Equals,
+                        "Greater than" => VarOp::Gt,
+                        "Greater than or equal to" => VarOp::Gte,
+                        "Less than" => VarOp::Lt,
+                        "Less than or equal to" => VarOp::Lte,
+                        "Contains" => VarOp::Contains,
+                        "Regex match" => VarOp::Matches,
                         _ => VarOp::Isset,
                     };
+                    // Reference mode writes the same `{name}` placeholder
+                    // syntax used everywhere else in this app (`{1}`,
+                    // `{name}` capture refs) — see triggers.rs's
+                    // `resolve_template` call on a Var condition's `value`,
+                    // which is what actually resolves it against the active
+                    // reference group at evaluation time. No new schema on
+                    // `Condition::Var` needed.
+                    let value = if w.get_var_value_mode() == "reference" {
+                        let name = w.get_var_value_ref().to_string();
+                        if name.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{{{name}}}")
+                        }
+                    } else {
+                        w.get_cond_var_value().trim_end().to_string()
+                    };
                     Condition::Var {
-                        var_name: w.get_cond_var_name().to_string(),
+                        var_name: w.get_cond_var_name().trim_end().to_string(),
                         op,
-                        value: w.get_cond_var_value().to_string(),
+                        value,
                     }
                 };
                 match edit_index {
@@ -1247,18 +1592,20 @@ pub mod settings_window {
         window.on_add_condition({
             let weak = window.as_weak();
             let stack = panel_stack.clone();
+            let trigger_cfg = trigger_cfg.clone();
             move || {
                 let w = weak.upgrade().unwrap();
                 let conditions = match stack.borrow().last() {
                     Some(PanelFrame::Trigger { conditions, .. }) => conditions.clone(),
                     _ => return,
                 };
-                push_condition_panel(&w, &stack, conditions, None);
+                push_condition_panel(&w, &trigger_cfg, &stack, conditions, None);
             }
         });
         window.on_edit_condition({
             let weak = window.as_weak();
             let stack = panel_stack.clone();
+            let trigger_cfg = trigger_cfg.clone();
             move || {
                 let w = weak.upgrade().unwrap();
                 let idx = w.get_selected_condition_index();
@@ -1269,7 +1616,7 @@ pub mod settings_window {
                     Some(PanelFrame::Trigger { conditions, .. }) => conditions.clone(),
                     _ => return,
                 };
-                push_condition_panel(&w, &stack, conditions, Some(idx as usize));
+                push_condition_panel(&w, &trigger_cfg, &stack, conditions, Some(idx as usize));
             }
         });
         window.on_delete_condition({
@@ -1524,43 +1871,12 @@ pub mod settings_window {
             }
         });
 
-        window.on_save({
-            let weak = window.as_weak();
-            let handle = Arc::clone(handle);
-            let trigger_cfg = trigger_cfg.clone();
-            move || {
-                let w = weak.upgrade().unwrap();
-                save_config(&w, &handle, &trigger_cfg.borrow());
-                // Save persists the whole form at once, so it's back in
-                // sync with Config regardless of which field(s) triggered
-                // `dirty` — unlike closing, Save doesn't close the window;
-                // the user closes Settings from its own titlebar X.
-                tracing::info!("on_save: save_config done, resetting dirty to false");
-                w.set_dirty(false);
-            }
-        });
-        // Pending-changes dialog's two closing choices (see
-        // settings_shell.slint's doc comment on that dialog) — "Keep
-        // Editing" is handled Slint-side only, it never reaches Rust.
-        window.on_save_and_close_settings({
-            let weak = window.as_weak();
-            let handle = Arc::clone(handle);
-            let trigger_cfg = trigger_cfg.clone();
-            move || {
-                let w = weak.upgrade().unwrap();
-                save_config(&w, &handle, &trigger_cfg.borrow());
-                w.set_dirty(false);
-                finish_close_bookkeeping(&handle);
-                let _ = w.hide();
-            }
-        });
-        window.on_discard_and_close_settings({
+        window.on_commit_appearance({
             let weak = window.as_weak();
             let handle = Arc::clone(handle);
             move || {
                 let w = weak.upgrade().unwrap();
-                finish_close_bookkeeping(&handle);
-                let _ = w.hide();
+                save_appearance(&w, &handle);
             }
         });
 
@@ -1599,6 +1915,15 @@ pub mod settings_window {
                 instant_save(&handle, |cfg| {
                     cfg.tts_enabled = w.get_tts_enabled();
                 });
+            }
+        });
+        window.on_instant_save_tts_volume({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            move || {
+                let w = weak.upgrade().unwrap();
+                let volume = w.get_tts_volume().round().clamp(0.0, 100.0) as u8;
+                instant_save(&handle, |cfg| cfg.tts_volume = volume);
             }
         });
         window.on_instant_save_tts_speed({
@@ -1710,6 +2035,24 @@ pub mod settings_window {
                         _ => AlertStyle::Separate,
                     };
                 });
+            }
+        });
+        window.on_instant_save_hide_inactive({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            move || {
+                let w = weak.upgrade().unwrap();
+                let secs = hide_inactive_secs_for_index(w.get_hide_inactive_index());
+                instant_save(&handle, |cfg| cfg.overlay_hide_inactive_secs = secs);
+            }
+        });
+        window.on_instant_save_meter_share_bars({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            move || {
+                let w = weak.upgrade().unwrap();
+                let share = w.get_meter_share_bars();
+                instant_save(&handle, |cfg| cfg.meter_share_bars = share);
             }
         });
         window.on_instant_save_sound_enabled({
@@ -1956,6 +2299,7 @@ pub mod settings_window {
         });
         window.on_test_url({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             move || {
                 let w = weak.upgrade().unwrap();
                 let url = w.get_server_url().to_string();
@@ -1966,25 +2310,43 @@ pub mod settings_window {
                 w.set_url_status("Testing…".into());
                 w.set_url_test_in_progress(true);
                 let weak2 = weak.clone();
+                let handle2 = Arc::clone(&handle);
                 std::thread::spawn(move || {
                     let result = test_url(&url);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak2.upgrade() {
                             w.set_url_test_in_progress(false);
-                            w.set_url_status(
-                                match result {
-                                    UrlTestResult::Connected {
-                                        requires_password: false,
-                                    } => "Connected — open registration".to_string(),
-                                    UrlTestResult::Connected {
-                                        requires_password: true,
-                                    } => "Connected — password required".to_string(),
-                                    UrlTestResult::Failed(e) => {
-                                        format!("Could not reach server: {e}")
-                                    }
+                            // Reaching the server at all (with or without a
+                            // password) is confirmation the URL is good —
+                            // persist it now rather than making the user
+                            // separately hit a Save button. The password
+                            // itself isn't verified by this health check
+                            // (no auth on it), so it's left for Register to
+                            // persist once it's actually been used
+                            // successfully.
+                            let (status, connected) = match result {
+                                UrlTestResult::Connected {
+                                    requires_password: false,
+                                } => ("Connected — open registration".to_string(), true),
+                                UrlTestResult::Connected {
+                                    requires_password: true,
+                                } => ("Connected — password required".to_string(), true),
+                                UrlTestResult::Failed(e) => {
+                                    (format!("Could not reach server: {e}"), false)
                                 }
-                                .into(),
-                            );
+                            };
+                            w.set_url_status(status.into());
+                            if connected {
+                                let mut cfg = handle2.config.lock().unwrap();
+                                let restart_needed =
+                                    cfg.server_url.as_deref() != Some(url.as_str());
+                                cfg.server_url = Some(url.clone());
+                                cfg.save();
+                                drop(cfg);
+                                if restart_needed {
+                                    handle2.restart.store(true, Ordering::Relaxed);
+                                }
+                            }
                         }
                     });
                 });
@@ -2048,6 +2410,15 @@ pub mod settings_window {
                                 cfg.stream_id = Some(stream_id);
                                 cfg.stream_token = Some(stream_token);
                                 cfg.view_token = Some(view_token);
+                                // A successful register means both the URL
+                                // and password (if any) just proved they
+                                // work — persist them now instead of making
+                                // the user separately hit a Save button.
+                                cfg.stream_password = if password.is_empty() {
+                                    None
+                                } else {
+                                    Some(password.clone())
+                                };
                                 if !url.is_empty() {
                                     cfg.server_url = Some(url.clone());
                                 }
@@ -2066,36 +2437,47 @@ pub mod settings_window {
         });
 
         // ── Windows tab reset buttons ──────────────────────────────────────
+        // Setting the field alone wouldn't persist it — Reset doesn't
+        // defocus anything, so it has to call `save_appearance` itself
+        // rather than relying on commit-appearance's defocus trigger.
         window.on_overlay_reset_position({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             move || {
                 let w = weak.upgrade().unwrap();
                 w.set_win_overlay_pos_x("-1".into());
                 w.set_win_overlay_pos_y("-1".into());
+                save_appearance(&w, &handle);
             }
         });
         window.on_history_reset_position({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             move || {
                 let w = weak.upgrade().unwrap();
                 w.set_win_history_pos_x("-1".into());
                 w.set_win_history_pos_y("-1".into());
+                save_appearance(&w, &handle);
             }
         });
         window.on_meter_reset_position({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             move || {
                 let w = weak.upgrade().unwrap();
                 w.set_win_meter_pos_x("-1".into());
                 w.set_win_meter_pos_y("-1".into());
+                save_appearance(&w, &handle);
             }
         });
         window.on_merged_reset_position({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             move || {
                 let w = weak.upgrade().unwrap();
                 w.set_win_merged_pos_x("-1".into());
                 w.set_win_merged_pos_y("-1".into());
+                save_appearance(&w, &handle);
             }
         });
         window.on_show_all_windows({
@@ -2292,6 +2674,7 @@ pub mod settings_window {
         });
         window.on_delete_trigger({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             let trigger_cfg = trigger_cfg.clone();
             move || {
                 let w = weak.upgrade().unwrap();
@@ -2299,12 +2682,14 @@ pub mod settings_window {
                 if idx >= 0 && (idx as usize) < trigger_cfg.borrow().triggers.len() {
                     trigger_cfg.borrow_mut().triggers.remove(idx as usize);
                     w.set_selected_trigger_index(-1);
+                    persist_and_reload_triggers(&w, &handle, &trigger_cfg);
                     refresh_trigger_rows(&w, &trigger_cfg);
                 }
             }
         });
         window.on_move_trigger_up({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             let trigger_cfg = trigger_cfg.clone();
             move || {
                 let w = weak.upgrade().unwrap();
@@ -2315,12 +2700,14 @@ pub mod settings_window {
                         .triggers
                         .swap(idx as usize, idx as usize - 1);
                     w.set_selected_trigger_index(idx - 1);
+                    persist_and_reload_triggers(&w, &handle, &trigger_cfg);
                     refresh_trigger_rows(&w, &trigger_cfg);
                 }
             }
         });
         window.on_move_trigger_down({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             let trigger_cfg = trigger_cfg.clone();
             move || {
                 let w = weak.upgrade().unwrap();
@@ -2332,12 +2719,14 @@ pub mod settings_window {
                         .triggers
                         .swap(idx as usize, idx as usize + 1);
                     w.set_selected_trigger_index(idx + 1);
+                    persist_and_reload_triggers(&w, &handle, &trigger_cfg);
                     refresh_trigger_rows(&w, &trigger_cfg);
                 }
             }
         });
         window.on_toggle_trigger({
             let weak = window.as_weak();
+            let handle = Arc::clone(handle);
             let trigger_cfg = trigger_cfg.clone();
             move || {
                 let w = weak.upgrade().unwrap();
@@ -2348,6 +2737,7 @@ pub mod settings_window {
                         t.enabled = !t.enabled;
                     }
                     drop(tc);
+                    persist_and_reload_triggers(&w, &handle, &trigger_cfg);
                     refresh_trigger_rows(&w, &trigger_cfg);
                 }
             }
@@ -2427,6 +2817,201 @@ pub mod settings_window {
         window.set_trigger_rows(str_model(&rows));
     }
 
+    // ── Debug tab ────────────────────────────────────────────────────────────
+
+    fn debug_line_limit_from_label(label: &str) -> usize {
+        label
+            .split_whitespace()
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(500)
+    }
+
+    /// Splits `text` into plain/highlighted runs for the Debug tab's
+    /// MatchedRow, one run per byte range covered by a capture value. Ranges
+    /// are located with a plain substring search (not the original regex's
+    /// byte offsets, which `TriggerEngine::preview_line` doesn't expose) —
+    /// on a repeated substring this highlights its first occurrence only, an
+    /// acceptable approximation for a debug view.
+    fn debug_segments_for(text: &str, captures: &[String]) -> Vec<DebugSegment> {
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for cap in captures {
+            if cap.is_empty() {
+                continue;
+            }
+            if let Some(start) = text.find(cap.as_str()) {
+                ranges.push((start, start + cap.len()));
+            }
+        }
+        ranges.sort_unstable();
+
+        let mut segments = Vec::new();
+        let mut cursor = 0usize;
+        for (start, end) in ranges {
+            if start < cursor {
+                continue; // overlaps a range already claimed — skip it
+            }
+            if start > cursor {
+                segments.push(DebugSegment {
+                    text: text[cursor..start].into(),
+                    highlighted: false,
+                });
+            }
+            segments.push(DebugSegment {
+                text: text[start..end].into(),
+                highlighted: true,
+            });
+            cursor = end;
+        }
+        if cursor < text.len() {
+            segments.push(DebugSegment {
+                text: text[cursor..].into(),
+                highlighted: false,
+            });
+        }
+        if segments.is_empty() {
+            segments.push(DebugSegment {
+                text: text.into(),
+                highlighted: false,
+            });
+        }
+        segments
+    }
+
+    thread_local! {
+        // Avoids rebuilding (and re-compiling every trigger's regex/glob
+        // patterns in) a throwaway preview `TriggerEngine` on every single
+        // Debug tab refresh — including the "Live" checkbox's ~750ms
+        // timer, where `trigger_cfg` itself essentially never actually
+        // changes between ticks. Keyed on a clone of `trigger_cfg`'s own
+        // content (cheap `PartialEq`, not a hash) rather than e.g. a dirty
+        // flag bumped at every one of the many mutation call sites, so
+        // there's no risk of a missed call site leaving this stale.
+        static PREVIEW_ENGINE_CACHE: RefCell<Option<(TriggerConfig, TriggerEngine)>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Returns a dry-run `TriggerEngine` for the Debug tab, reusing the
+    /// last one built if `cfg` hasn't changed since — see
+    /// `PREVIEW_ENGINE_CACHE`'s doc comment.
+    fn preview_engine_for(cfg: &TriggerConfig) -> TriggerEngine {
+        PREVIEW_ENGINE_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if let Some((cached_cfg, engine)) = cache.as_ref() {
+                if cached_cfg == cfg {
+                    return engine.clone();
+                }
+            }
+            let engine = TriggerEngine::new(cfg, Arc::new(std::sync::Mutex::new(Vec::new())));
+            *cache = Some((cfg.clone(), engine.clone()));
+            engine
+        })
+    }
+
+    /// Populates the Debug tab: reads the active log file's tail, then
+    /// dry-runs every line through a throwaway `TriggerEngine` built from
+    /// the current (possibly unsaved) `trigger_cfg` — see
+    /// `TriggerEngine::preview_line`'s doc comment for why that's safe to
+    /// call repeatedly with no real overlay/sound/voice side effects.
+    fn refresh_debug_tab(
+        window: &SettingsWindow,
+        handle: &Arc<AppHandle>,
+        trigger_cfg: &Rc<RefCell<TriggerConfig>>,
+    ) {
+        let max_lines = debug_line_limit_from_label(&window.get_debug_line_limit());
+        let log_path = handle.config.lock().unwrap().resolve_active_log_path();
+
+        let lines = match &log_path {
+            Some(path) => crate::tailer::read_tail_lines(path, max_lines),
+            None => Vec::new(),
+        };
+
+        // TEMPORARY diagnostic for the "Debug tab is minutes behind" report
+        // — remove once root-caused. Logs the resolved path, its on-disk
+        // mtime age, and how stale the newest returned line's own EQ
+        // timestamp is relative to wall-clock now, to tell a data-freshness
+        // bug (wrong bytes read) apart from a display-only one (correct
+        // data, stuck scroll).
+        if window.get_debug_live() {
+            let mtime_age = log_path
+                .as_deref()
+                .and_then(|p| std::fs::metadata(p).ok()?.modified().ok()?.elapsed().ok());
+            let newest_line_age = lines.last().and_then(|l| {
+                let ts = crate::tailer::parse_eq_timestamp(l)?;
+                Some(chrono::Local::now().naive_local() - ts)
+            });
+            tracing::info!(
+                "debug-tab: path={:?} mtime_age={:?} lines={} newest_line_age={:?}",
+                log_path,
+                mtime_age,
+                lines.len(),
+                newest_line_age,
+            );
+        }
+
+        let preview_engine = preview_engine_for(&trigger_cfg.borrow());
+
+        let mut rows: Vec<DebugRow> = Vec::with_capacity(lines.len());
+
+        for raw_line in &lines {
+            let (ts, text) =
+                if raw_line.len() > crate::patterns::TS_LEN && raw_line.starts_with('[') {
+                    // Short form ("[Feb 27 22:00:07]", no weekday/year) —
+                    // the full EQ prefix ("[Fri Feb 27 22:00:07 2026] ")
+                    // ate a fixed 150px column this tab can't spare; falls
+                    // back to the raw prefix on an unparseable timestamp
+                    // (e.g. a non-EQ log line) rather than dropping it.
+                    let ts = crate::tailer::parse_eq_timestamp(raw_line)
+                        .map(|dt| dt.format("[%b %d %H:%M:%S]").to_string())
+                        .unwrap_or_else(|| raw_line[..crate::patterns::TS_LEN].trim().to_string());
+                    (ts, raw_line[crate::patterns::TS_LEN..].to_string())
+                } else {
+                    (String::new(), raw_line.clone())
+                };
+
+            let matches = preview_engine.preview_line(raw_line);
+            if matches.is_empty() {
+                rows.push(DebugRow {
+                    ts: ts.into(),
+                    text: text.into(),
+                    matched: false,
+                    emergency: false,
+                    trigger_name: SharedString::default(),
+                    shows_overlay: false,
+                    plays_sound: false,
+                    speaks_voice: false,
+                    segments: ModelRc::new(VecModel::from(Vec::<DebugSegment>::new())),
+                });
+                continue;
+            }
+
+            let trigger_name = if matches.len() > 1 {
+                format!("{} (+{} more)", matches[0].trigger_name, matches.len() - 1)
+            } else {
+                matches[0].trigger_name.clone()
+            };
+            let emergency = matches.iter().any(|m: &LineMatch| m.emergency);
+            let shows_overlay = matches.iter().any(|m: &LineMatch| m.shows_overlay);
+            let plays_sound = matches.iter().any(|m: &LineMatch| m.plays_sound);
+            let speaks_voice = matches.iter().any(|m: &LineMatch| m.speaks_voice);
+            let captures: Vec<String> = matches.iter().flat_map(|m| m.captures.clone()).collect();
+
+            rows.push(DebugRow {
+                ts: ts.into(),
+                trigger_name: trigger_name.into(),
+                matched: true,
+                emergency,
+                shows_overlay,
+                plays_sound,
+                speaks_voice,
+                segments: ModelRc::new(VecModel::from(debug_segments_for(&text, &captures))),
+                text: text.into(),
+            });
+        }
+
+        window.set_debug_rows(ModelRc::new(VecModel::from(rows)));
+    }
+
     fn chat_channel_to_label(c: &ChatChannel) -> &'static str {
         match c {
             ChatChannel::Any => "Any",
@@ -2476,10 +3061,14 @@ pub mod settings_window {
     }
 
     fn trigger_row(badge: &str, text: String) -> TriggerRow {
+        let kind = badge.split('/').next().unwrap_or(badge);
         TriggerRow {
             badge: badge.into(),
             text: text.into(),
             tint: trigger_row_tint(badge),
+            kind: kind.into(),
+            preview_icon: slint::Image::default(),
+            has_preview_icon: false,
         }
     }
 
@@ -2530,7 +3119,8 @@ pub mod settings_window {
                     VarOp::Gte => format!(">= {value}"),
                     VarOp::Lt => format!("< {value}"),
                     VarOp::Lte => format!("<= {value}"),
-                    VarOp::Matches => format!("matches {value}"),
+                    VarOp::Contains => format!("contains {value}"),
+                    VarOp::Matches => format!("regex match {value}"),
                 };
                 trigger_row("var", format!("{var_name}  {op_s}"))
             }
@@ -2569,7 +3159,12 @@ pub mod settings_window {
                 } else {
                     format!("{message}{suffix}")
                 };
-                trigger_row(&format!("overlay/{icon}"), text)
+                let mut row = trigger_row(&format!("overlay/{icon}"), text);
+                if let Some(thumb) = load_icon_thumbnail(icon) {
+                    row.preview_icon = thumb;
+                    row.has_preview_icon = true;
+                }
+                row
             }
             Action::VoiceAlert { tts_text, priority } => {
                 let prio = match priority {
@@ -2693,8 +3288,26 @@ pub mod settings_window {
         rows
     }
 
+    /// `value` is exactly a `{name}` placeholder (a whole-string match, not
+    /// merely containing one — a literal like `"hp {pct}"` stays literal)
+    /// → the reference variable name it names, else `None`. Inverse of the
+    /// `format!("{{{name}}}")` the Reference-mode OK handler writes.
+    fn ref_var_name_from_placeholder(value: &str) -> Option<String> {
+        let inner = value.strip_prefix('{')?.strip_suffix('}')?;
+        let first_ok = inner
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+        if first_ok && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            Some(inner.to_string())
+        } else {
+            None
+        }
+    }
+
     fn push_condition_panel(
         window: &SettingsWindow,
+        trigger_cfg: &Rc<RefCell<TriggerConfig>>,
         stack: &Rc<RefCell<Vec<PanelFrame>>>,
         conditions: Rc<RefCell<Vec<Condition>>>,
         edit_index: Option<usize>,
@@ -2706,6 +3319,21 @@ pub mod settings_window {
                 pattern: String::new(),
             });
 
+        // Refreshed every open (not just once) so a trigger edited, or a
+        // reference group switched, earlier in this same Settings session
+        // is reflected immediately.
+        let tc = trigger_cfg.borrow();
+        window.set_discovered_var_names(str_model(&crate::triggers::engine::discover_named_vars(
+            &tc,
+        )));
+        let ref_names: Vec<String> = tc
+            .reference_groups
+            .get(&tc.active_reference_group)
+            .map(|g| g.keys().cloned().collect())
+            .unwrap_or_default();
+        drop(tc);
+        window.set_reference_var_options(str_model(&ref_names));
+
         // Reset every field to a safe default before applying `starting` —
         // this panel is reused across many condition-editing sessions, not
         // a fresh window each time (Risk #1).
@@ -2715,8 +3343,10 @@ pub mod settings_window {
         window.set_chat_channel("Any".into());
         window.set_chat_custom_channel("".into());
         window.set_cond_var_name("".into());
-        window.set_var_op("isset".into());
+        window.set_var_op("Is set".into());
         window.set_cond_var_value("".into());
+        window.set_var_value_mode("literal".into());
+        window.set_var_value_ref("".into());
 
         match &starting {
             Condition::Match {
@@ -2762,17 +3392,27 @@ pub mod settings_window {
                 window.set_cond_var_name(var_name.clone().into());
                 window.set_var_op(
                     match op {
-                        VarOp::Isset => "isset",
-                        VarOp::Equals => "equals",
-                        VarOp::Gt => "gt (>)",
-                        VarOp::Gte => "gte (\u{2265})",
-                        VarOp::Lt => "lt (<)",
-                        VarOp::Lte => "lte (\u{2264})",
-                        VarOp::Matches => "matches",
+                        VarOp::Isset => "Is set",
+                        VarOp::Equals => "Equals",
+                        VarOp::Gt => "Greater than",
+                        VarOp::Gte => "Greater than or equal to",
+                        VarOp::Lt => "Less than",
+                        VarOp::Lte => "Less than or equal to",
+                        VarOp::Contains => "Contains",
+                        VarOp::Matches => "Regex match",
                     }
                     .into(),
                 );
-                window.set_cond_var_value(value.clone().into());
+                match ref_var_name_from_placeholder(value) {
+                    Some(ref_name) => {
+                        window.set_var_value_mode("reference".into());
+                        window.set_var_value_ref(ref_name.into());
+                    }
+                    None => {
+                        window.set_var_value_mode("literal".into());
+                        window.set_cond_var_value(value.clone().into());
+                    }
+                }
             }
         }
 

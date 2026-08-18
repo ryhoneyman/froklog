@@ -89,6 +89,7 @@ pub mod overlay_merged {
         visible: bool,
         force_show: bool,
         locked: bool,
+        hide_inactive_secs: u32,
         icon_cache: HashMap<String, Option<slint::Image>>,
         tick_count: u64,
     }
@@ -115,6 +116,7 @@ pub mod overlay_merged {
                 visible: false,
                 force_show: handle.force_show_windows.load(Ordering::Relaxed),
                 locked: cfg.overlay_merged.locked,
+                hide_inactive_secs: cfg.overlay_hide_inactive_secs,
                 icon_cache: HashMap::new(),
                 tick_count: 0,
             }
@@ -141,6 +143,7 @@ pub mod overlay_merged {
             self.history_idle_secs = cfg.overlay_merged_history_idle_secs;
             self.history_font_size = cfg.overlay_merged_history_font_size.max(8) as f32;
             self.locked = cfg.overlay_merged.locked;
+            self.hide_inactive_secs = cfg.overlay_hide_inactive_secs;
             drop(cfg);
             self.engine.sync_config();
             self.force_show = self.handle.force_show_windows.load(Ordering::Relaxed);
@@ -240,7 +243,11 @@ pub mod overlay_merged {
                 let idle_timed_out = state.history_idle_secs > 0
                     && last_arrived_secs.is_some_and(|s| s > state.history_idle_secs as f32);
                 let has_content = active.is_some() || !raw_entries.is_empty();
-                let show = is_active_style
+                // Log-inactivity hide wins over everything else, including
+                // Show All Windows — see `AppHandle::log_inactive`'s doc
+                // comment.
+                let show = !state.handle.log_inactive(state.hide_inactive_secs)
+                    && is_active_style
                     && (state.force_show || (state.enabled && has_content && !idle_timed_out));
                 if !show {
                     if state.visible {
@@ -261,6 +268,7 @@ pub mod overlay_merged {
                     state.visible = true;
                     crate::overlay_draw::overlay_draw::hide_from_taskbar(weak.clone());
                     crate::overlay_draw::overlay_draw::set_no_activate(weak.clone());
+                    crate::overlay_draw::overlay_draw::force_repaint(weak.clone());
                 }
                 // See `overlay_draw::reassert_topmost`'s doc comment.
                 if state.tick_count.is_multiple_of(100) {

@@ -14,6 +14,10 @@ export component NumberInput inherits VerticalLayout {
     in property <string> zero-hint;
     in property <bool> enabled: true;
     in-out property <string> value <=> input.text;
+    // Fired when the field loses focus (not per-keystroke) — Save-gated
+    // fields persist on defocus now that there's no separate Save button;
+    // see appearance_tab.slint's `commit-appearance` for the save side.
+    callback edited();
 
     spacing: Theme.space-xs;
 
@@ -49,6 +53,11 @@ export component NumberInput inherits VerticalLayout {
             color: root.enabled ? Theme.text-primary : Theme.text-disabled;
             font-size: Theme.font-size-md;
             read-only: !root.enabled;
+            changed has-focus => {
+                if !self.has-focus {
+                    root.edited();
+                }
+            }
         }
 
         unit-text := Text {

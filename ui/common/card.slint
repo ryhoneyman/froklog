@@ -29,6 +29,9 @@ export component SettingsCard inherits Rectangle {
     in-out property <string> pos-x;
     in-out property <string> pos-y;
     callback reset-position();
+    // Bubbles PositionPill's defocus-commit up to the tab — see
+    // number-input.slint's `edited` doc comment.
+    callback edited();
 
     background: Theme.bg-panel;
     border-radius: Theme.radius-md;
@@ -76,6 +79,7 @@ export component SettingsCard inherits Rectangle {
                     pos-y <=> root.pos-y;
                     locked <=> root.locked;
                     reset => { root.reset-position(); }
+                    edited => { root.edited(); }
                 }
             }
         }

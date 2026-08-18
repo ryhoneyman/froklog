@@ -121,8 +121,12 @@ pub mod tts {
         /// whatever's currently playing first (Emergency/InterruptConstantly
         /// callers); `false` queues behind it (QueueAll, or SmartPriority's
         /// Operational/Emergency-while-idle cases) via the sink's own
-        /// playback queue.
-        pub fn speak(&mut self, text: &str, interrupt: bool, length_scale: f32) {
+        /// playback queue. `volume` is a 0.0-1.0 multiplier from
+        /// `Config.tts_volume`, independent of `Config.sound_volume` — the
+        /// sink is long-lived (see the struct doc comment), so this is
+        /// re-applied on every call rather than once at load time, letting a
+        /// live Settings change take effect on the next utterance.
+        pub fn speak(&mut self, text: &str, interrupt: bool, length_scale: f32, volume: f32) {
             let (samples, sample_rate) =
                 match self
                     .piper
@@ -140,6 +144,7 @@ pub mod tts {
             if interrupt {
                 self.sink.stop();
             }
+            self.sink.set_volume(volume);
             tracing::warn!(
                 "TTS: synthesized {} samples @ {sample_rate}Hz for voice {:?}, handing to audio sink",
                 samples.len(),
@@ -234,7 +239,12 @@ pub mod tts {
             let Some(mut engine) = PiperEngine::load(&cfg.tts_voice) else {
                 return;
             };
-            engine.speak(&text, true, length_scale_for(&cfg.tts_speed));
+            engine.speak(
+                &text,
+                true,
+                length_scale_for(&cfg.tts_speed),
+                cfg.tts_volume as f32 / 100.0,
+            );
 
             // Block until playback finishes so this throw-away engine (and
             // its OutputStream) isn't dropped mid-utterance.

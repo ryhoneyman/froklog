@@ -19,7 +19,7 @@ pub mod tray {
     use tracing::info;
     use tray_icon::{
         menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
-        TrayIconBuilder, TrayIconEvent,
+        TrayIconBuilder,
     };
 
     use crate::config::Config;
@@ -103,6 +103,11 @@ pub mod tray {
         /// `run_engine_once` (on start) and the profile-watcher thread (on a
         /// detected change) write to this.
         pub active_log_path: Arc<Mutex<Option<String>>>,
+        /// Wall-clock time the tailer last saw a log line (any line, not
+        /// just ones the parser recognizes) — read by every overlay window
+        /// to force-hide when the game isn't logging. See `log_inactive`.
+        /// Written from the splitter thread in `main.rs`.
+        pub last_log_activity: Arc<Mutex<Instant>>,
     }
 
     impl AppHandle {
@@ -124,7 +129,17 @@ pub mod tray {
                 overlay_queue: Arc::new(Mutex::new(Vec::new())),
                 overlay_history: Arc::new(Mutex::new(Vec::new())),
                 active_log_path: Arc::new(Mutex::new(None)),
+                last_log_activity: Arc::new(Mutex::new(Instant::now())),
             }
+        }
+
+        /// True when no log line has arrived in the last `secs` seconds —
+        /// `secs == 0` means the feature is off (`Config::overlay_hide_inactive_secs`'s
+        /// "Never" option) and this always returns `false`.
+        pub fn log_inactive(&self, secs: u32) -> bool {
+            secs > 0
+                && self.last_log_activity.lock().unwrap().elapsed()
+                    > Duration::from_secs(secs as u64)
         }
     }
 
@@ -324,46 +339,12 @@ pub mod tray {
         #[cfg(target_os = "linux")]
         warn_if_no_compositor(&handle);
 
-        // ── Tray icon events (left/right click) ─────────────────────────
-        {
-            let handle = Arc::clone(&handle);
-            std::thread::Builder::new()
-                .name("tray-icon-events".into())
-                .spawn(move || {
-                    while let Ok(evt) = TrayIconEvent::receiver().recv() {
-                        let handle = Arc::clone(&handle);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            // Match only Left+Up to avoid double-firing. Opening
-                            // Settings is safer than toggling logging, which stops
-                            // capture and is easy to trigger accidentally.
-                            if matches!(
-                                evt,
-                                tray_icon::TrayIconEvent::Click {
-                                    button: tray_icon::MouseButton::Left,
-                                    button_state: tray_icon::MouseButtonState::Up,
-                                    ..
-                                }
-                            ) {
-                                open_or_raise_settings(&handle, 0);
-                            } else if matches!(
-                                evt,
-                                tray_icon::TrayIconEvent::Click {
-                                    button: tray_icon::MouseButton::Right,
-                                    button_state: tray_icon::MouseButtonState::Down,
-                                    ..
-                                }
-                            ) {
-                                // Right-click also opens the native context menu
-                                // (handled by the OS/tray-icon crate); bring any
-                                // open windows forward at the same time so
-                                // they're not left buried behind the game.
-                                bring_windows_forward(&handle);
-                            }
-                        });
-                    }
-                })
-                .expect("spawn tray-icon-events thread");
-        }
+        // Clicking the tray icon (either button) only pops up its native
+        // context menu — no custom left/right-click handling. Opening or
+        // raising Settings happens solely from the menu's own "Settings…"
+        // item (ID_SETTINGS below); a window-raise triggered directly by
+        // the click itself steals focus while the OS is still animating
+        // the menu open, which closed it before it was even visible.
 
         // ── Menu events ───────────────────────────────────────────────────
         {
@@ -816,6 +797,10 @@ pub mod tray {
         let menu_handle = menu.clone();
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
+            // Left click pops the same native menu as right click — no
+            // custom per-click handling (see the doc comment above the
+            // (removed) TrayIconEvent listener in `run()`).
+            .with_menu_on_left_click(true)
             // No log resolved yet — the engine hasn't started; the status timer
             // corrects this on its first tick.
             .with_tooltip(make_tooltip(cfg, None, logging_on))

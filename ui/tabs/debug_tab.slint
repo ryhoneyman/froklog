@@ -1,0 +1,467 @@
+import { Theme } from "../theme.slint";
+import { ComboBoxField } from "../common/combo-box.slint";
+import { ScrollArea } from "../common/scroll-area.slint";
+import { Checkbox } from "../common/checkbox.slint";
+import { TextField } from "../common/text-field.slint";
+
+// One highlighted-or-plain run of text within a matched row's log line —
+// built in Rust by splitting the line on its regex/glob capture values (see
+// settings_window.rs's `debug_segments_for`), so `{1}`/`{name}` captures can
+// render in the accent color inline instead of the whole line being one
+// flat-colored Text.
+export struct DebugSegment {
+    text: string,
+    highlighted: bool,
+}
+
+// One row of the Debug tab's log view. `segments` is only populated for
+// matched rows (see DebugTab's `row.matched` branch below) — unmatched rows
+// just render `text` as one flat-colored run.
+export struct DebugRow {
+    ts: string,
+    text: string,
+    matched: bool,
+    // Red accent instead of green — mirrors `VoicePriority::Emergency` on a
+    // fired Voice Alert action (see triggers.rs's `LineMatch`).
+    emergency: bool,
+    trigger-name: string,
+    shows-overlay: bool,
+    plays-sound: bool,
+    speaks-voice: bool,
+    segments: [DebugSegment],
+}
+
+// Small floating label shown above an icon on hover — replaces the static
+// "Legend" row/caption this tab used to have underneath the toolbar; now
+// each icon (both in the toolbar key and inline on a matched row) explains
+// itself on rollover instead of everything being spelled out once, always
+// visible, off to the side. Rendered via `if …-touch.has-hover` in the
+// icon components below rather than a Slint PopupWindow — those need an
+// imperative show()/close() call, and a plain conditional Rectangle is
+// simpler for pure hover-to-reveal with no click behavior. `above: true`
+// (the default) suits every current call site since these icons all sit
+// near the top of whatever row they're in — flip it if that's ever not
+// true and the tooltip would otherwise render off the top of the window.
+component IconTooltip inherits Rectangle {
+    in property <string> text;
+    in property <bool> above: true;
+    in property <length> icon-size: 15px;
+
+    width: label.preferred-width + 12px;
+    height: 20px;
+    x: (root.icon-size - self.width) / 2;
+    y: root.above ? -(self.height + 6px) : (root.icon-size + 6px);
+    z: 10;
+    background: Theme.bg-elevated;
+    border-width: 1px;
+    border-color: Theme.border;
+    border-radius: Theme.radius-sm;
+
+    label := Text {
+        text: root.text;
+        color: Theme.text-primary;
+        font-size: 11px;
+        width: 100%;
+        height: 100%;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component UnmatchedRow inherits Rectangle {
+    in property <DebugRow> entry;
+    height: 29px;
+
+    Rectangle {
+        height: 28px;
+        y: 0;
+
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 10px;
+
+            Text {
+                text: root.entry.ts;
+                color: Theme.text-secondary;
+                font-size: 11px;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+                width: 92px;
+                overflow: clip;
+            }
+            Text {
+                text: root.entry.text;
+                color: Theme.text-secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+        }
+    }
+
+    Rectangle {
+        y: 28px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+component MatchBadgeIcon inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    width: 15px;
+    height: 15px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    Image {
+        source: root.icon;
+        colorize: Theme.accent-hover;
+        width: 15px;
+        height: 15px;
+    }
+
+    badge-touch := TouchArea {}
+    if badge-touch.has-hover: IconTooltip { text: root.label; }
+}
+
+component MatchedRow inherits Rectangle {
+    in property <DebugRow> entry;
+    // Grows with `card` below instead of a fixed 66px — a long matched
+    // line's segments wrap (see the `wrap: word-wrap` Text loop) rather
+    // than getting clipped/ellipsized, so the row needs to grow to fit
+    // however many wrapped lines that takes instead of assuming one.
+    height: card.height + 10px;
+
+    card := Rectangle {
+        x: 6px;
+        y: 5px;
+        width: parent.width - 12px;
+        // Driven by `content`'s own natural size, not a fixed 56px — see
+        // MatchedRow's `height` doc comment above.
+        height: content.preferred-height + 16px;
+        background: Theme.bg-card-tint-green;
+        border-radius: 6px;
+        clip: true;
+
+        Rectangle {
+            x: 0;
+            width: 3px;
+            height: parent.height;
+            background: root.entry.emergency ? Theme.danger : Theme.accent;
+        }
+
+        content := VerticalLayout {
+            x: 15px;
+            y: 8px;
+            width: parent.width - 15px - 12px;
+            // Explicit self-referencing-to-`preferred-height` (not left
+            // unbound) — a plain, non-layout parent (`card`) defaults an
+            // unbound child's height to *fill the parent* rather than to
+            // the child's own natural size, which made `card`'s own
+            // height (bound from `content.height` above) circular.
+            // `preferred-height` is a distinct, non-circular computed
+            // property that doesn't have this problem.
+            height: self.preferred-height;
+            spacing: 5px;
+
+            // `ts` and the per-segment Text elements are direct siblings
+            // in ONE HorizontalLayout here — they used to be grouped as
+            // ts + (a second, nested HorizontalLayout holding the
+            // segments), but that extra nesting level is what caused the
+            // wrapped height to stop propagating correctly up to `content`
+            // (Slint's wrap-aware height-for-width sizing reliably reaches
+            // a layout's *direct* children, not a layout nested two levels
+            // deep) — the badges row below ended up positioned as if this
+            // row were always one line tall, cutting it off whenever a
+            // long matched line actually wrapped to two or more.
+            HorizontalLayout {
+                // 0, not a uniform `spacing` — that put an 8px gap between
+                // *every* direct child, including between adjacent segment
+                // Text elements, so a highlighted capture always had extra
+                // padding around it that isn't in the actual log line (the
+                // real inter-word spacing is already baked into each
+                // segment's own text — see `debug_segments_for`). One
+                // explicit spacer below covers the one gap that's actually
+                // wanted, between the timestamp and the line itself.
+                spacing: 0px;
+
+                Text {
+                    text: root.entry.ts;
+                    color: Theme.text-secondary;
+                    font-size: 11px;
+                    horizontal-stretch: 0;
+                    width: 92px;
+                    overflow: clip;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 0;
+                    width: 8px;
+                }
+
+                // Only the trailing segment stretches/wraps to absorb
+                // leftover row width — giving every segment stretch: 1 (the
+                // old behavior) divided the row into equal-width slots per
+                // segment, each wrapping independently, which read as a
+                // table of columns instead of one highlighted line of text.
+                for seg[i] in root.entry.segments: Text {
+                    text: seg.text;
+                    color: seg.highlighted ? Theme.warning : Theme.text-primary;
+                    font-weight: seg.highlighted ? 600 : 400;
+                    font-size: 13px;
+                    horizontal-stretch: i == root.entry.segments.length - 1 ? 1 : 0;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Rectangle {
+                    horizontal-stretch: 0;
+                    width: 92px;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 0;
+                    vertical-stretch: 0;
+                    height: 18px;
+                    background: Theme.bg-elevated;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    border-radius: 999px;
+
+                    HorizontalLayout {
+                        padding-left: 7px;
+                        padding-right: 9px;
+                        spacing: 5px;
+
+                        Rectangle {
+                            horizontal-stretch: 0;
+                            vertical-stretch: 0;
+                            width: 7px;
+                            height: 7px;
+                            border-radius: 3.5px;
+                            y: (parent.height - self.height) / 2;
+                            background: root.entry.emergency ? Theme.danger : Theme.accent;
+                        }
+                        Text {
+                            text: root.entry.trigger-name;
+                            color: Theme.text-primary;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: 7px;
+                    if root.entry.shows-overlay: MatchBadgeIcon { icon: @image-url("../common/icons/overlay.svg"); label: "Overlay shown"; }
+                    if root.entry.plays-sound: MatchBadgeIcon { icon: @image-url("../common/icons/sound.svg"); label: "Sound played"; }
+                    if root.entry.speaks-voice: MatchBadgeIcon { icon: @image-url("../common/icons/mic.svg"); label: "Voice spoken"; }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+    }
+}
+
+component LegendIcon inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    width: 15px;
+    height: 15px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    Image {
+        source: root.icon;
+        colorize: Theme.text-secondary;
+        width: 15px;
+        height: 15px;
+    }
+
+    legend-touch := TouchArea {}
+    if legend-touch.has-hover: IconTooltip { text: root.label; }
+}
+
+component LegendDot inherits Rectangle {
+    in property <string> label;
+    width: 15px;
+    height: 15px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    Rectangle {
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: Theme.accent;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    legend-touch := TouchArea {}
+    if legend-touch.has-hover: IconTooltip { text: root.label; }
+}
+
+export component DebugTab inherits VerticalLayout {
+    padding: Theme.space-lg;
+    spacing: 0px;
+    alignment: start;
+
+    in property <[DebugRow]> debug-rows;
+    in-out property <string> debug-line-limit: "500 lines";
+    // Not persisted — a plain session toggle. While on, Rust re-reads the
+    // log tail on a short timer (see settings_window.rs's debug-live
+    // repeating timer) and the list below sticks to the bottom as new rows
+    // arrive (see ScrollArea's `stick-to-bottom`).
+    in-out property <bool> debug-live: false;
+    // Not persisted — a plain session toggle, purely client-side (see the
+    // row loop below): hides unmatched rows rather than asking Rust to
+    // filter `debug-rows`, since nothing about which rows matched changes.
+    in-out property <bool> debug-matched-only: false;
+    // Not persisted — a plain session toggle, purely client-side, same as
+    // `debug-matched-only` above. Filters whichever rows `debug-matched-only`
+    // is already letting through (i.e. it narrows the current Live/Matched
+    // view, it doesn't replace it).
+    in-out property <string> debug-search-term: "";
+    callback debug-line-limit-changed();
+    // Case-insensitive substring test against a row's log text — implemented
+    // in Rust (see settings_window.rs's `on_debug_line_matches_search`)
+    // since Slint's string type has no built-in `contains`. Declared `pure`
+    // so it can be called directly from the row-filter `if` conditions below
+    // and gets re-evaluated automatically whenever `debug-search-term`
+    // changes, with no extra plumbing needed.
+    pure callback debug-line-matches-search(string, string) -> bool;
+
+    Text {
+        text: "Debug";
+        color: Theme.text-primary;
+        font-size: Theme.font-size-xl;
+        font-weight: 700;
+    }
+    Rectangle { height: 8px; }
+    Text {
+        text: "Live view from the active log file, with trigger matches and fired actions highlighted inline.";
+        color: Theme.text-secondary;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+    Rectangle { height: 16px; }
+
+    HorizontalLayout {
+        spacing: Theme.space-md;
+
+        Text {
+            text: "Show last";
+            color: Theme.text-secondary;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-stretch: 0;
+        }
+        ComboBoxField {
+            horizontal-stretch: 0;
+            width: 118px;
+            options: ["100 lines", "500 lines", "1000 lines", "2000 lines"];
+            value: root.debug-line-limit;
+            selected(v) => {
+                root.debug-line-limit = v;
+                root.debug-line-limit-changed();
+            }
+        }
+        Checkbox {
+            horizontal-stretch: 0;
+            text: "Live";
+            checked <=> root.debug-live;
+        }
+        Checkbox {
+            horizontal-stretch: 0;
+            text: "Matched";
+            checked <=> root.debug-matched-only;
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 12px;
+
+            LegendDot { label: "Matched trigger"; }
+            LegendIcon { icon: @image-url("../common/icons/overlay.svg"); label: "Overlay shown"; }
+            LegendIcon { icon: @image-url("../common/icons/sound.svg"); label: "Sound played"; }
+            LegendIcon { icon: @image-url("../common/icons/mic.svg"); label: "Voice spoken"; }
+        }
+    }
+    Rectangle { height: 16px; }
+
+    Rectangle {
+        // Explicit (not vertical-stretch-to-fill) — the tab sits inside the
+        // shell's outer Flickable (see settings_shell.slint), which sizes
+        // children to their natural preferred-height rather than a fixed
+        // viewport, so there's no ambient window height to stretch against
+        // here. A fixed card height keeps the mockup's "bordered box with
+        // its own internal scrollbar" look regardless — any extra overflow
+        // is handled by the outer ScrollArea exactly like every other tab.
+        height: 320px;
+        background: Theme.bg-panel;
+        border-width: 1px;
+        border-color: Theme.border;
+        border-radius: Theme.radius-md;
+        clip: true;
+
+        ScrollArea {
+            // `rows.preferred-height`, not a fixed per-row height Rust
+            // sums up (a matched row wraps to fit its text, so there's no
+            // accurate constant Rust could hand this) — see ScrollArea's
+            // `content-height` doc comment for why this indirection (not a
+            // Flickable-side auto-size mode) is the reliable way to get a
+            // Slint-computed height here.
+            content-height: rows.preferred-height;
+            stick-to-bottom: root.debug-live;
+
+            rows := VerticalLayout {
+                // A VerticalLayout wrapper (not a plain Rectangle) per row,
+                // even though only one of the two branches below is ever
+                // present — a Layout's preferred-height is reliably
+                // computed from its (conditional) children by Slint's
+                // normal layout algorithm, the same mechanism every other
+                // tab in this app already leans on; a plain Rectangle
+                // wrapper would need its own explicit height binding, and
+                // there's no single constant that fits both a fixed-height
+                // UnmatchedRow and a MatchedRow that wraps to fit its text.
+                for row in root.debug-rows: VerticalLayout {
+                    if row.matched && (root.debug-search-term == "" || root.debug-line-matches-search(row.text, root.debug-search-term)): MatchedRow { entry: row; }
+                    if !row.matched && !root.debug-matched-only && (root.debug-search-term == "" || root.debug-line-matches-search(row.text, root.debug-search-term)): UnmatchedRow { entry: row; }
+                }
+            }
+        }
+    }
+    Rectangle { height: 12px; }
+
+    // Narrows whichever rows the Live/Matched toggles above are already
+    // showing — not a separate log query, so typing here needs no Rust
+    // round-trip beyond the `debug-line-matches-search` substring check.
+    HorizontalLayout {
+        spacing: Theme.space-md;
+
+        Text {
+            text: "Search";
+            color: Theme.text-secondary;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-stretch: 0;
+        }
+        TextField {
+            horizontal-stretch: 1;
+            placeholder: "Filter the lines above…";
+            text <=> root.debug-search-term;
+        }
+    }
+}

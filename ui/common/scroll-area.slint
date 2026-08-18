@@ -8,17 +8,64 @@ import { Theme } from "../theme.slint";
 // Caller must pass `content-height` explicitly (the tallest content among
 // possibly-several permanently-instantiated siblings, `visible`-toggled
 // rather than conditionally instantiated — see settings_shell.slint for
-// why) since automatic viewport sizing only works for a single child.
+// why) since automatic viewport sizing only works for a single child. For
+// content whose height isn't a fixed, Rust-computable constant (e.g. the
+// Debug tab's log list, where a matched row wraps to fit however much text
+// it has), pass the content's own `X.preferred-height` as `content-height`
+// instead of a number Rust summed up — Slint computing that itself is
+// reliable (see e.g. how MatchedRow's own card sizes off
+// `content.preferred-height` in debug_tab.slint). An earlier version of
+// this component had a from-Flickable `auto-size` mode meant to cover this
+// same case without the caller needing to supply anything — dropped after
+// a real bug: Flickable's own built-in "size to my single child" inference
+// silently undercounted the true height once the child tree got deep and
+// wide enough (500 rows, several dynamically wrapped) that scrolling to
+// the reported bottom stopped short of the file's actual last lines.
 export component ScrollArea inherits Rectangle {
     in property <length> content-height;
+    // When true, the viewport snaps to the bottom every time the content
+    // grows (new rows appended) and immediately when this flips on — a
+    // `tail -f`-style follow mode for the Debug tab's "Live" checkbox.
+    // Deliberately unconditional: it doesn't try to detect "user had
+    // scrolled up to look at history" and leave them alone, so re-enabling
+    // Live always jumps back to the newest line.
+    in property <bool> stick-to-bottom: false;
 
     property <length> bar-width: 8px;
     property <bool> can-scroll: flick.viewport-height > flick.height;
+    // Tracks the *actual* viewport height regardless of which of the two
+    // states below is driving it, so stick-to-bottom below works the same
+    // way in `auto-size` mode (where there's no `content-height` binding
+    // to watch) as in the explicit-height mode every other caller uses.
+    property <length> tracked-viewport-height: flick.viewport-height;
+
+    changed tracked-viewport-height => {
+        if root.stick-to-bottom {
+            flick.viewport-y = -(flick.viewport-height - flick.height);
+        }
+    }
+    changed stick-to-bottom => {
+        if root.stick-to-bottom {
+            flick.viewport-y = -(flick.viewport-height - flick.height);
+        }
+    }
 
     flick := Flickable {
         width: parent.width;
         height: parent.height;
         viewport-height: max(root.content-height, self.height);
+        // Click-and-drag-to-pan is disabled deliberately: this component
+        // already provides a visible, draggable thumb below, and leaving
+        // Flickable's own built-in drag gesture active meant a drag
+        // starting on this scrollbar's thumb (e.g. the Debug tab's nested
+        // ScrollArea) got contested by an *ancestor* ScrollArea's Flickable
+        // (e.g. the settings shell's outer tab-body scroll) also grabbing
+        // the same pointer-move — the outer one visually won, so the whole
+        // tab scrolled instead of the inner list. Wheel events are exempt
+        // from `interactive` (see Slint's Flickable impl) so mouse-wheel
+        // scrolling still works everywhere; only click-drag panning is
+        // disabled in favor of the thumb.
+        interactive: false;
         @children
     }
 
@@ -36,8 +83,15 @@ export component ScrollArea inherits Rectangle {
             width: parent.width;
             border-radius: self.width / 2;
             background: drag.pressed ? Theme.accent : Theme.text-disabled;
-            y: (-flick.viewport-y / flick.viewport-height) * parent.height;
             height: max(24px, (flick.height / flick.viewport-height) * parent.height);
+            // Travel range is `parent.height - self.height`, not
+            // `parent.height` — on a long list (small height/viewport-height
+            // ratio) `height` above gets floored to the 24px minimum, and
+            // positioning against the *un-floored* proportional height (the
+            // previous formula) let the thumb's bottom edge run past the
+            // track's bottom once scrolled all the way down, since it never
+            // accounted for that floor eating into the available travel.
+            y: (-flick.viewport-y / (flick.viewport-height - flick.height)) * (parent.height - self.height);
 
             animate background { duration: 100ms; }
         }

@@ -5,6 +5,7 @@ import { ComboBoxField } from "../common/combo-box.slint";
 import { Checkbox } from "../common/checkbox.slint";
 import { RadioGroup } from "../common/radio-group.slint";
 import { Button } from "../common/buttons.slint";
+import { Slider } from "../common/slider.slint";
 
 // Phase 2.3 — replaces create_voice_panel() in overlay_config_win.rs: TTS
 // enable, speed, audio mode (Smart Priority/Queue All/Interrupt
@@ -15,6 +16,7 @@ export component VoiceTab inherits VerticalLayout {
     alignment: start;
 
     in-out property <bool> tts-enabled;
+    in-out property <float> tts-volume: 100;
     in-out property <string> tts-speed: "Normal (1x)";
     property <[string]> speed-options: [
         "Normal (1x)", "Fast (1.2x)", "Faster (1.5x)", "Fastest (2x)",
@@ -44,6 +46,11 @@ export component VoiceTab inherits VerticalLayout {
 
     Card {
         Checkbox { text: "Enable Text-to-Speech"; checked <=> root.tts-enabled; }
+
+        LabeledField {
+            label: "TTS Volume: \{round(root.tts-volume)}%";
+            Slider { minimum: 0; maximum: 100; value <=> root.tts-volume; }
+        }
 
         LabeledField {
             label: "Voice Speed";

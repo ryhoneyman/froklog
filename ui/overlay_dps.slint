@@ -101,6 +101,7 @@ component ColDivider inherits TouchArea {
 }
 
 export component DpsMeterWindow inherits OverlayShell {
+    title: "DPS Meter";
     // Window width in px, pushed from config (`meter_width`) by the Rust
     // tick loop; <= 0 falls back to the historical fixed width. Driving the
     // root's width (rather than resizing the winit window) keeps height
@@ -167,10 +168,27 @@ export component DpsMeterWindow inherits OverlayShell {
     callback drag-requested();
     callback resize-requested();
 
+    // Forces a full repaint of everything under `panel` (title bar, column
+    // header, rows, footer — none of which have any other Rust-bound
+    // property) across a hide/show cycle. Slint's `Property::set()` only
+    // marks a property dirty when the new value differs from the old one,
+    // so a window that comes back from `.show()` with a stale/reclaimed
+    // render surface only repaints elements whose bound properties
+    // actually changed since the last frame — see overlay_dps.rs's
+    // matching comment on where this gets toggled. `mob-label` alone (the
+    // original fix here) only forced its own Text element to redraw, not
+    // the static-background chrome around it, because it's a leaf
+    // property; `opacity` on this container forces the whole composited
+    // subtree beneath it to redraw instead, mirroring how
+    // overlay_alert.slint's `opacity: root.alpha` on its own wrapping
+    // Rectangle already does for the alert window.
+    in property <float> panel-opacity: 1;
+
     panel := Rectangle {
         background: #0c0c11d7;
         border-radius: 6px;
         clip: true;
+        opacity: root.panel-opacity;
 
         TouchArea {
             width: 100%;
