@@ -101,8 +101,12 @@ component TriggerRowGroup inherits Rectangle {
 
                         property <color> kind-tint: root.selected-index == i ? Theme.on-accent : row.tint;
 
-                        if row.kind == "overlay": KindIcon {
-                            icon: @image-url("../common/icons/overlay.svg");
+                        if row.kind == "alert_overlay": KindIcon {
+                            icon: @image-url("../common/icons/warning-triangle.svg");
+                            tint: kind-tint;
+                        }
+                        if row.kind == "notice_overlay": KindIcon {
+                            icon: @image-url("../common/icons/bell.svg");
                             tint: kind-tint;
                         }
                         if row.kind == "voice": KindIcon {
@@ -116,7 +120,7 @@ component TriggerRowGroup inherits Rectangle {
                         // Kinds with no matching Debug-tab SVG (e.g.
                         // "store_var", or a condition's "match"/"chat"/
                         // "var") keep the original bracketed-text badge.
-                        if !(row.kind == "overlay" || row.kind == "voice" || row.kind == "play_sound"): Text {
+                        if !(row.kind == "alert_overlay" || row.kind == "notice_overlay" || row.kind == "voice" || row.kind == "play_sound"): Text {
                             text: "[" + row.badge + "]";
                             color: kind-tint;
                             font-size: Theme.font-size-sm;
@@ -245,6 +249,13 @@ export component TriggerPanel inherits VerticalLayout {
     callback ok();
     callback cancel();
 
+    // Forwarded from Rust (via settings_shell.slint's focus-trigger-name)
+    // right after cloning a trigger, so the user lands in edit mode with
+    // the duplicated name already selected, ready to type over.
+    public function focus-name() {
+        name-field.focus-and-select-all();
+    }
+
     HorizontalLayout {
         spacing: Theme.space-sm;
         Text {
@@ -253,7 +264,7 @@ export component TriggerPanel inherits VerticalLayout {
             font-size: Theme.font-size-sm;
             vertical-alignment: center;
         }
-        TextField {
+        name-field := TextField {
             horizontal-stretch: 1;
             text <=> root.trigger-name;
         }

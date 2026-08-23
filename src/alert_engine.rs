@@ -15,7 +15,7 @@ pub mod alert_engine {
 
     use crate::overlay_history::overlay_history::HistoryEntry;
     use crate::tray::tray::AppHandle;
-    use crate::triggers::engine::{OverlayEvent, Treatment, VoicePriority};
+    use crate::triggers::engine::{EventTarget, OverlayEvent, Treatment, VoicePriority};
 
     /// Ambient-priority events are dropped instead of queued once this many
     /// events are already waiting — stale low-priority info showing late is
@@ -42,15 +42,20 @@ pub mod alert_engine {
         pub is_placeholder: bool,
     }
 
+    /// Which window is driving this engine — decides which trigger-engine
+    /// queue it drains, which config fields `fly_ms`/`hold_secs` read from,
+    /// and the "Show All Windows" placeholder's drag-label text. Set once at
+    /// construction; never changes for the engine's lifetime.
+    #[derive(Clone, Copy, PartialEq)]
+    pub enum EngineSource {
+        Alert,
+        Merged,
+        Notice,
+    }
+
     pub struct AlertEngine {
         handle: Arc<AppHandle>,
-        // Which config fields `fly_ms`/`hold_secs` are read from — the
-        // standalone alert window's `overlay_fly_ms`/`overlay_hold_secs`, or
-        // the Combined overlay's own independent `overlay_merged_fly_ms`/
-        // `overlay_merged_hold_secs`. Set once at construction from which
-        // window created this engine; never changes for the engine's
-        // lifetime, unlike the timing values themselves.
-        merged: bool,
+        source: EngineSource,
         queue: Vec<OverlayEvent>,
         active: Option<ActiveAlert>,
         fly_ms: u32,
@@ -60,17 +65,19 @@ pub mod alert_engine {
     }
 
     impl AlertEngine {
-        /// `merged` — see the `AlertEngine::merged` field doc comment.
-        pub fn new(handle: &Arc<AppHandle>, merged: bool) -> Self {
+        pub fn new(handle: &Arc<AppHandle>, source: EngineSource) -> Self {
             let cfg = handle.config.lock().unwrap();
-            let (fly_ms, hold_secs) = if merged {
-                (cfg.overlay_merged_fly_ms, cfg.overlay_merged_hold_secs)
-            } else {
-                (cfg.overlay_fly_ms, cfg.overlay_hold_secs)
+            let (fly_ms, hold_secs) = match source {
+                EngineSource::Alert => (cfg.overlay_fly_ms, cfg.overlay_hold_secs),
+                EngineSource::Merged => (cfg.overlay_merged_fly_ms, cfg.overlay_merged_hold_secs),
+                EngineSource::Notice => (
+                    cfg.overlay_notice_transition_ms,
+                    cfg.overlay_notice_hold_secs,
+                ),
             };
             Self {
                 handle: Arc::clone(handle),
-                merged,
+                source,
                 queue: Vec::new(),
                 active: None,
                 fly_ms: fly_ms.max(16),
@@ -88,10 +95,13 @@ pub mod alert_engine {
         pub fn sync_config(&mut self) {
             let cfg = self.handle.config.lock().unwrap();
             let new_voice_name = cfg.tts_voice.clone();
-            let (fly_ms, hold_secs) = if self.merged {
-                (cfg.overlay_merged_fly_ms, cfg.overlay_merged_hold_secs)
-            } else {
-                (cfg.overlay_fly_ms, cfg.overlay_hold_secs)
+            let (fly_ms, hold_secs) = match self.source {
+                EngineSource::Alert => (cfg.overlay_fly_ms, cfg.overlay_hold_secs),
+                EngineSource::Merged => (cfg.overlay_merged_fly_ms, cfg.overlay_merged_hold_secs),
+                EngineSource::Notice => (
+                    cfg.overlay_notice_transition_ms,
+                    cfg.overlay_notice_hold_secs,
+                ),
             };
             self.fly_ms = fly_ms.max(16);
             self.hold_secs = hold_secs.max(0.0);
@@ -117,9 +127,39 @@ pub mod alert_engine {
             self.active.as_ref()
         }
 
+        /// True while a Test-button alert is anywhere in this engine's
+        /// pipeline: waiting undrained in the shared trigger-engine queue
+        /// (this window was asleep/disabled and hasn't ticked yet), queued
+        /// internally, or currently the active on-screen alert. Callers use
+        /// this to force the window awake and visible for exactly as long
+        /// as the test alert is present — no explicit wake/sleep
+        /// bookkeeping needed, since this goes false on its own the moment
+        /// `tick()` finishes draining and retiring it.
+        pub fn has_test_content(&self) -> bool {
+            self.active.as_ref().is_some_and(|a| a.event.is_test)
+                || self.queue.iter().any(|e| e.is_test)
+                || self
+                    .trigger_queue()
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e.is_test)
+        }
+
+        /// Which trigger-engine queue this source drains — see
+        /// `triggers::engine::EventTarget`. Alert and Merged share one
+        /// queue (they're mutually exclusive, only one ever drains it);
+        /// Notice has its own since it runs alongside Alert.
+        fn trigger_queue(&self) -> &Arc<std::sync::Mutex<Vec<OverlayEvent>>> {
+            match self.source {
+                EngineSource::Alert | EngineSource::Merged => &self.handle.overlay_queue,
+                EngineSource::Notice => &self.handle.notice_queue,
+            }
+        }
+
         fn drain_queue(&mut self) {
             let new_events: Vec<OverlayEvent> = {
-                let mut q = self.handle.overlay_queue.lock().unwrap();
+                let mut q = self.trigger_queue().lock().unwrap();
                 q.drain(..).collect()
             };
             if !new_events.is_empty() {
@@ -152,7 +192,13 @@ pub mod alert_engine {
                         }
                     }
                 } else if let Some(s) = ev.sound.as_deref().filter(|s| !s.is_empty()) {
-                    crate::overlay::overlay::play_sound_label(s);
+                    // Test-button events bypass "Sound enabled" too — same
+                    // reasoning as the TTS branch above.
+                    if ev.is_test {
+                        crate::overlay::overlay::preview_sound_label(s);
+                    } else {
+                        crate::overlay::overlay::play_sound_label(s);
+                    }
                 }
             }
         }
@@ -181,11 +227,16 @@ pub mod alert_engine {
                 // goes false again.
                 if force_show {
                     tracing::info!("alert engine: placeholder injected (force_show set)");
+                    let drag_label = match self.source {
+                        EngineSource::Alert => "Alerts (drag)",
+                        EngineSource::Merged => "Combined Alert + History (drag)",
+                        EngineSource::Notice => "Notices (drag)",
+                    };
                     self.active = Some(ActiveAlert {
                         event: OverlayEvent {
                             icon: String::new(),
                             color: String::new(),
-                            message: "Drag me".into(),
+                            message: drag_label.into(),
                             message_color: String::new(),
                             border_color: String::new(),
                             sound: None,
@@ -193,6 +244,7 @@ pub mod alert_engine {
                             tts_priority: VoicePriority::default(),
                             treatment: Treatment::default(),
                             priority: VoicePriority::default(),
+                            target: EventTarget::Alert,
                             is_test: false,
                         },
                         phase: AlertPhase::Hold,

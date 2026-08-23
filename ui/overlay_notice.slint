@@ -1,0 +1,99 @@
+import { Theme } from "theme.slint";
+import { StrokedText } from "common/stroked-text.slint";
+import { OverlayShell } from "common/overlay-shell.slint";
+
+// Notice overlay window — a second, lighter overlay kind alongside Alert
+// (ui/overlay_alert.slint). See src/overlay_notice.rs's module doc for the
+// full picture; this file mirrors overlay_alert.slint's structure closely,
+// with two deliberate differences: `font-size-pt` is a single fixed value
+// (no start/max animated growth — Notice has no "Start Size" setting), and
+// there's no `glow`/`glow-pulse` at all, since Notice has no hold-phase
+// treatment — only the fade/slide/fly entrance/exit `x-offset`/`y-offset`/
+// `alpha` computed by `overlay_notice.rs`'s `resolve_notice_frame`.
+//
+// Fixed size, smaller than Alert's 1200x260 but bigger than History's
+// 320px-wide/content-height window — see overlay_alert.slint's doc comment
+// for why this window's size is fixed rather than content-driven.
+export component NoticeOverlayWindow inherits OverlayShell {
+    title: "Notice Overlay";
+    width: 600px;
+    height: 140px;
+
+    in property <string> message;
+    in property <image> icon-source;
+    in property <bool> has-icon;
+    in property <color> text-color: white;
+    in property <color> stroke-color: black;
+
+    in property <float> font-size-pt: 10;
+    in property <float> alpha: 0;
+    in property <length> x-offset: 0px;
+    in property <length> y-offset: 0px;
+
+    property <length> stroke-w: max(1px, min(3px, root.font-size-pt / 20 * 1px));
+
+    // Drag-to-move — see overlay_alert.slint's comment on the same TouchArea.
+    in property <bool> locked: false;
+    in property <bool> force-show: false;
+    callback drag-requested();
+
+    // No-compositor-Linux fallback — see overlay_alert.slint's comment on
+    // the same property.
+    in property <bool> panel-fallback: false;
+
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        enabled: !root.locked || root.force-show;
+        changed pressed => {
+            if self.pressed {
+                root.drag-requested();
+            }
+        }
+    }
+
+    Rectangle {
+        x: root.x-offset;
+        y: (parent.height - self.height) / 2 + root.y-offset;
+        width: parent.width;
+        height: wrap.height;
+        opacity: root.alpha;
+
+        wrap := Rectangle {
+            x: (parent.width - self.width) / 2;
+            width: row.preferred-width;
+            height: row.preferred-height;
+
+            if root.panel-fallback: Rectangle {
+                x: -16px;
+                y: -10px;
+                width: parent.width + 32px;
+                height: parent.height + 20px;
+                border-radius: 10px;
+                background: #0c0c11e6;
+            }
+
+            row := HorizontalLayout {
+                width: 100%;
+                height: 100%;
+                spacing: 12px;
+                alignment: center;
+
+                if root.has-icon: Image {
+                    source: root.icon-source;
+                    width: root.font-size-pt * 1px;
+                    height: root.font-size-pt * 1px;
+                    image-fit: contain;
+                }
+
+                StrokedText {
+                    text: root.message;
+                    text-color: root.text-color;
+                    stroke-color: root.stroke-color;
+                    stroke-width: root.stroke-w;
+                    font-size: root.font-size-pt * 1px;
+                }
+            }
+        }
+    }
+}

@@ -27,8 +27,10 @@ export component ActionPanel inherits VerticalLayout {
     spacing: Theme.space-md;
     alignment: start;
 
-    in-out property <string> action-type: "Overlay message";
-    property <bool> is-overlay: root.action-type == "Overlay message";
+    in-out property <string> action-type: "Alert Overlay Message";
+    property <bool> is-alert-overlay: root.action-type == "Alert Overlay Message";
+    property <bool> is-notice-overlay: root.action-type == "Notice Overlay Message";
+    property <bool> is-overlay: root.is-alert-overlay || root.is-notice-overlay;
     property <bool> is-store-var: root.action-type == "Store variable";
     property <bool> is-voice-alert: root.action-type == "Voice Alert (TTS)";
     property <bool> is-play-sound: root.action-type == "Play Sound";
@@ -110,7 +112,7 @@ export component ActionPanel inherits VerticalLayout {
         label: "Action type";
         ComboBoxField {
             options: [
-                "Overlay message", "Store variable",
+                "Alert Overlay Message", "Notice Overlay Message", "Store variable",
                 "Voice Alert (TTS)", "Play Sound",
             ];
             value <=> root.action-type;
@@ -188,7 +190,11 @@ export component ActionPanel inherits VerticalLayout {
 
         HorizontalLayout {
             spacing: Theme.space-md;
-            LabeledField {
+            // Notice has no hold-phase treatment at all (no Glow/Vibrate/
+            // Pulse) — its entrance/exit style is a window-level "Transition"
+            // setting on the Notice overlay card instead, not a per-message
+            // choice like Alert's Treatment.
+            if root.is-alert-overlay: LabeledField {
                 label: "Treatment";
                 ComboBoxField {
                     options: ["None", "Glow", "Vibrate", "Pulse"];

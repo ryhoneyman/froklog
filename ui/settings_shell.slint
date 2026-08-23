@@ -75,6 +75,14 @@ export component SettingsWindow inherits Window {
     callback drawer-jump(int);
 
     callback trigger-panel-ok();
+    // Fired by Rust right after opening the trigger panel for a freshly
+    // cloned trigger — forwards into TriggerPanel's own public function to
+    // grab keyboard focus on the Name field and select its (duplicated)
+    // text, since the panel is a permanent reused widget (see push_trigger_
+    // panel's doc comment) rather than one that could rely on Slint's
+    // `init`-on-instantiation trick the way GroupRenameField does.
+    callback focus-trigger-name();
+    focus-trigger-name => { trigger-panel.focus-name(); }
     callback condition-panel-ok();
     callback action-panel-ok();
     callback sound-label-panel-ok();
@@ -114,6 +122,7 @@ export component SettingsWindow inherits Window {
     in-out property <int> selected-trigger-index <=> triggers-tab.selected-trigger-index;
     callback add-trigger <=> triggers-tab.add-trigger;
     callback edit-trigger <=> triggers-tab.edit-trigger;
+    callback clone-trigger <=> triggers-tab.clone-trigger;
     callback delete-trigger <=> triggers-tab.delete-trigger;
     callback move-trigger-up <=> triggers-tab.move-trigger-up;
     callback move-trigger-down <=> triggers-tab.move-trigger-down;
@@ -131,6 +140,7 @@ export component SettingsWindow inherits Window {
     in-out property <string> history-font-size <=> appearance-tab.history-font-size;
     in-out property <string> history-idle-secs <=> appearance-tab.history-idle-secs;
     in-out property <string> history-max-entries <=> appearance-tab.history-max-entries;
+    in-out property <string> history-max-age-mins <=> appearance-tab.history-max-age-mins;
     in-out property <string> history-width <=> appearance-tab.history-width;
     in-out property <string> meter-max-rows <=> appearance-tab.meter-max-rows;
     in-out property <string> meter-idle-secs <=> appearance-tab.meter-idle-secs;
@@ -169,6 +179,17 @@ export component SettingsWindow inherits Window {
     in-out property <string> merged-history-font-size <=> appearance-tab.merged-history-font-size;
     in-out property <string> merged-history-idle-secs <=> appearance-tab.merged-history-idle-secs;
     in-out property <string> merged-history-max-entries <=> appearance-tab.merged-history-max-entries;
+    in-out property <string> merged-history-max-age-mins <=> appearance-tab.merged-history-max-age-mins;
+    in-out property <bool> win-notice-enabled <=> appearance-tab.notice-enabled;
+    in-out property <bool> win-notice-locked <=> appearance-tab.notice-locked;
+    in-out property <string> win-notice-pos-x <=> appearance-tab.notice-pos-x;
+    in-out property <string> win-notice-pos-y <=> appearance-tab.notice-pos-y;
+    callback notice-reset-position <=> appearance-tab.notice-reset-position;
+    in-out property <string> notice-font-size <=> appearance-tab.notice-font-size;
+    in-out property <string> notice-transition <=> appearance-tab.notice-transition;
+    in-out property <string> notice-transition-ms <=> appearance-tab.notice-transition-ms;
+    in-out property <string> notice-hold-secs <=> appearance-tab.notice-hold-secs;
+    in-out property <string> notice-alpha <=> appearance-tab.notice-alpha;
     // Fires when any font-size/timing/opacity/history/meter/position field
     // on the Overlays tab loses focus — see appearance_tab.slint's doc
     // comment on its own `commit-appearance`.
@@ -401,6 +422,13 @@ export component SettingsWindow inherits Window {
     callback instant-save-win-merged();
     changed win-merged-enabled => { root.instant-save-win-merged(); }
     changed win-merged-locked => { root.instant-save-win-merged(); }
+
+    callback instant-save-win-notice();
+    changed win-notice-enabled => { root.instant-save-win-notice(); }
+    changed win-notice-locked => { root.instant-save-win-notice(); }
+
+    callback instant-save-notice-transition();
+    changed notice-transition => { root.instant-save-notice-transition(); }
 
     callback instant-save-alert-style();
     changed alert-style => { root.instant-save-alert-style(); }

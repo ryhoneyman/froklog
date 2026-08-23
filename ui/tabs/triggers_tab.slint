@@ -24,6 +24,7 @@ export component TriggersTab inherits VerticalLayout {
 
     callback add-trigger();
     callback edit-trigger();
+    callback clone-trigger();
     callback delete-trigger();
     callback move-trigger-up();
     callback move-trigger-down();
@@ -61,6 +62,12 @@ export component TriggersTab inherits VerticalLayout {
                 primary: false;
                 enabled: root.selected-trigger-index >= 0;
                 clicked => { root.edit-trigger(); }
+            }
+            Button {
+                text: "Clone";
+                primary: false;
+                enabled: root.selected-trigger-index >= 0;
+                clicked => { root.clone-trigger(); }
             }
             Button {
                 text: "Delete";

@@ -26,7 +26,7 @@ pub mod settings_window {
 
     use crate::config::{
         player_name_from_path, server_name_from_path, AlertStyle, Config, LogProfile, LogWatchMode,
-        TtsAudioMode, TtsSpeed,
+        NoticeTransition, TtsAudioMode, TtsSpeed,
     };
     use crate::overlay_draw::overlay_draw::parse_hex_color;
     use crate::overlay_registry::overlay_registry::OverlayKind;
@@ -260,6 +260,10 @@ pub mod settings_window {
                     w.set_win_merged_pos_x(x.to_string().into());
                     w.set_win_merged_pos_y(y.to_string().into());
                 }
+                OverlayKind::Notice => {
+                    w.set_win_notice_pos_x(x.to_string().into());
+                    w.set_win_notice_pos_y(y.to_string().into());
+                }
             }
         });
     }
@@ -463,6 +467,7 @@ pub mod settings_window {
         window.set_history_font_size(cfg.overlay_history_font_size.to_string().into());
         window.set_history_idle_secs(cfg.overlay_history_idle_secs.to_string().into());
         window.set_history_max_entries(cfg.overlay_history_max_entries.to_string().into());
+        window.set_history_max_age_mins(cfg.overlay_history_max_age_mins.to_string().into());
         window.set_history_width(cfg.overlay_history_width.to_string().into());
         window.set_merged_start_font_size(cfg.overlay_merged_start_font_size.to_string().into());
         window.set_merged_max_font_size(cfg.overlay_merged_max_font_size.to_string().into());
@@ -476,6 +481,23 @@ pub mod settings_window {
         window.set_merged_history_max_entries(
             cfg.overlay_merged_history_max_entries.to_string().into(),
         );
+        window.set_merged_history_max_age_mins(
+            cfg.overlay_merged_history_max_age_mins.to_string().into(),
+        );
+
+        // Notice Overlay card (Overlays tab).
+        window.set_notice_font_size(cfg.overlay_notice_font_size.to_string().into());
+        window.set_notice_transition(
+            match cfg.overlay_notice_transition {
+                NoticeTransition::Fade => "Fade In",
+                NoticeTransition::Slide => "Slide In",
+                NoticeTransition::Fly => "Fly In",
+            }
+            .into(),
+        );
+        window.set_notice_transition_ms(cfg.overlay_notice_transition_ms.to_string().into());
+        window.set_notice_hold_secs(cfg.overlay_notice_hold_secs.to_string().into());
+        window.set_notice_alpha(cfg.overlay_notice_alpha.to_string().into());
 
         // DPS Meter Overlay card (Overlays tab).
         window.set_meter_max_rows(cfg.meter_max_rows.to_string().into());
@@ -533,6 +555,10 @@ pub mod settings_window {
         window.set_win_merged_locked(cfg.overlay_merged.locked);
         window.set_win_merged_pos_x(cfg.overlay_merged.x.to_string().into());
         window.set_win_merged_pos_y(cfg.overlay_merged.y.to_string().into());
+        window.set_win_notice_enabled(cfg.overlay_notice.enabled);
+        window.set_win_notice_locked(cfg.overlay_notice.locked);
+        window.set_win_notice_pos_x(cfg.overlay_notice.x.to_string().into());
+        window.set_win_notice_pos_y(cfg.overlay_notice.y.to_string().into());
         window.set_force_show_active(handle.force_show_windows.load(Ordering::Relaxed));
 
         // Sounds tab.
@@ -773,6 +799,24 @@ pub mod settings_window {
         loop {
             let candidate = format!("{base} ({n})");
             if !cfg.reference_groups.contains_key(&candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
+    /// Same "base (2)", "base (3)", ... scheme as [`unique_group_name`],
+    /// used to name a freshly-cloned trigger — trigger names aren't
+    /// otherwise required to be unique, but Clone always produces a
+    /// distinguishable one so the list doesn't show two identical rows.
+    fn unique_trigger_name(cfg: &TriggerConfig, base: &str) -> String {
+        if !cfg.triggers.iter().any(|t| t.name == base) {
+            return base.to_string();
+        }
+        let mut n = 2u32;
+        loop {
+            let candidate = format!("{base} ({n})");
+            if !cfg.triggers.iter().any(|t| t.name == candidate) {
                 return candidate;
             }
             n += 1;
@@ -1059,6 +1103,10 @@ pub mod settings_window {
             &window.get_history_max_entries(),
             cfg.overlay_history_max_entries,
         );
+        cfg.overlay_history_max_age_mins = parse_or(
+            &window.get_history_max_age_mins(),
+            cfg.overlay_history_max_age_mins,
+        );
         cfg.overlay_history_width =
             parse_or(&window.get_history_width(), cfg.overlay_history_width);
         cfg.overlay_merged_start_font_size = parse_or(
@@ -1086,6 +1134,25 @@ pub mod settings_window {
             &window.get_merged_history_max_entries(),
             cfg.overlay_merged_history_max_entries,
         );
+        cfg.overlay_merged_history_max_age_mins = parse_or(
+            &window.get_merged_history_max_age_mins(),
+            cfg.overlay_merged_history_max_age_mins,
+        );
+
+        cfg.overlay_notice_font_size =
+            parse_or(&window.get_notice_font_size(), cfg.overlay_notice_font_size);
+        cfg.overlay_notice_transition = match window.get_notice_transition().as_str() {
+            "Slide In" => NoticeTransition::Slide,
+            "Fly In" => NoticeTransition::Fly,
+            _ => NoticeTransition::Fade,
+        };
+        cfg.overlay_notice_transition_ms = parse_or(
+            &window.get_notice_transition_ms(),
+            cfg.overlay_notice_transition_ms,
+        );
+        cfg.overlay_notice_hold_secs =
+            parse_or(&window.get_notice_hold_secs(), cfg.overlay_notice_hold_secs);
+        cfg.overlay_notice_alpha = parse_or(&window.get_notice_alpha(), cfg.overlay_notice_alpha);
 
         cfg.meter_max_rows = parse_or(&window.get_meter_max_rows(), cfg.meter_max_rows);
         cfg.meter_idle_secs = parse_or(&window.get_meter_idle_secs(), cfg.meter_idle_secs);
@@ -1100,6 +1167,8 @@ pub mod settings_window {
         cfg.overlay_meter.y = parse_or(&window.get_win_meter_pos_y(), cfg.overlay_meter.y);
         cfg.overlay_merged.x = parse_or(&window.get_win_merged_pos_x(), cfg.overlay_merged.x);
         cfg.overlay_merged.y = parse_or(&window.get_win_merged_pos_y(), cfg.overlay_merged.y);
+        cfg.overlay_notice.x = parse_or(&window.get_win_notice_pos_x(), cfg.overlay_notice.x);
+        cfg.overlay_notice.y = parse_or(&window.get_win_notice_pos_y(), cfg.overlay_notice.y);
 
         cfg.save();
     }
@@ -1339,6 +1408,32 @@ pub mod settings_window {
                             delay_secs: w.get_delay_secs().trim().parse().unwrap_or(0.0),
                         }
                     }
+                    "Notice Overlay Message" => {
+                        let icon = match w.get_icon_mode().as_str() {
+                            "none" => String::new(),
+                            "colorbox" => "colorbox".to_string(),
+                            _ => icon_items
+                                .get(w.get_icon_index().max(0) as usize)
+                                .map(|i| i.key.clone())
+                                .unwrap_or_default(),
+                        };
+                        Action::NoticeOverlay {
+                            icon,
+                            color: color_to_hex(w.get_icon_color_preview()),
+                            message: w.get_message().to_string(),
+                            message_color: color_to_hex(w.get_message_color_preview()),
+                            border_color: color_to_hex(w.get_border_color_preview()),
+                            delay_secs: w.get_delay_secs().trim().parse().unwrap_or(0.0),
+                            priority: match w.get_overlay_priority().as_str() {
+                                "Emergency (interrupts)" => VoicePriority::Emergency,
+                                "Ambient (may drop)" => VoicePriority::Ambient,
+                                _ => VoicePriority::Operational,
+                            },
+                        }
+                    }
+                    // "Alert Overlay Message" and any legacy value fall
+                    // through here — same default-to-overlay fallthrough
+                    // this match already had before Notice existed.
                     _ => {
                         let icon = match w.get_icon_mode().as_str() {
                             "none" => String::new(),
@@ -1348,7 +1443,7 @@ pub mod settings_window {
                                 .map(|i| i.key.clone())
                                 .unwrap_or_default(),
                         };
-                        Action::Overlay {
+                        Action::AlertOverlay {
                             icon,
                             color: color_to_hex(w.get_icon_color_preview()),
                             message: w.get_message().to_string(),
@@ -2024,6 +2119,30 @@ pub mod settings_window {
                 });
             }
         });
+        window.on_instant_save_win_notice({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            move || {
+                let w = weak.upgrade().unwrap();
+                instant_save(&handle, |cfg| {
+                    cfg.overlay_notice.enabled = w.get_win_notice_enabled();
+                    cfg.overlay_notice.locked = w.get_win_notice_locked();
+                });
+            }
+        });
+        window.on_instant_save_notice_transition({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            move || {
+                let w = weak.upgrade().unwrap();
+                let transition = match w.get_notice_transition().as_str() {
+                    "Slide In" => NoticeTransition::Slide,
+                    "Fly In" => NoticeTransition::Fly,
+                    _ => NoticeTransition::Fade,
+                };
+                instant_save(&handle, |cfg| cfg.overlay_notice_transition = transition);
+            }
+        });
         window.on_instant_save_alert_style({
             let weak = window.as_weak();
             let handle = Arc::clone(handle);
@@ -2480,6 +2599,16 @@ pub mod settings_window {
                 save_appearance(&w, &handle);
             }
         });
+        window.on_notice_reset_position({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            move || {
+                let w = weak.upgrade().unwrap();
+                w.set_win_notice_pos_x("-1".into());
+                w.set_win_notice_pos_y("-1".into());
+                save_appearance(&w, &handle);
+            }
+        });
         window.on_show_all_windows({
             let weak = window.as_weak();
             let handle = Arc::clone(handle);
@@ -2670,6 +2799,37 @@ pub mod settings_window {
                 if idx >= 0 {
                     push_trigger_panel(&w, &stack, &trigger_cfg, Some(idx as usize));
                 }
+            }
+        });
+        window.on_clone_trigger({
+            let weak = window.as_weak();
+            let handle = Arc::clone(handle);
+            let stack = panel_stack.clone();
+            let trigger_cfg = trigger_cfg.clone();
+            move || {
+                let w = weak.upgrade().unwrap();
+                let idx = w.get_selected_trigger_index();
+                if idx < 0 {
+                    return;
+                }
+                let idx = idx as usize;
+                let new_index = idx + 1;
+                {
+                    let mut tc = trigger_cfg.borrow_mut();
+                    let Some(mut cloned) = tc.triggers.get(idx).cloned() else {
+                        return;
+                    };
+                    cloned.name = unique_trigger_name(&tc, &cloned.name);
+                    tc.triggers.insert(new_index, cloned);
+                }
+                persist_and_reload_triggers(&w, &handle, &trigger_cfg);
+                refresh_trigger_rows(&w, &trigger_cfg);
+                w.set_selected_trigger_index(new_index as i32);
+                // Straight into edit mode with the (duplicated) name
+                // selected, ready to type over — same "clone lands you in
+                // rename mode" shape as the Variables tab's clone-group.
+                push_trigger_panel(&w, &stack, &trigger_cfg, Some(new_index));
+                w.invoke_focus_trigger_name();
             }
         });
         window.on_delete_trigger({
@@ -2902,7 +3062,11 @@ pub mod settings_window {
                     return engine.clone();
                 }
             }
-            let engine = TriggerEngine::new(cfg, Arc::new(std::sync::Mutex::new(Vec::new())));
+            let engine = TriggerEngine::new(
+                cfg,
+                Arc::new(std::sync::Mutex::new(Vec::new())),
+                Arc::new(std::sync::Mutex::new(Vec::new())),
+            );
             *cache = Some((cfg.clone(), engine.clone()));
             engine
         })
@@ -2977,7 +3141,8 @@ pub mod settings_window {
                     matched: false,
                     emergency: false,
                     trigger_name: SharedString::default(),
-                    shows_overlay: false,
+                    shows_alert_overlay: false,
+                    shows_notice_overlay: false,
                     plays_sound: false,
                     speaks_voice: false,
                     segments: ModelRc::new(VecModel::from(Vec::<DebugSegment>::new())),
@@ -2991,7 +3156,8 @@ pub mod settings_window {
                 matches[0].trigger_name.clone()
             };
             let emergency = matches.iter().any(|m: &LineMatch| m.emergency);
-            let shows_overlay = matches.iter().any(|m: &LineMatch| m.shows_overlay);
+            let shows_alert_overlay = matches.iter().any(|m: &LineMatch| m.shows_alert_overlay);
+            let shows_notice_overlay = matches.iter().any(|m: &LineMatch| m.shows_notice_overlay);
             let plays_sound = matches.iter().any(|m: &LineMatch| m.plays_sound);
             let speaks_voice = matches.iter().any(|m: &LineMatch| m.speaks_voice);
             let captures: Vec<String> = matches.iter().flat_map(|m| m.captures.clone()).collect();
@@ -3001,7 +3167,8 @@ pub mod settings_window {
                 trigger_name: trigger_name.into(),
                 matched: true,
                 emergency,
-                shows_overlay,
+                shows_alert_overlay,
+                shows_notice_overlay,
                 plays_sound,
                 speaks_voice,
                 segments: ModelRc::new(VecModel::from(debug_segments_for(&text, &captures))),
@@ -3053,7 +3220,8 @@ pub mod settings_window {
             "match" => Color::from_rgb_u8(0x9b, 0x7c, 0xd6),
             "chat" => Color::from_rgb_u8(0x53, 0x9b, 0xd6),
             "var" | "store_var" => Color::from_rgb_u8(0xc8, 0xa8, 0x3c),
-            "overlay" => Color::from_rgb_u8(0xd6, 0x8a, 0x4a),
+            "alert_overlay" => Color::from_rgb_u8(0xd6, 0x8a, 0x4a),
+            "notice_overlay" => Color::from_rgb_u8(0x4a, 0x93, 0xd6),
             "voice" => Color::from_rgb_u8(0xd9, 0x53, 0x4f),
             "play_sound" => Color::from_rgb_u8(0x5f, 0xa0, 0x50),
             _ => Color::from_rgb_u8(0x9a, 0xa0, 0xa6),
@@ -3129,7 +3297,7 @@ pub mod settings_window {
 
     fn action_row(a: &Action) -> TriggerRow {
         match a {
-            Action::Overlay {
+            Action::AlertOverlay {
                 icon,
                 message,
                 delay_secs,
@@ -3159,7 +3327,37 @@ pub mod settings_window {
                 } else {
                     format!("{message}{suffix}")
                 };
-                let mut row = trigger_row(&format!("overlay/{icon}"), text);
+                let mut row = trigger_row(&format!("alert_overlay/{icon}"), text);
+                if let Some(thumb) = load_icon_thumbnail(icon) {
+                    row.preview_icon = thumb;
+                    row.has_preview_icon = true;
+                }
+                row
+            }
+            Action::NoticeOverlay {
+                icon,
+                message,
+                delay_secs,
+                priority,
+                ..
+            } => {
+                let mut tags = Vec::new();
+                match priority {
+                    VoicePriority::Emergency => tags.push("emergency"),
+                    VoicePriority::Ambient => tags.push("ambient"),
+                    VoicePriority::Operational => {}
+                }
+                let suffix = if tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", tags.join(", "))
+                };
+                let text = if *delay_secs > 0.0 {
+                    format!("+{delay_secs:.1}s  {message}{suffix}")
+                } else {
+                    format!("{message}{suffix}")
+                };
+                let mut row = trigger_row(&format!("notice_overlay/{icon}"), text);
                 if let Some(thumb) = load_icon_thumbnail(icon) {
                     row.preview_icon = thumb;
                     row.has_preview_icon = true;
@@ -3496,7 +3694,7 @@ pub mod settings_window {
     ) {
         let starting = edit_index
             .and_then(|i| actions.borrow().get(i).cloned())
-            .unwrap_or(Action::Overlay {
+            .unwrap_or(Action::AlertOverlay {
                 icon: String::new(),
                 color: String::new(),
                 message: String::new(),
@@ -3556,7 +3754,7 @@ pub mod settings_window {
         // Reset every field to a safe default before applying `starting` —
         // this panel is reused across many action-editing sessions of
         // different types, not a fresh window each time (Risk #1).
-        window.set_action_type("Overlay message".into());
+        window.set_action_type("Alert Overlay Message".into());
         window.set_icon_mode("icon".into());
         window.set_icon_index(0);
         seed_hsv_fields(window, "", DEFAULT_ICON_SWATCH_RGB, set_icon_hsv);
@@ -3574,7 +3772,7 @@ pub mod settings_window {
         window.set_action_var_value("".into());
 
         match &starting {
-            Action::Overlay {
+            Action::AlertOverlay {
                 icon,
                 color,
                 message,
@@ -3584,7 +3782,7 @@ pub mod settings_window {
                 treatment,
                 priority,
             } => {
-                window.set_action_type("Overlay message".into());
+                window.set_action_type("Alert Overlay Message".into());
                 let mode = if icon.is_empty() {
                     "none"
                 } else if icon == "colorbox" {
@@ -3612,6 +3810,48 @@ pub mod settings_window {
                     }
                     .into(),
                 );
+                window.set_overlay_priority(
+                    match priority {
+                        VoicePriority::Emergency => "Emergency (interrupts)",
+                        VoicePriority::Operational => "Operational (queues)",
+                        VoicePriority::Ambient => "Ambient (may drop)",
+                    }
+                    .into(),
+                );
+                window.set_delay_secs(
+                    if *delay_secs > 0.0 {
+                        delay_secs.to_string()
+                    } else {
+                        String::new()
+                    }
+                    .into(),
+                );
+            }
+            Action::NoticeOverlay {
+                icon,
+                color,
+                message,
+                message_color,
+                border_color,
+                delay_secs,
+                priority,
+            } => {
+                window.set_action_type("Notice Overlay Message".into());
+                let mode = if icon.is_empty() {
+                    "none"
+                } else if icon == "colorbox" {
+                    "colorbox"
+                } else if let Some(idx) = find_icon_index(&icon_items, icon) {
+                    window.set_icon_index(idx as i32);
+                    "icon"
+                } else {
+                    "none"
+                };
+                window.set_icon_mode(mode.into());
+                seed_hsv_fields(window, color, DEFAULT_ICON_SWATCH_RGB, set_icon_hsv);
+                window.set_message(message.clone().into());
+                seed_hsv_fields(window, message_color, DEFAULT_TEXT_RGB, set_message_hsv);
+                seed_hsv_fields(window, border_color, DEFAULT_BORDER_RGB, set_border_hsv);
                 window.set_overlay_priority(
                     match priority {
                         VoicePriority::Emergency => "Emergency (interrupts)",
@@ -4006,7 +4246,13 @@ pub mod settings_window {
         let mut hexes: Vec<String> = RECENT_COLORS.with(|c| c.borrow().clone());
         for trigger in &trigger_cfg.triggers {
             for action in &trigger.actions {
-                if let Action::Overlay {
+                if let Action::AlertOverlay {
+                    color,
+                    message_color,
+                    border_color,
+                    ..
+                }
+                | Action::NoticeOverlay {
                     color,
                     message_color,
                     border_color,

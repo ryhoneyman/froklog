@@ -10,6 +10,14 @@ export component TextField inherits Rectangle {
 
     callback edited(string);
 
+    // Used by callers that need to grab focus and pre-select the existing
+    // text for immediate overtyping — e.g. the Triggers tab's Clone button
+    // dropping the user straight into renaming the duplicated trigger.
+    public function focus-and-select-all() {
+        input.focus();
+        input.select-all();
+    }
+
     height: 30px;
     // A bare `TextInput` does NOT auto-scroll to keep the cursor in view —
     // that was this component's own wrong assumption (see git history);

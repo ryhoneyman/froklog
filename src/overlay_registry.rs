@@ -22,14 +22,16 @@ pub mod overlay_registry {
         History,
         Meter,
         Merged,
+        Notice,
     }
 
     impl OverlayKind {
-        pub const ALL: [OverlayKind; 4] = [
+        pub const ALL: [OverlayKind; 5] = [
             OverlayKind::Alert,
             OverlayKind::History,
             OverlayKind::Meter,
             OverlayKind::Merged,
+            OverlayKind::Notice,
         ];
 
         pub fn label(&self) -> &'static str {
@@ -38,6 +40,7 @@ pub mod overlay_registry {
                 OverlayKind::History => "History",
                 OverlayKind::Meter => "DPS Meter",
                 OverlayKind::Merged => "Combined Alert + History",
+                OverlayKind::Notice => "Notice",
             }
         }
 
@@ -47,6 +50,7 @@ pub mod overlay_registry {
                 OverlayKind::History => &cfg.overlay_history,
                 OverlayKind::Meter => &cfg.overlay_meter,
                 OverlayKind::Merged => &cfg.overlay_merged,
+                OverlayKind::Notice => &cfg.overlay_notice,
             }
         }
 
@@ -56,6 +60,7 @@ pub mod overlay_registry {
                 OverlayKind::History => &mut cfg.overlay_history,
                 OverlayKind::Meter => &mut cfg.overlay_meter,
                 OverlayKind::Merged => &mut cfg.overlay_merged,
+                OverlayKind::Notice => &mut cfg.overlay_notice,
             }
         }
     }
@@ -70,5 +75,6 @@ pub mod overlay_registry {
         crate::overlay_history::overlay_history::create_history_window(Arc::clone(handle));
         crate::overlay_dps::overlay_dps::create_meter_window(Arc::clone(handle));
         crate::overlay_merged::overlay_merged::create_merged_window(Arc::clone(handle));
+        crate::overlay_notice::overlay_notice::create_notice_window(Arc::clone(handle));
     }
 }

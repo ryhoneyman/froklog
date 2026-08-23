@@ -62,19 +62,30 @@ pub mod overlay_history {
         }
     }
 
-    /// Drains history entries beyond `max_entries` (oldest first) and
-    /// returns a plain snapshot of what's left, oldest to newest — shared by
-    /// this window and the merged alert+history window
-    /// (`overlay_merged.rs`), which both render `AppHandle.overlay_history`
-    /// as a row list.
+    /// Drains history entries beyond `max_entries` (oldest first) and any
+    /// entries older than `max_age_secs` (0 = no age limit), then returns a
+    /// plain snapshot of what's left, oldest to newest — shared by this
+    /// window and the merged alert+history window (`overlay_merged.rs`),
+    /// which both render `AppHandle.overlay_history` as a row list.
     pub fn snapshot_and_trim(
         handle: &AppHandle,
         max_entries: usize,
+        max_age_secs: u32,
     ) -> Vec<(String, String, String, String, String, f32)> {
         let mut hist = handle.overlay_history.lock().unwrap();
         if hist.len() > max_entries {
             let excess = hist.len() - max_entries;
             hist.drain(0..excess);
+        }
+        if max_age_secs > 0 {
+            let cutoff = Duration::from_secs(max_age_secs as u64);
+            let stale = hist
+                .iter()
+                .take_while(|e| e.arrived.elapsed() > cutoff)
+                .count();
+            if stale > 0 {
+                hist.drain(0..stale);
+            }
         }
         hist.iter()
             .map(|e| {
@@ -100,6 +111,7 @@ pub mod overlay_history {
         /// `overlay.rs::OverlayState::alert_style`'s doc comment.
         alert_style: crate::config::AlertStyle,
         max_entries: usize,
+        max_age_secs: u32,
         idle_secs: u32,
         font_size: f32,
         visible: bool,
@@ -119,6 +131,7 @@ pub mod overlay_history {
                 history_enabled: cfg.overlay_history.enabled,
                 alert_style: cfg.alert_style,
                 max_entries: cfg.overlay_history_max_entries.max(1),
+                max_age_secs: cfg.overlay_history_max_age_mins.saturating_mul(60),
                 idle_secs: cfg.overlay_history_idle_secs,
                 font_size: cfg.overlay_history_font_size.max(8) as f32,
                 visible: false,
@@ -148,6 +161,7 @@ pub mod overlay_history {
             self.history_enabled = cfg.overlay_history.enabled;
             self.alert_style = cfg.alert_style;
             self.max_entries = cfg.overlay_history_max_entries.max(1);
+            self.max_age_secs = cfg.overlay_history_max_age_mins.saturating_mul(60);
             self.idle_secs = cfg.overlay_history_idle_secs;
             self.locked = cfg.overlay_history.locked;
             self.width = cfg.overlay_history_width;
@@ -290,7 +304,7 @@ pub mod overlay_history {
                 // window's own `max_entries` doesn't fight the merged
                 // window's trimming of the same shared list.
                 let raw_entries = if state.alert_style == crate::config::AlertStyle::Separate {
-                    snapshot_and_trim(&state.handle, state.max_entries)
+                    snapshot_and_trim(&state.handle, state.max_entries, state.max_age_secs)
                 } else {
                     Vec::new()
                 };
@@ -354,15 +368,15 @@ pub mod overlay_history {
                 // Show All Windows on an otherwise-empty history: with zero
                 // rows this window's content-driven height collapses to
                 // just its own padding, leaving nothing on screen to find
-                // or grab. A single "Drag me" row (matching the alert
-                // overlay's own placeholder text) gives it real, visible
-                // size and something to position around.
+                // or grab. A single placeholder row (matching the other
+                // overlays' own "<Kind> (drag)" placeholder text) gives it
+                // real, visible size and something to position around.
                 if state.force_show && rows.is_empty() {
                     rows.push(HistoryRow {
                         icon_source: Default::default(),
                         has_icon: false,
                         icon_color: Color::from_rgb_u8(150, 150, 160),
-                        message: "Drag me".into(),
+                        message: "History (drag)".into(),
                         message_color: color_from_hex("", DEFAULT_TEXT_RGB),
                         border_color: color_from_hex("", DEFAULT_BORDER_RGB),
                         time_label: "".into(),

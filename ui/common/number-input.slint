@@ -2,8 +2,9 @@ import { Theme } from "../theme.slint";
 
 // Labeled numeric field with a muted unit suffix embedded at the input's
 // right edge (pt / px / s) instead of cluttering the label text, plus an
-// optional helper line that self-documents a "0" value (e.g. "Never (0s)"
-// for idle-hide, "Auto (0px)" for width). Values are kept as strings, same
+// optional helper line that self-documents a "0" value (e.g. "Never" for
+// idle-hide, "Auto" for width — kept to one word so it fits the field's
+// narrow width tiers, see `width` below). Values are kept as strings, same
 // "parse on save" convention as TextField — see appearance_tab.slint's
 // header comment.
 export component NumberInput inherits VerticalLayout {
@@ -12,12 +13,40 @@ export component NumberInput inherits VerticalLayout {
     // Word shown when value == "0", e.g. "Never" or "Auto". Empty disables
     // the helper line entirely (not every zero-able field wants one).
     in property <string> zero-hint;
+    // Most fields here back an unsigned integer config value (counts,
+    // pixels, milliseconds, ...) and get digit-only keystroke filtering.
+    // Set true for the handful backing a float (e.g. Hold Time's seconds)
+    // so a decimal point/minus sign can still be typed.
+    in property <bool> decimal: false;
     in property <bool> enabled: true;
     in-out property <string> value <=> input.text;
     // Fired when the field loses focus (not per-keystroke) — Save-gated
     // fields persist on defocus now that there's no separate Save button;
     // see appearance_tab.slint's `commit-appearance` for the save side.
     callback edited();
+
+    // Width of the input box itself — NOT the whole field. Sized to the
+    // field's realistic digit budget rather than one flat size for every
+    // field; call sites override this to 56px for bare counts (Max
+    // Entries, Max Rows), 72px for pixel widths, and wider still for
+    // value+unit combos the 64px default can't fit (Fly-In Speed's
+    // "1000ms", Opacity's "255/255"). Kept as its own property rather than
+    // the component's actual `width` so a narrow box never clips the label
+    // Text above it — root's width is left to auto-size to the wider of
+    // the two, since the label previously got dragged down to the box's
+    // width too (e.g. "Max Entries" rendering as "Max Entrie").
+    in property <length> box-width: 64px;
+
+    // Fields sit side-by-side in a HorizontalLayout row, whose default
+    // cross-axis stretch forces every NumberInput to the height of the
+    // tallest sibling in that row — the one field with a zero-hint word
+    // showing below its box. Without an explicit `start` here, that leftover
+    // height gets redistributed among this layout's own children too,
+    // pushing the label/box of every hint-less field down out of alignment
+    // with the hint-bearing one. `start` keeps label+box packed at their
+    // natural size at the top and dumps the leftover space after the last
+    // element instead, where it's invisible.
+    alignment: start;
 
     spacing: Theme.space-xs;
 
@@ -29,15 +58,7 @@ export component NumberInput inherits VerticalLayout {
 
     Rectangle {
         height: 30px;
-        // Without this, a NumberInput placed next to a stretchy spacer
-        // (e.g. Opacity's `NumberInput { ... } Rectangle { horizontal-
-        // stretch: 1; }` pairing in appearance_tab.slint) has no other
-        // sibling to size itself against and collapses toward the width of
-        // its own label text — the input's computed width then goes near
-        // zero (or negative), leaving no room to click/type and making the
-        // unit suffix (e.g. "/255") render on top of the value instead of
-        // to its right.
-        min-width: 120px;
+        width: root.box-width;
         background: root.enabled ? Theme.bg-elevated : Theme.bg-panel;
         border-radius: Theme.radius-sm;
         border-width: 1px;
@@ -53,6 +74,7 @@ export component NumberInput inherits VerticalLayout {
             color: root.enabled ? Theme.text-primary : Theme.text-disabled;
             font-size: Theme.font-size-md;
             read-only: !root.enabled;
+            input-type: root.decimal ? InputType.decimal : InputType.number;
             changed has-focus => {
                 if !self.has-focus {
                     root.edited();
@@ -78,7 +100,7 @@ export component NumberInput inherits VerticalLayout {
     }
 
     if root.zero-hint != "" && root.value == "0": Text {
-        text: root.zero-hint + " (0" + root.unit + ")";
+        text: root.zero-hint;
         color: Theme.text-disabled;
         font-size: 11px;
     }

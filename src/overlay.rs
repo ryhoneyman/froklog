@@ -24,7 +24,7 @@ pub mod overlay {
 
     use slint::ComponentHandle;
 
-    use crate::alert_engine::alert_engine::{ActiveAlert, AlertEngine, AlertPhase};
+    use crate::alert_engine::alert_engine::{ActiveAlert, AlertEngine, AlertPhase, EngineSource};
     use crate::config::AlertStyle;
     use crate::overlay_draw::overlay_draw::parse_hex_color;
     use crate::overlay_registry::overlay_registry::OverlayKind;
@@ -88,7 +88,7 @@ pub mod overlay {
             // deadlocked this thread (and with it the whole app, since
             // every overlay window is created sequentially on this same
             // thread before the event loop starts) on every launch.
-            let engine = AlertEngine::new(handle, false);
+            let engine = AlertEngine::new(handle, EngineSource::Alert);
             let cfg = handle.config.lock().unwrap();
             Self {
                 handle: Arc::clone(handle),
@@ -343,7 +343,17 @@ pub mod overlay {
                 // `tick()` here instead freezes the queue/active-alert state
                 // for the duration of the sleep, so it picks up untouched
                 // once activity resumes.
-                let log_inactive = state.handle.log_inactive(state.hide_inactive_secs);
+                //
+                // The Triggers tab's Test button is the one thing allowed to
+                // override this (and `overlay_enabled` below): a test fire
+                // should show exactly what a real one would, regardless of
+                // sleep/mute state. `has_test_content` makes that
+                // self-expiring — true only while a test alert is still
+                // somewhere in the pipeline, false again the instant `tick()`
+                // retires it, so there's no wake timer to remember to undo.
+                let has_test_content = state.engine.has_test_content();
+                let log_inactive =
+                    state.handle.log_inactive(state.hide_inactive_secs) && !has_test_content;
                 // Only drain/advance the shared alert queue while this
                 // window is the active alert presentation — see
                 // `OverlayState::alert_style`'s doc comment.
@@ -355,7 +365,7 @@ pub mod overlay {
 
                 let show = !log_inactive
                     && state.alert_style == AlertStyle::Separate
-                    && (state.overlay_enabled || state.force_show)
+                    && (state.overlay_enabled || state.force_show || has_test_content)
                     && active.is_some();
                 if !show {
                     if state.visible {

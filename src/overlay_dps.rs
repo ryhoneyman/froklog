@@ -443,6 +443,7 @@ pub mod overlay_dps {
         meter_enabled: bool,
         max_rows: usize,
         idle_secs: u32,
+        font_size: f32,
         last_active_mob_id: Option<u64>,
         last_footer_total: u64,
         last_change: Instant,
@@ -467,6 +468,7 @@ pub mod overlay_dps {
                 meter_enabled: cfg.overlay_meter.enabled,
                 max_rows: cfg.meter_max_rows.max(1),
                 idle_secs: cfg.meter_idle_secs,
+                font_size: cfg.meter_font_size.max(8) as f32,
                 last_active_mob_id: None,
                 last_footer_total: 0,
                 last_change: Instant::now(),
@@ -489,6 +491,7 @@ pub mod overlay_dps {
             self.meter_enabled = cfg.overlay_meter.enabled;
             self.max_rows = cfg.meter_max_rows.max(1);
             self.idle_secs = cfg.meter_idle_secs;
+            self.font_size = cfg.meter_font_size.max(8) as f32;
             self.locked = cfg.overlay_meter.locked;
             self.hide_inactive_secs = cfg.overlay_hide_inactive_secs;
             self.width = cfg.meter_width;
@@ -745,6 +748,7 @@ pub mod overlay_dps {
                 ui.set_locked(state.locked);
                 ui.set_force_show(state.force_show);
                 ui.set_win_width(state.width);
+                ui.set_row_font_size(state.font_size);
                 ui.set_share_bars(state.share_bars);
                 ui.set_amount_w_px(state.amount_w);
                 ui.set_rate_w_px(state.rate_w);
@@ -827,7 +831,7 @@ pub mod overlay_dps {
                     if state.tick_count.is_multiple_of(25) {
                         crate::overlay_draw::overlay_draw::reassert_topmost(ui.window());
                     }
-                    ui.set_mob_label("Drag to position — DPS Meter".into());
+                    ui.set_mob_label("DPS Meter (drag)".into());
                     ui.set_rows(ModelRc::new(VecModel::<MeterRow>::from(Vec::new())));
                     ui.set_footer_total_label("0".into());
                     ui.set_footer_rate_label("0".into());

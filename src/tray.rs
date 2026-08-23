@@ -90,8 +90,13 @@ pub mod tray {
         pub last_connect_error: Arc<RwLock<Option<String>>>,
         /// Live trigger engine — replaced on reload.
         pub trigger_engine: Arc<Mutex<Option<TriggerEngine>>>,
-        /// Shared queue from trigger engine → overlay window.
+        /// Shared queue from trigger engine → Alert (and Merged) overlay window.
         pub overlay_queue: Arc<Mutex<Vec<crate::triggers::engine::OverlayEvent>>>,
+        /// Shared queue from trigger engine → Notice overlay window. Separate
+        /// from `overlay_queue` because Alert and Notice run simultaneously
+        /// (unlike Alert/Merged, which are mutually exclusive) — see
+        /// `triggers::engine::EventTarget`.
+        pub notice_queue: Arc<Mutex<Vec<crate::triggers::engine::OverlayEvent>>>,
         /// Messages that finished flying through the alert overlay, read by
         /// the history overlay window. Created once so it survives engine
         /// restarts, same reasoning as `combat_state`.
@@ -127,6 +132,7 @@ pub mod tray {
                 last_connect_error: Arc::new(RwLock::new(None)),
                 trigger_engine: Arc::new(Mutex::new(None)),
                 overlay_queue: Arc::new(Mutex::new(Vec::new())),
+                notice_queue: Arc::new(Mutex::new(Vec::new())),
                 overlay_history: Arc::new(Mutex::new(Vec::new())),
                 active_log_path: Arc::new(Mutex::new(None)),
                 last_log_activity: Arc::new(Mutex::new(Instant::now())),

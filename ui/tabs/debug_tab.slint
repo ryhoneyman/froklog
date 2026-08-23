@@ -25,7 +25,8 @@ export struct DebugRow {
     // fired Voice Alert action (see triggers.rs's `LineMatch`).
     emergency: bool,
     trigger-name: string,
-    shows-overlay: bool,
+    shows-alert-overlay: bool,
+    shows-notice-overlay: bool,
     plays-sound: bool,
     speaks-voice: bool,
     segments: [DebugSegment],
@@ -261,7 +262,8 @@ component MatchedRow inherits Rectangle {
                 HorizontalLayout {
                     horizontal-stretch: 0;
                     spacing: 7px;
-                    if root.entry.shows-overlay: MatchBadgeIcon { icon: @image-url("../common/icons/overlay.svg"); label: "Overlay shown"; }
+                    if root.entry.shows-alert-overlay: MatchBadgeIcon { icon: @image-url("../common/icons/warning-triangle.svg"); label: "Alert shown"; }
+                    if root.entry.shows-notice-overlay: MatchBadgeIcon { icon: @image-url("../common/icons/bell.svg"); label: "Notice shown"; }
                     if root.entry.plays-sound: MatchBadgeIcon { icon: @image-url("../common/icons/sound.svg"); label: "Sound played"; }
                     if root.entry.speaks-voice: MatchBadgeIcon { icon: @image-url("../common/icons/mic.svg"); label: "Voice spoken"; }
                 }
@@ -394,7 +396,8 @@ export component DebugTab inherits VerticalLayout {
             spacing: 12px;
 
             LegendDot { label: "Matched trigger"; }
-            LegendIcon { icon: @image-url("../common/icons/overlay.svg"); label: "Overlay shown"; }
+            LegendIcon { icon: @image-url("../common/icons/warning-triangle.svg"); label: "Alert shown"; }
+            LegendIcon { icon: @image-url("../common/icons/bell.svg"); label: "Notice shown"; }
             LegendIcon { icon: @image-url("../common/icons/sound.svg"); label: "Sound played"; }
             LegendIcon { icon: @image-url("../common/icons/mic.svg"); label: "Voice spoken"; }
         }

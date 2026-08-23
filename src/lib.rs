@@ -26,6 +26,8 @@ pub mod overlay_history;
 #[cfg(feature = "tray")]
 pub mod overlay_merged;
 #[cfg(feature = "tray")]
+pub mod overlay_notice;
+#[cfg(feature = "tray")]
 pub mod overlay_registry;
 #[cfg(feature = "tray")]
 pub mod overlay_shell;

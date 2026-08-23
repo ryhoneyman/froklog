@@ -23,7 +23,7 @@ pub mod overlay_merged {
 
     use slint::{Color, ComponentHandle, ModelRc, VecModel};
 
-    use crate::alert_engine::alert_engine::AlertEngine;
+    use crate::alert_engine::alert_engine::{AlertEngine, EngineSource};
     use crate::config::AlertStyle;
     use crate::overlay::overlay::{resolve_frame, FrameParams};
     use crate::overlay_draw::overlay_draw::parse_hex_color;
@@ -84,6 +84,7 @@ pub mod overlay_merged {
         max_pt: i32,
         alpha: u8,
         history_max_entries: usize,
+        history_max_age_secs: u32,
         history_idle_secs: u32,
         history_font_size: f32,
         visible: bool,
@@ -100,7 +101,7 @@ pub mod overlay_merged {
             // built before `cfg` is locked here: `AlertEngine::new` locks
             // `handle.config` itself, and doing that while `cfg` was
             // already held self-deadlocked this thread on every launch.
-            let engine = AlertEngine::new(handle, true);
+            let engine = AlertEngine::new(handle, EngineSource::Merged);
             let cfg = handle.config.lock().unwrap();
             Self {
                 handle: Arc::clone(handle),
@@ -111,6 +112,7 @@ pub mod overlay_merged {
                 max_pt: cfg.overlay_merged_max_font_size.max(6) as i32,
                 alpha: cfg.overlay_merged_alpha,
                 history_max_entries: cfg.overlay_merged_history_max_entries.max(1),
+                history_max_age_secs: cfg.overlay_merged_history_max_age_mins.saturating_mul(60),
                 history_idle_secs: cfg.overlay_merged_history_idle_secs,
                 history_font_size: cfg.overlay_merged_history_font_size.max(8) as f32,
                 visible: false,
@@ -140,6 +142,7 @@ pub mod overlay_merged {
             self.max_pt = cfg.overlay_merged_max_font_size.max(6) as i32;
             self.alpha = cfg.overlay_merged_alpha;
             self.history_max_entries = cfg.overlay_merged_history_max_entries.max(1);
+            self.history_max_age_secs = cfg.overlay_merged_history_max_age_mins.saturating_mul(60);
             self.history_idle_secs = cfg.overlay_merged_history_idle_secs;
             self.history_font_size = cfg.overlay_merged_history_font_size.max(8) as f32;
             self.locked = cfg.overlay_merged.locked;
@@ -235,14 +238,26 @@ pub mod overlay_merged {
                 // ticking while hidden drains/animates/archives queued
                 // messages with nothing ever drawn, so they're already gone
                 // by the time the overlay wakes back up.
-                let log_inactive = state.handle.log_inactive(state.hide_inactive_secs);
+                //
+                // The Triggers tab's Test button overrides this (and
+                // `state.enabled` below) the same way it does in
+                // `overlay.rs` — see `AlertEngine::has_test_content`'s doc
+                // comment for why this needs no explicit wake/sleep
+                // bookkeeping.
+                let has_test_content = state.engine.has_test_content();
+                let log_inactive =
+                    state.handle.log_inactive(state.hide_inactive_secs) && !has_test_content;
                 let active = if !log_inactive && is_active_style {
                     state.engine.tick()
                 } else {
                     None
                 };
                 let raw_entries = if is_active_style {
-                    snapshot_and_trim(&state.handle, state.history_max_entries)
+                    snapshot_and_trim(
+                        &state.handle,
+                        state.history_max_entries,
+                        state.history_max_age_secs,
+                    )
                 } else {
                     Vec::new()
                 };
@@ -253,7 +268,9 @@ pub mod overlay_merged {
                 let has_content = active.is_some() || !raw_entries.is_empty();
                 let show = !log_inactive
                     && is_active_style
-                    && (state.force_show || (state.enabled && has_content && !idle_timed_out));
+                    && (state.force_show
+                        || has_test_content
+                        || (state.enabled && has_content && !idle_timed_out));
                 if !show {
                     if state.visible {
                         tracing::info!("merged overlay: hiding");
@@ -281,10 +298,11 @@ pub mod overlay_merged {
                 }
 
                 // ── Incoming-alert slot ──────────────────────────────────
-                // Placeholder ("Drag me") alerts render here too, same as
-                // the standalone alert window (overlay.rs) — Show All
-                // Overlays should give this window something to drag by
-                // just like the other two, not just an empty incoming slot.
+                // Placeholder ("Combined Alert + History (drag)") alerts
+                // render here too, same as the standalone alert window
+                // (overlay.rs) — Show All Overlays should give this window
+                // something to drag by just like the other two, not just an
+                // empty incoming slot.
                 if let Some(active) = active {
                     let now = Instant::now();
                     let frame: FrameParams =

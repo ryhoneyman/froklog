@@ -47,5 +47,6 @@ fn main() {
         slint_build::compile("ui/overlay_history.slint").unwrap();
         slint_build::compile("ui/overlay_dps.slint").unwrap();
         slint_build::compile("ui/overlay_merged.slint").unwrap();
+        slint_build::compile("ui/overlay_notice.slint").unwrap();
     }
 }

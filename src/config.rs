@@ -86,6 +86,38 @@ fn default_neg_one_i32() -> i32 {
     -1
 }
 
+// ── Notice overlay settings ─────────────────────────────────────────────────
+// A second, lighter overlay window alongside Alert: fade/slide/fly-in only
+// (no Glow/Vibrate/Pulse hold-phase treatment), a single standard font size
+// instead of Alert's animated start->max growth. Runs independently of
+// `alert_style` — Notice and Alert are meant to be shown together, not as
+// alternate presentations of the same thing.
+
+fn default_overlay_notice_font_size() -> u32 {
+    20
+}
+
+fn default_overlay_notice_transition_ms() -> u32 {
+    400
+}
+
+fn default_overlay_notice_hold_secs() -> f32 {
+    3.0
+}
+
+fn default_overlay_notice_alpha() -> u8 {
+    255
+}
+
+fn default_overlay_notice_window() -> OverlayWindowConfig {
+    OverlayWindowConfig {
+        enabled: false,
+        locked: false,
+        x: -1,
+        y: -1,
+    }
+}
+
 fn default_overlay_alert_window() -> OverlayWindowConfig {
     OverlayWindowConfig {
         enabled: false,
@@ -301,6 +333,21 @@ pub enum AlertStyle {
     Merged,
 }
 
+/// Entrance/exit animation for the Notice overlay. Unlike Alert, Notice has
+/// no hold-phase treatment (no Glow/Vibrate/Pulse) — this is the only visual
+/// variation it offers.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeTransition {
+    /// Opacity only, no movement.
+    #[default]
+    Fade,
+    /// Rises in from below while fading.
+    Slide,
+    /// Enters from the side while fading.
+    Fly,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Legacy single-logfile path. Only read once, by `load()`'s migration
@@ -372,6 +419,9 @@ pub struct Config {
     /// Combined alert+history overlay window — used when `alert_style` is `Merged`.
     #[serde(default = "default_overlay_merged_window")]
     pub overlay_merged: OverlayWindowConfig,
+    /// Notice overlay window — runs independently of `alert_style`.
+    #[serde(default = "default_overlay_notice_window")]
+    pub overlay_notice: OverlayWindowConfig,
     /// Which alert presentation is active — see [`AlertStyle`].
     #[serde(default)]
     pub alert_style: AlertStyle,
@@ -413,6 +463,10 @@ pub struct Config {
     /// Maximum number of rows kept in the history overlay. Default 8.
     #[serde(default = "default_overlay_history_max_entries")]
     pub overlay_history_max_entries: usize,
+    /// Minutes a history row is kept before aging out, regardless of
+    /// `overlay_history_max_entries`. 0 = never. Default 0.
+    #[serde(default)]
+    pub overlay_history_max_age_mins: u32,
     /// History overlay window width in pixels. Default 0.
     #[serde(default = "default_overlay_history_width")]
     pub overlay_history_width: i32,
@@ -446,6 +500,28 @@ pub struct Config {
     /// Maximum number of history rows kept. Default 8.
     #[serde(default = "default_overlay_merged_history_max_entries")]
     pub overlay_merged_history_max_entries: usize,
+    /// Minutes a history row is kept before aging out, regardless of
+    /// `overlay_merged_history_max_entries`. 0 = never. Default 0.
+    #[serde(default)]
+    pub overlay_merged_history_max_age_mins: u32,
+
+    // ── Notice overlay settings ─────────────────────────────────────────────────
+    /// Fixed font point size — Notice has no animated start->max growth like
+    /// Alert. Default 20.
+    #[serde(default = "default_overlay_notice_font_size")]
+    pub overlay_notice_font_size: u32,
+    /// Entrance/exit animation style. Default `Fade`.
+    #[serde(default)]
+    pub overlay_notice_transition: NoticeTransition,
+    /// Milliseconds for the entrance/exit transition. Default 400.
+    #[serde(default = "default_overlay_notice_transition_ms")]
+    pub overlay_notice_transition_ms: u32,
+    /// Seconds the message holds before the exit transition. Default 3.0.
+    #[serde(default = "default_overlay_notice_hold_secs")]
+    pub overlay_notice_hold_secs: f32,
+    /// Window opacity 0-255 (255 = fully opaque). Default 255.
+    #[serde(default = "default_overlay_notice_alpha")]
+    pub overlay_notice_alpha: u8,
 
     // ── DPS meter settings ──────────────────────────────────────────────────────
     /// Maximum number of ranked rows shown per tab. Default 8.
@@ -528,6 +604,7 @@ impl Config {
             overlay_history: default_overlay_history_window(),
             overlay_meter: default_overlay_meter_window(),
             overlay_merged: default_overlay_merged_window(),
+            overlay_notice: default_overlay_notice_window(),
             sound_enabled: true,
             sound_volume: 100,
             sound_package: default_sound_package(),
@@ -542,6 +619,7 @@ impl Config {
             overlay_history_font_size: default_overlay_history_font_size(),
             overlay_history_idle_secs: default_overlay_history_idle_secs(),
             overlay_history_max_entries: default_overlay_history_max_entries(),
+            overlay_history_max_age_mins: 0,
             overlay_history_width: default_overlay_history_width(),
             overlay_merged_start_font_size: default_overlay_merged_start_font_size(),
             overlay_merged_max_font_size: default_overlay_merged_max_font_size(),
@@ -551,6 +629,11 @@ impl Config {
             overlay_merged_history_font_size: default_overlay_merged_history_font_size(),
             overlay_merged_history_idle_secs: default_overlay_merged_history_idle_secs(),
             overlay_merged_history_max_entries: default_overlay_merged_history_max_entries(),
+            overlay_merged_history_max_age_mins: 0,
+            overlay_notice_font_size: default_overlay_notice_font_size(),
+            overlay_notice_transition_ms: default_overlay_notice_transition_ms(),
+            overlay_notice_hold_secs: default_overlay_notice_hold_secs(),
+            overlay_notice_alpha: default_overlay_notice_alpha(),
             meter_max_rows: default_meter_max_rows(),
             meter_idle_secs: default_meter_idle_secs(),
             meter_font_size: default_meter_font_size(),

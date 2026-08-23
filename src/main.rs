@@ -362,7 +362,8 @@ fn run_engine_once(
     {
         let trigger_cfg = TriggerConfig::load();
         let overlay_queue = Arc::clone(&app_handle.overlay_queue);
-        let engine = TriggerEngine::new(&trigger_cfg, Arc::clone(&overlay_queue));
+        let notice_queue = Arc::clone(&app_handle.notice_queue);
+        let engine = TriggerEngine::new(&trigger_cfg, Arc::clone(&overlay_queue), notice_queue);
         *app_handle.trigger_engine.lock().unwrap() = Some(engine.clone());
 
         // Trigger engine thread — processes log lines and advances timers.

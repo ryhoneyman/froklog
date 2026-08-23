@@ -202,8 +202,14 @@ pub mod engine {
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     #[serde(tag = "type", rename_all = "snake_case")]
     pub enum Action {
-        /// Show a message in the overlay.
-        Overlay {
+        /// Show a message in the Alert overlay (the flying fly-in/hold/
+        /// shrink-out window). `#[serde(alias = "overlay")]` keeps old
+        /// triggers.toml files (saved before Notice existed, tag
+        /// `type = "overlay"`) loading correctly — every such action becomes
+        /// an `AlertOverlay` the moment it's read, and is written back out
+        /// under the new `alert_overlay` tag the next time the file saves.
+        #[serde(alias = "overlay")]
+        AlertOverlay {
             /// Built-in icon key: "heal", "damage", "warn", "spell", "info" or "".
             #[serde(default)]
             icon: String,
@@ -229,6 +235,33 @@ pub mod engine {
             /// Queue priority: `emergency` interrupts whatever's currently showing and
             /// jumps to the front; `operational` (default) queues normally; `ambient`
             /// queues normally too but is dropped if the queue is already backed up.
+            #[serde(default)]
+            priority: VoicePriority,
+        },
+        /// Show a message in the Notice overlay — a lighter fade/slide/
+        /// fly-in window with a fixed font size and no hold-phase treatment
+        /// (see `Config::overlay_notice_transition`).
+        NoticeOverlay {
+            /// Built-in icon key: "heal", "damage", "warn", "spell", "info" or "".
+            #[serde(default)]
+            icon: String,
+            /// Optional hex colour override for the icon swatch, e.g. "#FF4400".
+            #[serde(default)]
+            color: String,
+            /// Message text; supports `{1}`, `{name}` placeholders.
+            #[serde(default)]
+            message: String,
+            /// Optional hex colour for the message text, e.g. "#FFDD44".  Empty = default white.
+            #[serde(default)]
+            message_color: String,
+            /// Optional hex colour for the text's stroke/outline, e.g. "#000000".
+            /// Empty = default black.
+            #[serde(default)]
+            border_color: String,
+            /// Seconds to wait before showing (0 = immediate).
+            #[serde(default)]
+            delay_secs: f64,
+            /// Queue priority — see `AlertOverlay::priority`.
             #[serde(default)]
             priority: VoicePriority,
         },
@@ -439,7 +472,15 @@ pub mod engine {
             }
             for action in &mut def.actions {
                 match action {
-                    Action::Overlay {
+                    Action::AlertOverlay {
+                        icon,
+                        color,
+                        message,
+                        message_color,
+                        border_color,
+                        ..
+                    }
+                    | Action::NoticeOverlay {
                         icon,
                         color,
                         message,
@@ -487,6 +528,19 @@ pub mod engine {
 
     // ── Runtime event type ────────────────────────────────────────────────────
 
+    /// Which overlay window's queue an `OverlayEvent` is destined for. Every
+    /// event still flows through the trigger engine as one `Vec<OverlayEvent>`
+    /// end-to-end (see `execute_actions`/`EngineInner`) — this field is only
+    /// read at the few points where events are finally handed off to a
+    /// window's queue (`Arc<Mutex<Vec<OverlayEvent>>>` on `AppHandle`), so
+    /// they land in `overlay_queue` (Alert/Merged) or `notice_queue` (Notice).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum EventTarget {
+        #[default]
+        Alert,
+        Notice,
+    }
+
     /// An event emitted by the trigger engine to be displayed in the overlay.
     #[derive(Debug, Clone)]
     pub struct OverlayEvent {
@@ -504,9 +558,14 @@ pub mod engine {
         /// Priority for TTS playback (controls interrupt / queue / suppress behaviour).
         pub tts_priority: VoicePriority,
         /// Visual treatment applied while the message is held at max size.
+        /// Only meaningful for `EventTarget::Alert` — `NoticeOverlay` actions
+        /// always set this to the default; Notice's own window-side frame
+        /// resolution never reads it.
         pub treatment: Treatment,
-        /// Visual queue priority — see `Action::Overlay`'s `priority` field.
+        /// Visual queue priority — see `Action::AlertOverlay`'s `priority` field.
         pub priority: VoicePriority,
+        /// Which overlay window's queue this event belongs in.
+        pub target: EventTarget,
         /// Set for events produced by the Triggers tab's Test button, so the
         /// alert engine can play them regardless of the TTS-enabled/per-priority
         /// read-toggle mute settings — matches how sound preview buttons already
@@ -559,8 +618,39 @@ pub mod engine {
         triggers: Vec<CompiledTrigger>,
         vars: HashMap<String, String>,
         pending: Vec<PendingAction>,
+        /// Alert (and Merged, which drains the same window-side queue —
+        /// see `alert_engine.rs`'s `EngineSource`) events.
         output: Arc<Mutex<Vec<OverlayEvent>>>,
+        /// Notice events. A separate queue rather than a `target` filter on
+        /// `output`: Alert and Notice are independent, simultaneously-active
+        /// windows (unlike Alert/Merged, which are mutually exclusive), so
+        /// each needs its own queue to drain without racing the other.
+        notice_output: Arc<Mutex<Vec<OverlayEvent>>>,
         lines_processed: u64,
+    }
+
+    /// Splits `events` by `OverlayEvent::target` and pushes each half into
+    /// its matching queue. The one place `EventTarget` is actually read —
+    /// everywhere upstream (`execute_actions`, `process_line`,
+    /// `fire_actions_for_test`, `tick`'s pending-fire loop) just carries a
+    /// single `Vec<OverlayEvent>` through, same as before Notice existed.
+    fn dispatch_events(
+        events: Vec<OverlayEvent>,
+        output: &Mutex<Vec<OverlayEvent>>,
+        notice_output: &Mutex<Vec<OverlayEvent>>,
+    ) {
+        if events.is_empty() {
+            return;
+        }
+        let (alert, notice): (Vec<_>, Vec<_>) = events
+            .into_iter()
+            .partition(|e| e.target == EventTarget::Alert);
+        if !alert.is_empty() {
+            output.lock().unwrap().extend(alert);
+        }
+        if !notice.is_empty() {
+            notice_output.lock().unwrap().extend(notice);
+        }
     }
 
     // ── Template placeholder regex ────────────────────────────────────────────
@@ -576,9 +666,17 @@ pub mod engine {
     }
 
     impl TriggerEngine {
-        pub fn new(cfg: &TriggerConfig, output: Arc<Mutex<Vec<OverlayEvent>>>) -> Self {
+        pub fn new(
+            cfg: &TriggerConfig,
+            output: Arc<Mutex<Vec<OverlayEvent>>>,
+            notice_output: Arc<Mutex<Vec<OverlayEvent>>>,
+        ) -> Self {
             Self {
-                inner: Arc::new(Mutex::new(EngineInner::from_config(cfg, output))),
+                inner: Arc::new(Mutex::new(EngineInner::from_config(
+                    cfg,
+                    output,
+                    notice_output,
+                ))),
             }
         }
 
@@ -586,7 +684,8 @@ pub mod engine {
         pub fn reload(&self, cfg: &TriggerConfig) {
             let mut g = self.inner.lock().unwrap();
             let output = Arc::clone(&g.output);
-            *g = EngineInner::from_config(cfg, output);
+            let notice_output = Arc::clone(&g.notice_output);
+            *g = EngineInner::from_config(cfg, output, notice_output);
         }
 
         /// Feed a log line into the engine.
@@ -643,13 +742,15 @@ pub mod engine {
                     continue;
                 }
 
-                let mut shows_overlay = false;
+                let mut shows_alert_overlay = false;
+                let mut shows_notice_overlay = false;
                 let mut plays_sound = false;
                 let mut speaks_voice = false;
                 let mut emergency = false;
                 for action in &trigger.actions {
                     match action {
-                        Action::Overlay { .. } => shows_overlay = true,
+                        Action::AlertOverlay { .. } => shows_alert_overlay = true,
+                        Action::NoticeOverlay { .. } => shows_notice_overlay = true,
                         Action::PlaySound { .. } => plays_sound = true,
                         Action::VoiceAlert { priority, .. } => {
                             speaks_voice = true;
@@ -676,7 +777,8 @@ pub mod engine {
                 out.push(LineMatch {
                     trigger_name: trigger.name.clone(),
                     emergency,
-                    shows_overlay,
+                    shows_alert_overlay,
+                    shows_notice_overlay,
                     plays_sound,
                     speaks_voice,
                     captures,
@@ -691,7 +793,8 @@ pub mod engine {
     pub struct LineMatch {
         pub trigger_name: String,
         pub emergency: bool,
-        pub shows_overlay: bool,
+        pub shows_alert_overlay: bool,
+        pub shows_notice_overlay: bool,
         pub plays_sound: bool,
         pub speaks_voice: bool,
         /// Distinct, non-empty capture group values (positional groups 1+
@@ -703,7 +806,11 @@ pub mod engine {
     // ── Engine inner ──────────────────────────────────────────────────────────
 
     impl EngineInner {
-        fn from_config(cfg: &TriggerConfig, output: Arc<Mutex<Vec<OverlayEvent>>>) -> Self {
+        fn from_config(
+            cfg: &TriggerConfig,
+            output: Arc<Mutex<Vec<OverlayEvent>>>,
+            notice_output: Arc<Mutex<Vec<OverlayEvent>>>,
+        ) -> Self {
             let mut triggers = Vec::new();
             for def in &cfg.triggers {
                 if !def.enabled {
@@ -741,6 +848,7 @@ pub mod engine {
                 vars,
                 pending: Vec::new(),
                 output,
+                notice_output,
                 lines_processed: 0,
             }
         }
@@ -824,10 +932,7 @@ pub mod engine {
             }
 
             self.pending.extend(new_pending);
-            if !new_events.is_empty() {
-                let mut q = self.output.lock().unwrap();
-                q.extend(new_events);
-            }
+            dispatch_events(new_events, &self.output, &self.notice_output);
         }
 
         /// Fires `actions` immediately, bypassing condition evaluation entirely.
@@ -845,9 +950,7 @@ pub mod engine {
                 pending.len()
             );
             self.pending.extend(pending);
-            if !events.is_empty() {
-                self.output.lock().unwrap().extend(events);
-            }
+            dispatch_events(events, &self.output, &self.notice_output);
         }
 
         fn tick(&mut self) {
@@ -861,10 +964,7 @@ pub mod engine {
                     true
                 }
             });
-            if !fired.is_empty() {
-                let mut q = self.output.lock().unwrap();
-                q.extend(fired);
-            }
+            dispatch_events(fired, &self.output, &self.notice_output);
         }
     }
 
@@ -905,11 +1005,12 @@ pub mod engine {
                             tts_priority: priority.clone(),
                             treatment: Treatment::default(),
                             priority: VoicePriority::default(),
+                            target: EventTarget::Alert,
                             is_test,
                         });
                     }
                 }
-                Action::Overlay {
+                Action::AlertOverlay {
                     icon,
                     color,
                     message,
@@ -930,6 +1031,39 @@ pub mod engine {
                         tts_priority: VoicePriority::default(),
                         treatment: *treatment,
                         priority: priority.clone(),
+                        target: EventTarget::Alert,
+                        is_test,
+                    };
+                    if *delay_secs <= 0.0 {
+                        new_events.push(event);
+                    } else {
+                        new_pending.push(PendingAction {
+                            fire_at: now + Duration::from_secs_f64(*delay_secs),
+                            event,
+                        });
+                    }
+                }
+                Action::NoticeOverlay {
+                    icon,
+                    color,
+                    message,
+                    message_color,
+                    border_color,
+                    delay_secs,
+                    priority,
+                } => {
+                    let event = OverlayEvent {
+                        icon: icon.clone(),
+                        color: color.clone(),
+                        message: resolve_template(message, caps, vars),
+                        message_color: message_color.clone(),
+                        border_color: border_color.clone(),
+                        sound: None,
+                        tts_text: None,
+                        tts_priority: VoicePriority::default(),
+                        treatment: Treatment::default(),
+                        priority: priority.clone(),
+                        target: EventTarget::Notice,
                         is_test,
                     };
                     if *delay_secs <= 0.0 {
@@ -960,6 +1094,7 @@ pub mod engine {
                             tts_priority: VoicePriority::default(),
                             treatment: Treatment::default(),
                             priority: VoicePriority::default(),
+                            target: EventTarget::Alert,
                             is_test,
                         };
                         if *delay_secs <= 0.0 {
@@ -1433,7 +1568,7 @@ pub mod engine {
                         match_type: MatchType::Regex,
                         pattern: pattern.into(),
                     }],
-                    actions: vec![Action::Overlay {
+                    actions: vec![Action::AlertOverlay {
                         icon: String::new(),
                         color: String::new(),
                         message: "{1}".into(),
@@ -1450,7 +1585,8 @@ pub mod engine {
 
         fn fired(cfg: &TriggerConfig, line: &str) -> usize {
             let out = Arc::new(Mutex::new(Vec::new()));
-            let engine = TriggerEngine::new(cfg, Arc::clone(&out));
+            let notice_out = Arc::new(Mutex::new(Vec::new()));
+            let engine = TriggerEngine::new(cfg, Arc::clone(&out), notice_out);
             engine.process_line(line);
             let n = out.lock().unwrap().len();
             n
@@ -1558,6 +1694,35 @@ pub mod engine {
                 ),
                 1
             );
+        }
+
+        #[test]
+        fn legacy_overlay_type_tag_deserializes_as_alert_overlay() {
+            // Pre-Notice triggers.toml files saved `type = "overlay"` — the
+            // `#[serde(alias = "overlay")]` on `Action::AlertOverlay` must
+            // keep those loading correctly, now as an Alert overlay action,
+            // with no other data lost.
+            let toml_text = r#"
+                [[trigger]]
+                name = "Aggro Warning"
+                enabled = true
+
+                [[trigger.action]]
+                type = "overlay"
+                message = "Incoming!"
+                treatment = "glow"
+            "#;
+            let cfg: TriggerConfig = toml::from_str(toml_text).expect("legacy toml parses");
+            assert_eq!(cfg.triggers.len(), 1);
+            match &cfg.triggers[0].actions[0] {
+                Action::AlertOverlay {
+                    message, treatment, ..
+                } => {
+                    assert_eq!(message, "Incoming!");
+                    assert_eq!(*treatment, Treatment::Glow);
+                }
+                other => panic!("expected AlertOverlay, got {other:?}"),
+            }
         }
 
         #[test]
@@ -1902,7 +2067,7 @@ pub mod engine {
                             value: "{threshold}".into(),
                         },
                     ],
-                    actions: vec![Action::Overlay {
+                    actions: vec![Action::AlertOverlay {
                         icon: String::new(),
                         color: String::new(),
                         message: "big hit!".into(),
@@ -1955,7 +2120,7 @@ pub mod engine {
                             value: "{nonexistent}".into(),
                         },
                     ],
-                    actions: vec![Action::Overlay {
+                    actions: vec![Action::AlertOverlay {
                         icon: String::new(),
                         color: String::new(),
                         message: "big hit!".into(),
