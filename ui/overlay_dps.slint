@@ -12,6 +12,21 @@ import { OverlayShell } from "common/overlay-shell.slint";
 // that expands below the footer on click, listing "Auto (most recent)"
 // plus recently-seen mobs with an activity dot, letting the user pin the
 // meter to a specific mob instance.
+// One line of a row's accordion — attack/skill type or spell name, its
+// amount, its rate, and its share of the row's total (bar-frac, rendered
+// in the same %-bar cell content-row uses, with a fixed uniform color —
+// see overlay_dps.slint's breakdown accordion). label-color is what
+// distinguishes melee from spell — white for melee/skill types, orange for
+// spells — see overlay_dps.rs's MELEE_LABEL_COLOR/SPELL_LABEL_COLOR).
+export struct BreakdownEntry {
+    label: string,
+    amount-label: string,
+    rate-label: string,
+    pct-label: string,
+    bar-frac: float,
+    label-color: color,
+}
+
 export struct MeterRow {
     name: string,
     class-color: color,
@@ -27,6 +42,12 @@ export struct MeterRow {
     bar-c0: color,
     bar-c1: color,
     bar-c2: color,
+    // Accordion: whether this row's per-type/spell breakdown is pinned
+    // open (click the class swatch or name to toggle — see
+    // overlay_dps.rs's `expanded_names`) and its contents, empty unless
+    // `expanded` (no point computing it for a closed row).
+    expanded: bool,
+    breakdown: [BreakdownEntry],
 }
 
 // One row of the mob picker. `id` mirrors overlay_dps.rs's
@@ -124,6 +145,10 @@ export component DpsMeterWindow inherits OverlayShell {
     in property <[MeterRow]> rows;
     in property <string> elapsed-label: "0s";
     in property <length> row-font-size: 11px;
+    // Fired when the class swatch or name of a row is clicked, to toggle
+    // that row's accordion open/closed — see overlay_dps.rs's
+    // `on_row_clicked`/`expanded_names`.
+    callback row-clicked(string);
 
     in property <string> mob-label: "Auto: (no mob)";
     in property <string> footer-total-label;
@@ -395,9 +420,10 @@ export component DpsMeterWindow inherits OverlayShell {
 
             // ── Ranked data rows ─────────────────────────────────────────
             for row[i] in root.rows: Rectangle {
-                height: content-row.preferred-height;
+                height: row-stack.preferred-height;
                 background: i == 0 ? #3c2e0adc : (mod(i, 2) == 1 ? #ffffff0a : transparent);
 
+                row-stack := VerticalLayout {
                 content-row := HorizontalLayout {
                     padding-left: 8px;
                     padding-right: 8px;
@@ -411,21 +437,34 @@ export component DpsMeterWindow inherits OverlayShell {
                         width: 20px;
                         vertical-alignment: center;
                     }
+                    // Clickable region: class swatch + name, toggling the
+                    // accordion below. Kept separate from the whole-row
+                    // drag TouchArea underneath `panel` so a click here
+                    // doesn't also start a window drag.
                     Rectangle {
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 2px;
-                        background: row.class-color;
-                    }
-                    Rectangle { width: 6px; }
-                    Text {
-                        text: row.name;
-                        color: i == 0 ? #ffe18c : #e1e1e6;
-                        font-weight: i == 0 ? 700 : 400;
-                        font-size: root.row-font-size;
                         horizontal-stretch: 1;
-                        overflow: elide;
-                        vertical-alignment: center;
+                        HorizontalLayout {
+                            Rectangle {
+                                width: 12px;
+                                height: 12px;
+                                border-radius: 2px;
+                                background: row.class-color;
+                            }
+                            Rectangle { width: 6px; }
+                            Text {
+                                text: row.name;
+                                color: i == 0 ? #ffe18c : #e1e1e6;
+                                font-weight: i == 0 ? 700 : 400;
+                                font-size: root.row-font-size;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.row-clicked(row.name); }
+                        }
                     }
                     Rectangle { width: 6px; }
                     Text {
@@ -493,6 +532,106 @@ export component DpsMeterWindow inherits OverlayShell {
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
+                }
+
+                // ── Accordion: per-type/spell breakdown, open until the
+                // swatch/name above is clicked again. This row mirrors
+                // content-row's OWN column slots exactly (same padding,
+                // same 20px rank slot, same swatch+gap+stretch name
+                // arrangement, same amount-w/rate-w/bar-w/sec-w widths and
+                // 6px gaps) so Dmg/DPS/% line up under the main row's
+                // columns pixel-for-pixel even while those widths are being
+                // live-dragged — rather than hardcoding offsets that would
+                // drift out of sync with the header's ColDividers. Rank and
+                // Sec slots stay blank (no per-type rank or duration). No
+                // full-row background tint any more — the row's percentage
+                // instead gets its own small bar in the SAME % cell
+                // content-row uses (only present when share-bars is on),
+                // one fixed uniform color rather than class/melee-or-spell
+                // based, chosen for contrast against its own "NN%" text
+                // rather than to match the label coloring beside it.
+                if row.expanded: VerticalLayout {
+                    for b in row.breakdown: Rectangle {
+                        height: breakdown-row.preferred-height;
+
+                        breakdown-row := HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            padding-top: 1px;
+                            padding-bottom: 1px;
+
+                            Rectangle { width: 20px; }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                HorizontalLayout {
+                                    Rectangle { width: 12px; }
+                                    Rectangle { width: 6px; }
+                                    Text {
+                                        text: b.label;
+                                        color: b.label-color;
+                                        font-size: root.row-font-size - 1px;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                            Rectangle { width: 6px; }
+                            Text {
+                                text: b.amount-label;
+                                color: b.label-color;
+                                font-size: root.row-font-size - 1px;
+                                width: root.amount-w;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { width: 6px; }
+                            Text {
+                                text: b.rate-label;
+                                color: b.label-color;
+                                font-size: root.row-font-size - 1px;
+                                width: root.rate-w;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                            if root.share-bars: Rectangle { width: 6px; }
+                            if root.share-bars: Rectangle {
+                                width: root.bar-w;
+                                Rectangle {
+                                    y: (parent.height - self.height) / 2;
+                                    width: parent.width;
+                                    height: (root.row-font-size - 1px) * 0.8;
+                                    border-radius: 2px;
+                                    background: #ffffff0c;
+                                    clip: true;
+                                    Rectangle {
+                                        x: 0;
+                                        y: 0;
+                                        width: parent.width * b.bar-frac;
+                                        height: parent.height;
+                                        // Fixed, uniform across every entry
+                                        // (melee or spell, whichever row) —
+                                        // picked to read clearly under the
+                                        // white "NN%" text on top, not to
+                                        // echo the label coloring beside it.
+                                        background: #4a90e2c8;
+                                    }
+                                }
+                                Text {
+                                    text: b.pct-label;
+                                    color: #ebebf0;
+                                    font-size: root.row-font-size - 4px;
+                                    width: parent.width - 3px;
+                                    height: parent.height;
+                                    horizontal-alignment: right;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Rectangle { width: 6px; }
+                            Rectangle { width: root.sec-w; }
+                        }
+                    }
+                }
                 }
             }
 

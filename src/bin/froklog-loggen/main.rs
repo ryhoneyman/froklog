@@ -3292,7 +3292,7 @@ fn run_break(sim: &mut Sim, ctx: &mut Ctx, cfg: &GameConfig) {
 
 fn run_vendor(sim: &mut Sim, ctx: &mut Ctx) {
     let vendor = sim.zone.vendor.clone();
-    let items: Vec<(String, u32)> = sim.loot_bag.drain(..).collect();
+    let items: Vec<(String, u32)> = std::mem::take(&mut sim.loot_bag);
     if items.is_empty() {
         return;
     }

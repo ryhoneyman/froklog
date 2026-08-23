@@ -16,15 +16,15 @@
 #[cfg(feature = "tray")]
 #[allow(clippy::module_inception)]
 pub mod overlay_dps {
-    use std::cell::Cell;
-    use std::collections::HashMap;
+    use std::cell::{Cell, RefCell};
+    use std::collections::{HashMap, HashSet};
     use std::rc::Rc;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use once_cell::sync::Lazy;
-    use slint::{Color, ComponentHandle, ModelRc, VecModel};
+    use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
     use std::sync::Mutex;
 
     use crate::overlay_registry::overlay_registry::OverlayKind;
@@ -87,6 +87,31 @@ pub mod overlay_dps {
                 Self::HealReceived => stats.total_healed_received,
             }
         }
+
+        /// Per-row accordion contents: (label, amount, is_spell), melee/skill
+        /// types and spells merged into ONE list sorted highest-to-lowest
+        /// together (not grouped by type-then-spell) — Tank has no spell
+        /// side (parser.rs never populates `damage_by_spell` for the
+        /// tanking bucket, only `damage_by_type`, since incoming spell
+        /// damage is filed under the "dot"/"ds" *types*, not by spell name),
+        /// so it's effectively already homogeneous.
+        fn breakdown_of(&self, stats: &EntityCombatStats) -> Vec<(String, u64, bool)> {
+            fn collect(map: &HashMap<String, u64>, is_spell: bool) -> Vec<(String, u64, bool)> {
+                map.iter().map(|(k, n)| (k.clone(), *n, is_spell)).collect()
+            }
+            let mut v = match self {
+                Self::Dps => {
+                    let mut v = collect(&stats.damage_by_type, false);
+                    v.extend(collect(&stats.damage_by_spell, true));
+                    v
+                }
+                Self::Tank => collect(&stats.damage_by_type, false),
+                Self::Heal => collect(&stats.heals_by_spell, true),
+                Self::HealReceived => collect(&stats.healed_received_by_spell, true),
+            };
+            v.sort_by_key(|(_, n, _)| std::cmp::Reverse(*n));
+            v
+        }
     }
 
     // ── Row data ──────────────────────────────────────────────────────────────
@@ -102,6 +127,14 @@ pub mod overlay_dps {
         /// Fraction of the GROUP total (all contributors, not just the rows
         /// that fit on screen), for the share bar.
         share: f32,
+        /// Whether this row's accordion is open — from `expanded_names`,
+        /// keyed by entity name so it survives tab/mob switches until the
+        /// user clicks it closed again.
+        expanded: bool,
+        /// Per-type/spell breakdown (label, amount, rate, is_spell), only
+        /// computed when `expanded` (no point building it for rows nobody's
+        /// looking at).
+        breakdown: Vec<(String, u64, u64, bool)>,
     }
 
     fn tab_entries(
@@ -243,6 +276,7 @@ pub mod overlay_dps {
         tab: MeterTab,
         max_rows: usize,
         elapsed: f64,
+        expanded_names: &HashSet<String>,
     ) -> Vec<RowData> {
         let mut sorted = entries.to_vec();
         sorted.sort_by_key(|(_, s)| std::cmp::Reverse(tab.total_of(s)));
@@ -260,6 +294,7 @@ pub mod overlay_dps {
                 let classes = resolve_classes(cs, name);
                 let colors: Vec<(u8, u8, u8)> =
                     classes.iter().take(3).map(|c| class_color(c)).collect();
+                let expanded = expanded_names.contains(name.as_str());
                 RowData {
                     name: name.clone(),
                     color: colors.first().copied().unwrap_or_else(|| class_color("")),
@@ -270,6 +305,18 @@ pub mod overlay_dps {
                         total as f32 / group_total as f32
                     } else {
                         0.0
+                    },
+                    expanded,
+                    breakdown: if expanded {
+                        tab.breakdown_of(s)
+                            .into_iter()
+                            .map(|(label, amount, is_spell)| {
+                                let rate = (amount as f64 / elapsed).round() as u64;
+                                (label, amount, rate, is_spell)
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
                     },
                 }
             })
@@ -289,10 +336,11 @@ pub mod overlay_dps {
         mob_id: u64,
         tab: MeterTab,
         max_rows: usize,
+        expanded_names: &HashSet<String>,
     ) -> MeterSnapshot {
         let elapsed = mob_elapsed_secs(cs, mob_id);
         let entries = tab_entries(cs, mob_id, tab);
-        let rows = build_rows(cs, &entries, tab, max_rows, elapsed);
+        let rows = build_rows(cs, &entries, tab, max_rows, elapsed, expanded_names);
         let mob_name = cs
             .mob_list
             .iter()
@@ -538,12 +586,106 @@ pub mod overlay_dps {
             bar_c0: bar_col(&r.colors, 0),
             bar_c1: bar_col(&r.colors, 1),
             bar_c2: bar_col(&r.colors, 2),
+            expanded: r.expanded,
+            breakdown: breakdown_model(r.total, &r.breakdown),
         }
     }
 
-    fn rows_model(rows: &[RowData]) -> ModelRc<MeterRow> {
-        let v: Vec<MeterRow> = rows.iter().map(to_meter_row).collect();
+    /// Capitalizes a melee/skill type key ("backstab" -> "Backstab") for
+    /// display — the parser always stores these lowercase (see
+    /// `patterns::normalize_verb` and the "dot"/"ds"/"riposte" literals in
+    /// parser.rs). "ds" (damage shield) is the one key that reads better as
+    /// an all-caps initialism than a capitalized word.
+    fn capitalize_type_label(s: &str) -> String {
+        if s.eq_ignore_ascii_case("ds") {
+            return "DS".to_string();
+        }
+        let mut chars = s.chars();
+        match chars.next() {
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
+    }
+
+    /// White for melee/skill types, orange for spells — lets the accordion
+    /// distinguish the two at a glance without a separate label/column. The
+    /// %-bar's own fill color is NOT one of these — see
+    /// overlay_dps.slint's breakdown accordion, which hardcodes one fixed
+    /// uniform color for every entry's bar regardless of melee-vs-spell (a
+    /// two-tone bar, or one keyed to the row's class color, both read as
+    /// distracting once tried — the bar just needs to contrast with its own
+    /// "NN%" text, not echo the label beside it).
+    const MELEE_LABEL_COLOR: (u8, u8, u8) = (255, 255, 255);
+    const SPELL_LABEL_COLOR: (u8, u8, u8) = (255, 167, 51);
+
+    /// Builds the accordion rows for one meter row. Each entry's `bar_frac`
+    /// is its share of that row's own total (not the group total the outer
+    /// share bar uses), same denominator `total_of()`/`build_rows` already
+    /// used for `RowData.total`.
+    fn breakdown_model(
+        row_total: u64,
+        entries: &[(String, u64, u64, bool)],
+    ) -> ModelRc<BreakdownEntry> {
+        let v: Vec<BreakdownEntry> = entries
+            .iter()
+            .map(|(label, amount, rate, is_spell)| {
+                let bar_frac = if row_total > 0 {
+                    (*amount as f32 / row_total as f32).min(1.0)
+                } else {
+                    0.0
+                };
+                let pct = if row_total > 0 {
+                    *amount as f64 / row_total as f64 * 100.0
+                } else {
+                    0.0
+                };
+                let (r, g, b) = if *is_spell {
+                    SPELL_LABEL_COLOR
+                } else {
+                    MELEE_LABEL_COLOR
+                };
+                let display_label = if *is_spell {
+                    label.clone()
+                } else {
+                    capitalize_type_label(label)
+                };
+                BreakdownEntry {
+                    label: display_label.as_str().into(),
+                    amount_label: fmt_k(*amount).into(),
+                    rate_label: fmt_k(*rate).into(),
+                    pct_label: format!("{pct:.0}%").into(),
+                    bar_frac,
+                    label_color: Color::from_rgb_u8(r, g, b),
+                }
+            })
+            .collect();
         ModelRc::new(VecModel::from(v))
+    }
+
+    /// Updates `model` to match `new_rows`, mutating existing rows' DATA in
+    /// place via `set_row_data` rather than replacing the model wholesale
+    /// every tick. Slint's `for` loop keeps a row's already-instantiated
+    /// component tree alive across a `set_row_data` call (only its bound
+    /// properties change) but tears the whole thing down on a full model
+    /// reset — which is what destroyed the swatch/name TouchArea's
+    /// in-flight press state on every 200ms tick before this fix, forcing a
+    /// click's press-then-release to land within a single tick by luck to
+    /// register at all. Rows are only pushed/removed at the tail when the
+    /// row COUNT itself changes (the ranked top-N gaining or losing a
+    /// contributor) — unavoidable there since there's no existing row
+    /// component to preserve.
+    fn sync_rows_model(model: &VecModel<MeterRow>, new_rows: &[RowData]) {
+        let old_len = model.row_count();
+        let new_len = new_rows.len();
+        for (i, r) in new_rows.iter().enumerate().take(old_len) {
+            model.set_row_data(i, to_meter_row(r));
+        }
+        for r in new_rows.iter().skip(old_len) {
+            model.push(to_meter_row(r));
+        }
+        for _ in new_len..old_len {
+            model.remove(model.row_count() - 1);
+        }
     }
 
     // ── Window creation & tick ────────────────────────────────────────────────
@@ -558,6 +700,19 @@ pub mod overlay_dps {
         // first `.show()` below instead (both places this window shows).
         window.set_amount_col_label("Dmg".into());
         window.set_rate_col_label("DPS".into());
+        // A single long-lived model, set ONCE here and mutated in place
+        // every tick (see `sync_rows_model`) rather than replaced with a
+        // fresh `VecModel` each time — swapping the whole model every
+        // 200ms destroyed and recreated every row's component tree
+        // (including the swatch/name TouchArea that opens its accordion),
+        // which killed any in-flight press-then-release gesture that
+        // straddled two ticks. A real click needed to land entirely within
+        // one 200ms window by luck, hence needing several tries. Mutating
+        // row DATA in place keeps each row's TouchArea instance alive
+        // across ticks, so a click completes reliably regardless of timing.
+        let rows_model_handle: Rc<VecModel<MeterRow>> =
+            Rc::new(VecModel::from(Vec::<MeterRow>::new()));
+        window.set_rows(ModelRc::from(rows_model_handle.clone()));
 
         let cfg_x_y = {
             let cfg = handle.config.lock().unwrap();
@@ -602,6 +757,12 @@ pub mod overlay_dps {
         let pinned_mob_id: Rc<Cell<Option<u64>>> = Rc::new(Cell::new(None));
         // Whether the mob picker (opened by clicking the footer) is expanded.
         let mob_picker_open: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+        // Names whose row accordion (damage/heal-by-type breakdown) is
+        // pinned open — set by clicking a row's class swatch or name in
+        // `on_row_clicked` below. Deliberately never cleared on tab/mob
+        // switch or by anything else: the whole point is that it stays open
+        // until the user clicks it closed again.
+        let expanded_names: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
 
         window.on_drag_requested({
             let weak = window.as_weak();
@@ -695,7 +856,9 @@ pub mod overlay_dps {
                 let tab = MeterTab::from_index(tab_idx as usize);
                 if let Some(mob_id) = resolve_view_mob_id(&cs, pinned_mob_id.get()) {
                     let max_rows = handle.config.lock().unwrap().meter_max_rows.max(1);
-                    let snap = compute_snapshot(&cs, mob_id, tab, max_rows);
+                    // Summary line doesn't show per-row breakdowns, so no
+                    // need to compute any — empty set, same as "collapsed".
+                    let snap = compute_snapshot(&cs, mob_id, tab, max_rows, &HashSet::new());
                     crate::tray::tray::copy_to_clipboard(&build_summary_line(&snap, tab));
                 }
             }
@@ -714,12 +877,24 @@ pub mod overlay_dps {
                 mob_picker_open.set(false);
             }
         });
+        window.on_row_clicked({
+            let expanded_names = Rc::clone(&expanded_names);
+            move |name| {
+                let mut names = expanded_names.borrow_mut();
+                let name = name.to_string();
+                if !names.remove(&name) {
+                    names.insert(name);
+                }
+            }
+        });
 
         let mut state = MeterState::new(&handle);
         let weak = window.as_weak();
         let dragging_tick = Rc::clone(&dragging);
         let pinned_mob_id_tick = Rc::clone(&pinned_mob_id);
         let mob_picker_open_tick = Rc::clone(&mob_picker_open);
+        let expanded_names_tick = Rc::clone(&expanded_names);
+        let rows_model_tick = Rc::clone(&rows_model_handle);
         let timer = slint::Timer::default();
         timer.start(
             slint::TimerMode::Repeated,
@@ -832,7 +1007,7 @@ pub mod overlay_dps {
                         crate::overlay_draw::overlay_draw::reassert_topmost(ui.window());
                     }
                     ui.set_mob_label("DPS Meter (drag)".into());
-                    ui.set_rows(ModelRc::new(VecModel::<MeterRow>::from(Vec::new())));
+                    rows_model_tick.set_vec(Vec::new());
                     ui.set_footer_total_label("0".into());
                     ui.set_footer_rate_label("0".into());
                     ui.set_elapsed_label("0s".into());
@@ -841,7 +1016,13 @@ pub mod overlay_dps {
                 };
 
                 let tab = MeterTab::from_index(ui.get_active_tab() as usize);
-                let snap = compute_snapshot(&cs, mob_id, tab, state.max_rows);
+                let snap = compute_snapshot(
+                    &cs,
+                    mob_id,
+                    tab,
+                    state.max_rows,
+                    &expanded_names_tick.borrow(),
+                );
 
                 // Idle detection: hide if nothing has changed for idle_secs.
                 if Some(mob_id) != state.last_active_mob_id
@@ -896,7 +1077,7 @@ pub mod overlay_dps {
                     ""
                 };
                 ui.set_mob_label(format!("{pin_prefix}{} {caret}", snap.mob_name).into());
-                ui.set_rows(rows_model(&snap.rows));
+                sync_rows_model(&rows_model_tick, &snap.rows);
                 ui.set_footer_total_label(fmt_k(snap.footer_total).into());
                 ui.set_footer_rate_label(fmt_k(snap.footer_rate).into());
                 ui.set_elapsed_label(format!("{}s", snap.elapsed_secs).into());
