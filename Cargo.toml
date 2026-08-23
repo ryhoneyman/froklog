@@ -272,6 +272,12 @@ strip = true
 [profile.dev]
 opt-level = 1
 debug = 1             # line tables only — enough for backtraces, ~70% smaller binaries
+split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
-debug = false         # no debug symbols for dependencies — they go from 4 GB → ~400 MB
+debug = 0         # no debug symbols for dependencies — they go from 4 GB → ~400 MB
+opt-level = 2
+
+[profile.dev.build-override]
+debug = 0
+opt-level = 2

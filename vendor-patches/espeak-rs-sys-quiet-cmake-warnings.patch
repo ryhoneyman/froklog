@@ -1,0 +1,21 @@
+diff -ru a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -209,6 +209,17 @@
+
+     let mut config = Config::new(&espeak_dst);
+
++    // froklog patch: both silence cosmetic CMake warnings that show up on
++    // every clean build (not real problems — the messages themselves name
++    // these exact flags as the fix). `--no-warn-unused-cli` because the
++    // `cmake` crate always passes CMAKE_ASM_COMPILER/CMAKE_ASM_FLAGS
++    // regardless of whether the project enables the ASM language, which
++    // espeak-ng's CMakeLists.txt doesn't; `-Wno-deprecated` because
++    // espeak-ng's `cmake_minimum_required` predates what this system's
++    // cmake considers current.
++    config.configure_arg("--no-warn-unused-cli");
++    config.configure_arg("-Wno-deprecated");
++
+     config.define(
+         "BUILD_SHARED_LIBS",
+         if build_shared_libs { "ON" } else { "OFF" },

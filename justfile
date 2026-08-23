@@ -35,6 +35,41 @@ xwin_path_setup := '''
         export LD_LIBRARY_PATH="$HOME/tools/llvm19/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
     fi
     rm -f "$HOME/.cache/cargo-xwin/clang-cl"
+    # Explicit version gate — this used to be caught only indirectly, by
+    # eyeballing the `cc` crate's "Compiler family detection failed"
+    # warning (see above) and noticing it meant something was wrong. That
+    # warning also fires for an unrelated, harmless reason under xwin (a
+    # `clang-cl -E` probe that fails then falls back to the exact right
+    # answer by filename — confirmed via manual reproduction, both cases
+    # print identical text), so it can't be trusted to distinguish "real
+    # too-old compiler" from "cosmetic noise". This checks the actual
+    # invariant directly instead, so the two xwin build recipes below can
+    # safely filter that warning out without losing the safety net.
+    clang_cl_version=$(clang-cl --version 2>/dev/null | head -1)
+    clang_cl_major=$(echo "$clang_cl_version" | grep -oE '[0-9]+' | head -1)
+    if [ -z "$clang_cl_major" ] || [ "$clang_cl_major" -lt 19 ]; then
+        echo "ERROR: clang-cl reports '${clang_cl_version:-not found}' — need Clang >=19 (real MSVC STL headers reject older). Run 'just setup-clang19' or check PATH." >&2
+        exit 1
+    fi
+'''
+
+# Wraps a `cargo xwin build` invocation, filtering out the `cc` crate's
+# "Compiler family detection failed" warning — cosmetic under xwin (see
+# xwin_path_setup's doc comment: confirmed by reproduction that it falls
+# back to the correct compiler family every time, and the real failure
+# mode that warning used to hint at is now caught directly by
+# xwin_path_setup's version gate instead). Keeps everything else, and
+# still propagates a genuine cargo failure via PIPESTATUS rather than
+# trusting `pipefail` alone (grep exits 1 if literally every line matches,
+# which would be misread as a build failure).
+run_xwin_build := '''
+    run_xwin_build() {
+        set +e
+        "$@" 2>&1 | grep -v 'Compiler family detection failed due to error'
+        status=${PIPESTATUS[0]}
+        set -e
+        return "$status"
+    }
 '''
 
 # ── Setup ──────────────────────────────────────────────────────────────────────
@@ -178,6 +213,7 @@ fetch-espeak-rs-sys:
     cp -r "$SRC" vendor/espeak-rs-sys
     chmod -R u+w vendor/espeak-rs-sys
     patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-windows-cross-compile.patch
+    patch -p1 -d vendor/espeak-rs-sys < vendor-patches/espeak-rs-sys-quiet-cmake-warnings.patch
     echo "espeak-rs-sys {{espeak_rs_sys_version}} fetched and patched into vendor/espeak-rs-sys/"
 
 # One-shot full setup (new machine / CI)
@@ -237,7 +273,8 @@ build-windows-tray:
     #!/usr/bin/env bash
     set -euo pipefail
     {{xwin_path_setup}}
-    cargo xwin build --release --features tray --bin {{bin_name}} --target {{target_win_msvc}}
+    {{run_xwin_build}}
+    run_xwin_build cargo xwin build --release --features tray --bin {{bin_name}} --target {{target_win_msvc}}
     echo "Binary: target/{{target_win_msvc}}/release/{{bin_name}}.exe"
 
 # Same as build-windows-tray but dev-profile — for handing a build to a
@@ -246,7 +283,8 @@ dev-windows-tray:
     #!/usr/bin/env bash
     set -euo pipefail
     {{xwin_path_setup}}
-    cargo xwin build --features tray --bin {{bin_name}} --target {{target_win_msvc}}
+    {{run_xwin_build}}
+    run_xwin_build cargo xwin build --features tray --bin {{bin_name}} --target {{target_win_msvc}}
     echo "Binary: target/{{target_win_msvc}}/debug/{{bin_name}}.exe"
 
 # ── Release ───────────────────────────────────────────────────────────────────
